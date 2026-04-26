@@ -1,0 +1,57 @@
+{
+  "name": "deha-cli",
+  "version": "1.0.0",
+  "description": "DEHA - Akıllı AI Kodlama Asistanı CLI | Multi-model: Claude, OpenAI, DeepSeek, Ollama",
+  "main": "dist/index.js",
+  "bin": {
+    "deha": "./dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "cli",
+    "ai",
+    "deha",
+    "claude",
+    "openai",
+    "deepseek",
+    "ollama",
+    "coding-assistant",
+    "turkish",
+    "developer-tools"
+  ],
+  "author": "DEHA Project",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.15.2",
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "dotenv": "^16.3.1",
+    "inquirer": "^8.2.6",
+    "ora": "^5.4.1",
+    "playwright": "^1.59.1",
+    "readline": "^1.3.0"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^8.2.10",
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.2"
+  }
+}
