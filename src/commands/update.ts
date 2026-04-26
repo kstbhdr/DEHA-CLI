@@ -4,7 +4,7 @@ import chalk from 'chalk';
 
 const CURRENT_VERSION = '1.0.0';
 const NPM_PACKAGE     = 'deha-cli';
-const GITHUB_REPO     = process.env.DEHA_GITHUB_REPO ?? ''; // örn: 'kullanici/deha-cli'
+const GITHUB_REPO     = process.env.DEHA_GITHUB_REPO ?? 'kstbhdr/DEHA-CLI';
 
 interface VersionInfo {
   latest: string;
