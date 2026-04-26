@@ -8,194 +8,194 @@ import { toolRunPython } from './python';
 import { toolSmokeTest } from './smoke';
 import { toolBrowserAction } from './browser';
 import { editFile, insertLines, deleteLines } from './edit';
-// vision tool DehaConfig gerektirdiği için agent.ts'te özel handle edilir
+// vision tool requires DehaConfig, handled separately in agent.ts
 
-// ─── Tool Tanımları (Claude API şeması) ────────────────────────────────────
+// ─── Tool definitions (Claude API schema) ──────────────────────────────────
 
 export const DEHA_TOOLS: ToolDefinition[] = [
   {
     name: 'read_file',
-    description: 'Bir dosyanın içeriğini okur. Kod analizi, hata ayıklama veya dosya inceleme için kullan.',
+    description: 'Read the contents of a file. Use for code analysis, debugging, or file inspection.',
     input_schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Okunacak dosyanın yolu (mutlak veya göreceli)' },
-        start_line: { type: 'number', description: 'Başlangıç satırı (opsiyonel)' },
-        end_line: { type: 'number', description: 'Bitiş satırı (opsiyonel)' },
+        path:       { type: 'string', description: 'File path (absolute or relative)' },
+        start_line: { type: 'number', description: 'Start line (optional)' },
+        end_line:   { type: 'number', description: 'End line (optional)' },
       },
       required: ['path'],
     },
   },
   {
     name: 'write_file',
-    description: 'Bir dosyaya içerik yazar veya var olan dosyayı günceller.',
+    description: 'Write or overwrite a file. Use only for new files — prefer edit_file for existing ones.',
     input_schema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Yazılacak dosyanın yolu' },
-        content: { type: 'string', description: 'Dosyaya yazılacak içerik' },
+        path:    { type: 'string', description: 'File path to write' },
+        content: { type: 'string', description: 'Content to write' },
       },
       required: ['path', 'content'],
     },
   },
   {
-    name: 'list_dir',
-    description: 'Bir klasörün içeriğini listeler.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Listelenecek klasörün yolu' },
-        recursive: { type: 'boolean', description: 'Alt klasörleri de listele (varsayılan: false)' },
-      },
-      required: ['path'],
-    },
-  },
-  {
-    name: 'run_shell',
-    description: 'Kabuk komutu çalıştırır. Derleme, test, git gibi işlemler için kullan.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        command: { type: 'string', description: 'Çalıştırılacak komut' },
-        cwd: { type: 'string', description: 'Çalışma dizini (opsiyonel)' },
-      },
-      required: ['command'],
-    },
-  },
-  {
     name: 'edit_file',
-    description: 'Dosyada belirli bir kodu değiştirir — tüm dosyayı yeniden yazmadan. Token tasarrufu için write_file yerine bunu kullan. old_string tam eşleşme gerektirir (girinti dahil).',
+    description: 'Edit a specific part of a file without rewriting the whole thing. Saves tokens vs write_file. Requires exact string match including whitespace.',
     input_schema: {
       type: 'object',
       properties: {
-        path:        { type: 'string', description: 'Düzenlenecek dosyanın yolu' },
-        old_string:  { type: 'string', description: 'Değiştirilecek mevcut kod (tam eşleşme, boşluklar dahil)' },
-        new_string:  { type: 'string', description: 'Yeni kod' },
-        replace_all: { type: 'boolean', description: 'Tüm eşleşmeleri değiştir (varsayılan: false)' },
+        path:        { type: 'string', description: 'File path to edit' },
+        old_string:  { type: 'string', description: 'Exact string to replace (whitespace sensitive)' },
+        new_string:  { type: 'string', description: 'Replacement string' },
+        replace_all: { type: 'boolean', description: 'Replace all occurrences (default: false)' },
       },
       required: ['path', 'old_string', 'new_string'],
     },
   },
   {
     name: 'insert_lines',
-    description: 'Dosyaya belirtilen satır numarasından önce yeni satırlar ekler.',
+    description: 'Insert lines into a file before a given line number.',
     input_schema: {
       type: 'object',
       properties: {
-        path:    { type: 'string', description: 'Dosya yolu' },
-        line:    { type: 'number', description: 'Bu satırdan ÖNCE ekle (1-indexed, 0 = başa)' },
-        content: { type: 'string', description: 'Eklenecek içerik' },
+        path:    { type: 'string', description: 'File path' },
+        line:    { type: 'number', description: 'Insert BEFORE this line (1-indexed, 0 = prepend)' },
+        content: { type: 'string', description: 'Content to insert' },
       },
       required: ['path', 'line', 'content'],
     },
   },
   {
     name: 'delete_lines',
-    description: 'Dosyadan belirtilen satır aralığını siler.',
+    description: 'Delete a range of lines from a file.',
     input_schema: {
       type: 'object',
       properties: {
-        path:      { type: 'string', description: 'Dosya yolu' },
-        from_line: { type: 'number', description: 'Başlangıç satırı (1-indexed, dahil)' },
-        to_line:   { type: 'number', description: 'Bitiş satırı (1-indexed, dahil)' },
+        path:      { type: 'string', description: 'File path' },
+        from_line: { type: 'number', description: 'Start line (1-indexed, inclusive)' },
+        to_line:   { type: 'number', description: 'End line (1-indexed, inclusive)' },
       },
       required: ['path', 'from_line', 'to_line'],
     },
   },
   {
-    name: 'search_in_files',
-    description: 'Klasördeki dosyalarda metin arar (grep benzeri).',
+    name: 'list_dir',
+    description: 'List the contents of a directory.',
     input_schema: {
       type: 'object',
       properties: {
-        pattern: { type: 'string', description: 'Aranacak metin veya regex' },
-        directory: { type: 'string', description: 'Aranacak klasör' },
-        extension: { type: 'string', description: 'Dosya uzantısı filtresi (ör: .ts, .py)' },
+        path:      { type: 'string', description: 'Directory path' },
+        recursive: { type: 'boolean', description: 'Include subdirectories (default: false)' },
       },
-      required: ['pattern', 'directory'],
+      required: ['path'],
+    },
+  },
+  {
+    name: 'run_shell',
+    description: 'Run a shell command. Use for builds, tests, git operations, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Command to run' },
+        cwd:     { type: 'string', description: 'Working directory (optional)' },
+      },
+      required: ['command'],
     },
   },
   {
     name: 'run_terminal',
-    description: 'Terminal komutu çalıştırır ve çıktıyı döner. run_shell\'den farkı: timeout ve env desteği.',
+    description: 'Run a shell command with streaming output, timeout, and env var support.',
     input_schema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'Çalıştırılacak komut' },
-        cwd: { type: 'string', description: 'Çalışma dizini' },
-        timeout: { type: 'number', description: 'Timeout saniye cinsinden (varsayılan: 30)' },
-        env: { type: 'object', description: 'Ek çevresel değişkenler' },
+        command: { type: 'string', description: 'Command to run' },
+        cwd:     { type: 'string', description: 'Working directory' },
+        timeout: { type: 'number', description: 'Timeout in seconds (default: 30)' },
+        env:     { type: 'object', description: 'Additional environment variables' },
       },
       required: ['command'],
     },
   },
   {
     name: 'run_python',
-    description: 'Python kodu çalıştırır. Snippet veya dosya yolu kabul eder.',
+    description: 'Execute Python code from a snippet or file path. Supports pip install and virtualenv.',
     input_schema: {
       type: 'object',
       properties: {
-        code: { type: 'string', description: 'Çalıştırılacak Python kodu' },
-        file: { type: 'string', description: 'Çalıştırılacak .py dosyasının yolu' },
-        packages: { type: 'array', items: { type: 'string' }, description: 'Kurulacak pip paketleri' },
-        cwd: { type: 'string', description: 'Çalışma dizini' },
-        timeout: { type: 'number', description: 'Timeout saniye (varsayılan: 30)' },
-        use_venv: { type: 'boolean', description: 'Sanal ortam kullan' },
+        code:     { type: 'string', description: 'Python code to execute' },
+        file:     { type: 'string', description: 'Path to a .py file to run' },
+        packages: { type: 'array', items: { type: 'string' }, description: 'pip packages to install before running' },
+        cwd:      { type: 'string', description: 'Working directory' },
+        timeout:  { type: 'number', description: 'Timeout in seconds (default: 30)' },
+        use_venv: { type: 'boolean', description: 'Use a virtual environment' },
       },
     },
   },
   {
-    name: 'smoke_test',
-    description: 'HTTP endpoint(lerin) sağlık kontrolünü yapar.',
+    name: 'search_in_files',
+    description: 'Search for a text pattern across files in a directory (like grep).',
     input_schema: {
       type: 'object',
       properties: {
-        url: { type: 'string', description: 'Test edilecek base URL' },
-        routes: { type: 'array', items: { type: 'string' }, description: 'Test edilecek rotalar (varsayılan: ["/"])' },
-        expected_status: { type: 'number', description: 'Beklenen HTTP status kodu' },
-        expected_body: { type: 'string', description: 'Response body\'de bulunması gereken string' },
-        max_ms: { type: 'number', description: 'Maksimum yanıt süresi (ms)' },
+        pattern:   { type: 'string', description: 'Text or regex pattern to search for' },
+        directory: { type: 'string', description: 'Directory to search in' },
+        extension: { type: 'string', description: 'File extension filter (e.g. .ts, .py)' },
+      },
+      required: ['pattern', 'directory'],
+    },
+  },
+  {
+    name: 'smoke_test',
+    description: 'Run HTTP health checks against one or more endpoints.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url:             { type: 'string', description: 'Base URL to test' },
+        routes:          { type: 'array', items: { type: 'string' }, description: 'Routes to check (default: ["/"])' },
+        expected_status: { type: 'number', description: 'Expected HTTP status code' },
+        expected_body:   { type: 'string', description: 'String that must appear in the response body' },
+        max_ms:          { type: 'number', description: 'Maximum allowed response time (ms)' },
       },
       required: ['url'],
     },
   },
   {
     name: 'browser_action',
-    description: 'Tarayıcı otomasyonu: navigate, click, fill, screenshot, getText. Playwright kullanır.',
+    description: 'Browser automation via Playwright: navigate, click, fill forms, take screenshots, extract text.',
     input_schema: {
       type: 'object',
       properties: {
-        url: { type: 'string', description: 'Başlangıç URL\'i' },
+        url: { type: 'string', description: 'Starting URL' },
         actions: {
           type: 'array',
-          description: 'Sırayla yapılacak işlemler',
+          description: 'Sequence of browser actions to perform',
           items: {
             type: 'object',
             properties: {
-              type: { type: 'string', enum: ['click', 'fill', 'screenshot', 'wait', 'getText', 'getHtml', 'evaluate', 'scroll', 'waitForSelector'] },
+              type:     { type: 'string', enum: ['click', 'fill', 'screenshot', 'wait', 'getText', 'getHtml', 'evaluate', 'scroll', 'waitForSelector'] },
               selector: { type: 'string' },
-              value: { type: 'string' },
-              code: { type: 'string' },
-              timeout: { type: 'number' },
+              value:    { type: 'string' },
+              code:     { type: 'string' },
+              timeout:  { type: 'number' },
             },
             required: ['type'],
           },
         },
-        headless: { type: 'boolean', description: 'Görünmez mod (varsayılan: true)' },
+        headless: { type: 'boolean', description: 'Run headless (default: true)' },
       },
       required: ['url', 'actions'],
     },
   },
   {
     name: 'vision_analyze',
-    description: 'URL\'nin ekran görüntüsünü al ve vision model ile analiz et. UI hataları, layout sorunları, erişilebilirlik tespiti.',
+    description: 'Take a screenshot of a URL and analyze it with a vision model. Detects UI bugs, layout issues, accessibility problems.',
     input_schema: {
       type: 'object',
       properties: {
-        url: { type: 'string', description: 'Analiz edilecek web sayfası URL\'i' },
-        image_path: { type: 'string', description: 'Mevcut görüntü dosyasının yolu' },
-        prompt: { type: 'string', description: 'Vision modele özel soru/talimat' },
-        full_page: { type: 'boolean', description: 'Tüm sayfayı yakala (varsayılan: false)' },
+        url:        { type: 'string', description: 'Web page URL to screenshot and analyze' },
+        image_path: { type: 'string', description: 'Path to an existing image file' },
+        prompt:     { type: 'string', description: 'Custom question or instruction for the vision model' },
+        full_page:  { type: 'boolean', description: 'Capture full page (default: false)' },
       },
     },
   },

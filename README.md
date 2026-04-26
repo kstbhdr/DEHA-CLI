@@ -1,58 +1,58 @@
 # DEHA CLI
 
-> Akıllı, çok modelli AI kodlama asistanı — terminal için.
+> A powerful, multi-model AI coding assistant for your terminal.
 
 ```
 ╔══════════════════════════════════════════╗
-║  DEHA — Akıllı Kodlama Asistanı         ║
+║  DEHA — Intelligent Coding Assistant     ║
 ║  v1.0.0  •  github.com/kstbhdr/DEHA-CLI ║
 ╚══════════════════════════════════════════╝
 ```
 
-## Özellikler
+## Features
 
-| Özellik | Detay |
+| Feature | Description |
 |---|---|
 | **Multi-provider** | Claude, OpenAI, DeepSeek, Ollama, OpenRouter, xAI, Custom API |
-| **Streaming** | Tüm providerlar için gerçek zamanlı token akışı |
-| **Pipeline** | Plan → Code → Judge döngüsü, token-tasarruflu EDIT blokları |
-| **Agent modu** | Tool calling: dosya okuma/yazma/düzenleme, shell, Python, browser, vision |
-| **MCP desteği** | Model Context Protocol sunucuları (filesystem, git, fetch, github...) |
-| **Browser** | Playwright ile web otomasyon, screenshot, form doldurma |
-| **Vision** | Screenshot + Claude/GPT-4o ile UI analizi |
-| **Smoke test** | HTTP endpoint sağlık kontrolü |
-| **Python runner** | venv desteği, pip paket kurulumu |
-| **Sohbet geçmişi** | Otomatik Markdown kayıt, arama, görüntüleme |
+| **Streaming** | Real-time token streaming for all providers |
+| **Pipeline** | Plan → Code → Judge loop with token-efficient EDIT blocks |
+| **Agent mode** | Tool calling: read/write/edit files, shell, Python, browser, vision |
+| **MCP support** | Model Context Protocol servers (filesystem, git, fetch, github…) |
+| **Browser** | Playwright-based web automation, screenshots, form interaction |
+| **Vision** | Screenshot + Claude/GPT-4o UI analysis |
+| **Smoke tests** | HTTP endpoint health checks with assertions |
+| **Python runner** | Runs snippets or files, venv support, pip install |
+| **Chat history** | Auto-saved as Markdown, searchable, viewable |
 
-## Kurulum
+## Installation
 
 ```bash
 git clone https://github.com/kstbhdr/DEHA-CLI.git
 cd DEHA-CLI
 npm install
 npm run build
-npm link          # 'deha' komutunu global olarak kullanılabilir yapar
+npm link        # makes 'deha' available globally
 ```
 
-## Yapılandırma
+## Configuration
 
 ```bash
 cp .env.example .env
-# .env dosyasını düzenle, API keylerini ekle
+# Edit .env and add your API keys
 ```
 
 ```env
-# Kullanılacak provider
+# Default provider
 DEHA_PROVIDER=claude
 
-# API Keyleri
+# API Keys
 ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 DEEPSEEK_API_KEY=...
 OPENROUTER_API_KEY=sk-or-...
 XAI_API_KEY=xai-...
 
-# Pipeline rolleri
+# Pipeline roles (each can use a different model/provider)
 PLANNER_PROVIDER=openrouter
 PLANNER_MODEL=anthropic/claude-opus-4
 CODER_PROVIDER=deepseek
@@ -61,20 +61,20 @@ JUDGE_PROVIDER=xai
 JUDGE_MODEL=grok-3
 ```
 
-## Kullanım
+## Usage
 
 ```bash
-# İnteraktif mod
+# Interactive mode
 deha
 
-# Tek seferlik soru
-deha chat "Python'da async/await nasıl çalışır?"
+# One-shot question
+deha chat "How does async/await work in Python?"
 
 # Plan → Code → Judge pipeline
-deha build "Express.js REST API yaz, kullanıcı CRUD işlemleri olsun"
+deha build "Write an Express.js REST API with user CRUD"
 
-# Pipeline rolleri CLI'den değiştir
-deha build "Redis cache ekle" \
+# Override pipeline roles via CLI flags
+deha build "Add Redis cache" \
   --planner-provider openrouter --planner-model anthropic/claude-opus-4 \
   --coder-provider deepseek --coder-model deepseek-chat \
   --judge-provider xai --judge-model grok-3
@@ -92,59 +92,110 @@ deha smoketest https://myapi.com -r "/health,/api/users"
 # Screenshot
 deha screenshot https://mysite.com --full-page
 
-# Vision analizi
-deha vision https://mysite.com -q "UI/UX sorunları var mı?"
+# Vision analysis
+deha vision https://mysite.com -q "Are there any UI/UX issues?"
 
-# Sohbet geçmişi
+# Chat history
 deha history
 deha history 3
 deha history search "async"
 
-# MCP sunucu yönetimi
+# MCP server management
 deha mcp catalog
 deha mcp install filesystem
 deha mcp install fetch
 
-# Güncelleme
+# Check for updates
 deha update
 ```
 
-### İnteraktif mod komutları
+### Interactive mode commands
 
-| Komut | Açıklama |
+| Command | Description |
 |---|---|
-| `/agent <soru>` | Araç çağırabilen ajan modu |
-| `/file <yol>` | Dosyayı bağlama ekle |
-| `@./src/index.ts` | Mesaj içine dosya göm |
-| `/run <komut>` | Terminal komutu çalıştır |
-| `/python <kod>` | Python kodu çalıştır |
-| `/smoketest <url>` | HTTP smoke testi |
-| `/screenshot <url>` | Ekran görüntüsü al |
-| `/vision <url>` | AI görsel analizi |
-| `/mcp list` | MCP sunucularını listele |
-| `/oldconversations` | Eski sohbetleri görüntüle |
-| `/clear` | Geçmişi temizle |
+| `/agent <prompt>` | Agentic mode with tool calling |
+| `/file <path>` | Inject file into context |
+| `@./src/index.ts` | Embed file inline in a message |
+| `/run <cmd>` | Run a terminal command |
+| `/python <code>` | Execute Python code |
+| `/smoketest <url>` | Run HTTP smoke tests |
+| `/screenshot <url>` | Take a screenshot |
+| `/vision <url>` | AI visual analysis |
+| `/mcp list` | List MCP servers |
+| `/oldconversations` | Browse past conversations |
+| `/clear` | Clear conversation history |
 
-## Custom API (Kendi GPU Sunucun)
+## Pipeline: Plan → Code → Judge
+
+DEHA's `build` command runs a multi-agent pipeline where each role can use a **different model from a different provider**:
+
+```
+Task
+ │
+ ▼
+[PLANNER]  Analyzes the task, produces a structured plan
+ │         e.g. Claude Opus via OpenRouter
+ ▼
+[CODER]    Implements the plan, writes production-ready code
+ │         e.g. DeepSeek Coder
+ ▼
+[JUDGE]    Reviews the code → PASS or FAIL + feedback
+ │         e.g. Grok 3 Reasoning via xAI
+ │
+FAIL ──→ CODER (with feedback, uses EDIT blocks for token efficiency)
+ │
+PASS ──→ Final output
+```
+
+On revision iterations, the Coder uses **EDIT blocks** instead of rewriting entire files — saving tokens significantly:
+
+```
+EDIT: src/index.ts
+<<<OLD>>>
+return false;
+<<<NEW>>>
+return true;
+<<<END>>>
+```
+
+## Custom API (Self-hosted / Local GPU)
 
 ```bash
 deha -p custom -u http://localhost:1234/v1
 ```
 
-LM Studio, vLLM, LocalAI, llama.cpp, Kobold — OpenAI-uyumlu her endpoint çalışır.
+Works with any OpenAI-compatible endpoint: LM Studio, vLLM, LocalAI, llama.cpp server, Kobold, TabbyAPI, Jan.
 
-## Desteklenen Providerlar
+## Supported Providers
 
-| Provider | Env Key | Notlar |
+| Provider | Env Key | Notes |
 |---|---|---|
 | `claude` | `ANTHROPIC_API_KEY` | claude-opus-4-6, claude-sonnet-4-6 |
 | `openai` | `OPENAI_API_KEY` | gpt-4o, gpt-4-turbo |
 | `deepseek` | `DEEPSEEK_API_KEY` | deepseek-chat, deepseek-coder |
-| `openrouter` | `OPENROUTER_API_KEY` | 200+ model |
+| `openrouter` | `OPENROUTER_API_KEY` | 200+ models |
 | `xai` | `XAI_API_KEY` | grok-3 |
-| `ollama` | — | Yerel, API key gerekmez |
-| `custom` | `CUSTOM_API_KEY` | Herhangi OpenAI-compat endpoint |
+| `ollama` | — | Local, no API key needed |
+| `custom` | `CUSTOM_API_KEY` | Any OpenAI-compatible endpoint |
 
-## Lisans
+## MCP Servers
+
+```bash
+deha mcp catalog          # list installable servers
+deha mcp install filesystem
+deha mcp install fetch
+deha mcp install git
+deha mcp install github   # requires GITHUB_PERSONAL_ACCESS_TOKEN
+deha mcp install puppeteer
+deha mcp install postgres
+deha mcp install sqlite
+
+# Add custom server
+deha mcp add myserver npx -y my-mcp-server
+```
+
+Once installed, MCP tools are automatically available in `/agent` mode.
+
+## License
 
 MIT

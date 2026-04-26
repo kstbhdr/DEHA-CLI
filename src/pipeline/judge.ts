@@ -1,38 +1,38 @@
 import { DehaConfig } from '../config';
 import { callRole, Message } from '../services/ai-service';
 
-const JUDGE_SYSTEM = `Sen kıdemli bir code reviewer ve yazılım kalite mühendisisin. Sana bir görev, plan ve yazılan kod verilecek.
+const JUDGE_SYSTEM = `You are a senior code reviewer and software quality engineer. You will be given a task, a plan, and the code written by the Coder.
 
-Kodu şu kriterlere göre değerlendir:
-1. Görev gereksinimlerini tam karşılıyor mu?
-2. Syntax ve mantık hataları var mı?
-3. Edge case'ler ele alınmış mı?
-4. Hata yönetimi yeterli mi?
-5. Kod okunabilir ve sürdürülebilir mi?
-6. Güvenlik açığı var mı?
+Evaluate the code against these criteria:
+1. Does it fully satisfy the task requirements?
+2. Are there syntax or logic errors?
+3. Are edge cases handled?
+4. Is error handling sufficient?
+5. Is the code readable and maintainable?
+6. Are there any security vulnerabilities?
 
-Yanıtını MUTLAKA şu formatta ver:
+Your response MUST follow this exact format:
 
 VERDICT: PASS
-(veya)
+(or)
 VERDICT: FAIL
 
 SCORE: 8/10
 
-## GÜÇLÜ YÖNLER
-- [iyi olan şeyler]
+## STRENGTHS
+- [what was done well]
 
-## EKSİKLİKLER
-- [sorunlar, varsa]
+## ISSUES
+- [problems found, if any]
 
-## GEREKLİ DÜZELTİMLER
-- [FAIL ise coder'ın yapması gereken spesifik değişiklikler]
-- [PASS ise boş bırak]
+## REQUIRED FIXES
+- [specific changes the Coder must make — only if FAIL]
+- [leave empty if PASS]
 
-## GENEL YORUM
-[Tek paragraflık özet]
+## SUMMARY
+[One paragraph overall assessment]
 
-ÖNEMLI: İlk satır kesinlikle "VERDICT: PASS" veya "VERDICT: FAIL" olsun.`;
+IMPORTANT: The first line MUST be exactly "VERDICT: PASS" or "VERDICT: FAIL".`;
 
 export interface JudgeVerdict {
   pass: boolean;
@@ -51,12 +51,11 @@ export async function runJudge(
   const { pipeline } = config;
 
   const userContent =
-    `## ORİJİNAL GÖREV\n${task}\n\n` +
-    `## PLANNER'IN PLANI\n${plan}\n\n` +
-    `## CODER'IN YAZDIĞI KOD\n\`\`\`\n${code}\n\`\`\``;
+    `## ORIGINAL TASK\n${task}\n\n` +
+    `## PLANNER'S PLAN\n${plan}\n\n` +
+    `## CODER'S OUTPUT\n\`\`\`\n${code}\n\`\`\``;
 
   const messages: Message[] = [{ role: 'user', content: userContent }];
-
   const raw = await callRole(pipeline.judge, config, messages, JUDGE_SYSTEM, onChunk);
 
   return parseVerdict(raw);
@@ -66,12 +65,11 @@ function parseVerdict(raw: string): JudgeVerdict {
   const passMatch  = /VERDICT:\s*(PASS|FAIL)/i.exec(raw);
   const scoreMatch = /SCORE:\s*([\d.]+\/10)/i.exec(raw);
 
-  const pass = passMatch ? passMatch[1].toUpperCase() === 'PASS' : false;
+  const pass  = passMatch ? passMatch[1].toUpperCase() === 'PASS' : false;
   const score = scoreMatch ? scoreMatch[1] : '?/10';
 
-  // "GEREKLİ DÜZELTİMLER" bölümünü çıkar
-  const fixSection = raw.match(/## GEREKLİ DÜZELTİMLER\n([\s\S]*?)(?=##|$)/i);
-  const feedback = fixSection ? fixSection[1].trim() : raw;
+  const fixSection = raw.match(/## REQUIRED FIXES\n([\s\S]*?)(?=##|$)/i);
+  const feedback   = fixSection ? fixSection[1].trim() : raw;
 
   return { pass, score, feedback, raw };
 }

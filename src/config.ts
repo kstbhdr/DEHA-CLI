@@ -90,7 +90,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     customApiUrl: process.env.CUSTOM_API_URL || 'http://localhost:8080/v1',
 
     systemPrompt: process.env.DEHA_SYSTEM_PROMPT ||
-      'Sen DEHA adlı zeki bir kodlama asistanısın. Türkçe sorulara Türkçe, İngilizce sorulara İngilizce yanıt ver. Kod örneklerinde her zaman açıklama ekle.',
+      'You are DEHA, an intelligent coding assistant. Reply in the same language the user writes in. Always include explanations with code examples.',
 
     maxTokens:   parseInt(process.env.DEHA_MAX_TOKENS   || '4096', 10),
     temperature: parseFloat(process.env.DEHA_TEMPERATURE || '0.7'),

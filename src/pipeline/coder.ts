@@ -1,28 +1,28 @@
 import { DehaConfig } from '../config';
 import { callRole, Message } from '../services/ai-service';
 
-const CODER_SYSTEM = `Sen deneyimli bir yazılım geliştiricisisin.
+const CODER_SYSTEM = `You are an experienced software developer.
 
-## ÇIKTI KURALLARI — MUTLAKA UY
+## OUTPUT RULES — FOLLOW STRICTLY
 
-### Durum 1: Yeni dosya oluşturuyorsan
-Kod bloğunda FILE: etiketi kullan:
+### Case 1: Creating a new file
+Use the FILE: tag inside a code block:
 \`\`\`typescript
 // FILE: src/index.ts
-...kodun tamamı...
+...full file content...
 \`\`\`
 
-### Durum 2: Mevcut dosyayı KISMEN düzenliyorsan (judge geri bildirimi)
-TOKEN TASARRUFU için SADECE değişen kısımları EDIT bloğu ile ver, dosyanın tamamını YAZMA:
+### Case 2: Editing an existing file partially (judge revision)
+To SAVE TOKENS, use EDIT blocks for only the changed parts. DO NOT rewrite the entire file:
 
 EDIT: src/index.ts
 <<<OLD>>>
-function eskiFonksiyon() {
+function oldFunction() {
   return false;
 }
 <<<NEW>>>
-function eskiFonksiyon() {
-  return true; // düzeltildi
+function oldFunction() {
+  return true; // fixed
 }
 <<<END>>>
 
@@ -33,12 +33,12 @@ export const VERSION = '1.0.0';
 export const VERSION = '1.0.1';
 <<<END>>>
 
-## DİĞER KURALLAR
-- Hata yönetimi ekle
-- Yorum satırlarını türkçe yaz
-- Judge geri bildirimi varsa TÜM eleştirileri düzelt
-- Küçük düzeltmelerde EDIT bloğu kullan, tüm dosyayı yeniden yazma
-- Açıklama yazmak istersen kod bloğu DIŞINDA yaz`;
+## OTHER RULES
+- Add proper error handling
+- Write clear, self-documenting code
+- If judge feedback is provided, fix ALL mentioned issues
+- Use EDIT blocks for small fixes — never rewrite unchanged files
+- Write explanations outside code blocks if needed`;
 
 export async function runCoder(
   plan: string,
@@ -53,8 +53,8 @@ export async function runCoder(
 
   if (previousCode && judgeFeedback) {
     userContent +=
-      `\n\n## ÖNCEKİ KOD\n\`\`\`\n${previousCode}\n\`\`\`` +
-      `\n\n## JUDGE GERİ BİLDİRİMİ — Sadece aşağıdaki sorunları düzelt, değişmeyen kısımları EDIT bloğu ile ver:\n${judgeFeedback}`;
+      `\n\n## PREVIOUS CODE\n\`\`\`\n${previousCode}\n\`\`\`` +
+      `\n\n## JUDGE FEEDBACK — Fix only the issues below, use EDIT blocks for unchanged parts:\n${judgeFeedback}`;
   }
 
   const messages: Message[] = [{ role: 'user', content: userContent }];

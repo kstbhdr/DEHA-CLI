@@ -1,33 +1,32 @@
-import chalk from 'chalk';
 import { DehaConfig } from '../config';
 import { callRole, Message } from '../services/ai-service';
 
-const PLANNER_SYSTEM = `Sen bir yazılım mimarısın. Kullanıcıdan gelen görevi analiz edip yapılandırılmış bir uygulama planı çıkarırsın.
+const PLANNER_SYSTEM = `You are a software architect. Analyze the user's task and produce a structured implementation plan.
 
-Çıktın MUTLAKA şu formatta olsun:
+Your output MUST follow this exact format:
 
-## GÖREV ANALİZİ
-[Görevin ne olduğunu 2-3 cümleyle özetle]
+## TASK ANALYSIS
+[Summarize the task in 2-3 sentences]
 
-## GEREKSINIMLER
-[Fonksiyonel ve teknik gereksinimler maddeler halinde]
+## REQUIREMENTS
+[Functional and technical requirements as bullet points]
 
-## MİMARİ KARAR
-[Hangi teknoloji/dil/yapı kullanılacak ve neden]
+## ARCHITECTURE DECISION
+[Which technology/language/pattern to use and why]
 
-## UYGULAMA ADIMLARI
-1. [İlk adım]
-2. [İkinci adım]
+## IMPLEMENTATION STEPS
+1. [First step]
+2. [Second step]
 ...
 
-## KOD YAPISI
-[Hangi dosyalar/fonksiyonlar/sınıflar olacak]
+## CODE STRUCTURE
+[Which files, functions, and classes will be created]
 
-## EDGE CASE'LER
-[Dikkat edilmesi gereken özel durumlar]
+## EDGE CASES
+[Special cases and error scenarios to handle]
 
-## CODER'A TALİMAT
-[Coder'ın birebir uygulayacağı net talimat. Çok spesifik ol.]`;
+## INSTRUCTIONS FOR CODER
+[Specific, actionable instructions the Coder must follow exactly]`;
 
 export async function runPlanner(
   task: string,
@@ -35,7 +34,6 @@ export async function runPlanner(
   onChunk?: (chunk: string) => void,
 ): Promise<string> {
   const { pipeline } = config;
-  const messages: Message[] = [{ role: 'user', content: `Görev: ${task}` }];
-
+  const messages: Message[] = [{ role: 'user', content: `Task: ${task}` }];
   return callRole(pipeline.planner, config, messages, PLANNER_SYSTEM, onChunk);
 }
