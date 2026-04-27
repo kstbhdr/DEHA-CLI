@@ -188,7 +188,7 @@ export const DEHA_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'vision_analyze',
-    description: 'Take a screenshot of a URL and analyze it with a vision model. Detects UI bugs, layout issues, accessibility problems.',
+    description: 'Take a screenshot of a URL and analyze it with a vision model. Detects UI bugs, layout issues, accessibility problems. Supports any OpenAI-compatible vision endpoint.',
     input_schema: {
       type: 'object',
       properties: {
@@ -196,6 +196,10 @@ export const DEHA_TOOLS: ToolDefinition[] = [
         image_path: { type: 'string', description: 'Path to an existing image file' },
         prompt:     { type: 'string', description: 'Custom question or instruction for the vision model' },
         full_page:  { type: 'boolean', description: 'Capture full page (default: false)' },
+        provider:   { type: 'string', enum: ['claude', 'openai'], description: 'Vision provider (default: claude)' },
+        model:      { type: 'string', description: 'Model name override (e.g. gpt-4o, claude-opus-4-6)' },
+        api_key:    { type: 'string', description: 'API key override (uses config key by default)' },
+        api_url:    { type: 'string', description: 'Custom OpenAI-compatible endpoint URL (e.g. http://localhost:8080/v1)' },
       },
     },
   },

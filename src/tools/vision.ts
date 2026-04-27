@@ -11,7 +11,9 @@ export interface VisionOptions {
   provider?: VisionProvider;
   model?: string;
   prompt?: string;
-  detail?: 'low' | 'high' | 'auto'; // OpenAI için
+  detail?: 'low' | 'high' | 'auto';
+  apiKey?: string;   // override global key
+  apiUrl?: string;   // custom OpenAI-compatible endpoint
 }
 
 // ─── Ana fonksiyon: görüntü analizi ─────────────────────────────────────────
@@ -75,9 +77,12 @@ async function analyzeWithClaude(
   config: DehaConfig,
   opts: VisionOptions,
 ): Promise<string> {
-  if (!config.anthropicApiKey) throw new Error('ANTHROPIC_API_KEY eksik');
+  const apiKey = opts.apiKey ?? config.anthropicApiKey;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY missing');
 
-  const client = new Anthropic({ apiKey: config.anthropicApiKey });
+  const clientOpts: ConstructorParameters<typeof Anthropic>[0] = { apiKey };
+  if (opts.apiUrl) clientOpts.baseURL = opts.apiUrl;
+  const client = new Anthropic(clientOpts);
   const model = opts.model ?? config.claudeModel;
 
   const response = await client.messages.create({
@@ -115,13 +120,15 @@ async function analyzeWithOpenAI(
   config: DehaConfig,
   opts: VisionOptions,
 ): Promise<string> {
-  if (!config.openaiApiKey) throw new Error('OPENAI_API_KEY eksik');
+  const apiKey = opts.apiKey ?? config.openaiApiKey;
+  if (!apiKey) throw new Error('OPENAI_API_KEY missing (or pass apiKey in options)');
 
-  const model = opts.model ?? 'gpt-4o';
+  const model  = opts.model  ?? 'gpt-4o';
   const detail = opts.detail ?? 'auto';
+  const baseUrl = opts.apiUrl ?? 'https://api.openai.com/v1';
 
   const response = await axios.post(
-    'https://api.openai.com/v1/chat/completions',
+    `${baseUrl.replace(/\/$/, '')}/chat/completions`,
     {
       model,
       max_tokens: 2048,
@@ -138,7 +145,7 @@ async function analyzeWithOpenAI(
         },
       ],
     },
-    { headers: { Authorization: `Bearer ${config.openaiApiKey}` } },
+    { headers: { Authorization: `Bearer ${apiKey}` } },
   );
 
   return response.data.choices[0].message.content;
@@ -166,20 +173,32 @@ export async function toolVisionAnalyze(
     image_path?: string;
     prompt?: string;
     full_page?: boolean;
+    provider?: VisionProvider;
+    model?: string;
+    api_key?: string;
+    api_url?: string;
   },
   config: DehaConfig,
 ): Promise<string> {
+  const opts: VisionOptions = {
+    prompt:   input.prompt,
+    provider: input.provider,
+    model:    input.model,
+    apiKey:   input.api_key,
+    apiUrl:   input.api_url,
+  };
+
   if (input.url) {
     const { screenshotPath, analysis } = await screenshotAndAnalyze(input.url, config, {
-      prompt: input.prompt,
+      ...opts,
       fullPage: input.full_page,
     });
     return `Screenshot: ${screenshotPath}\n\n${analysis}`;
   }
 
   if (input.image_path) {
-    return analyzeImage(input.image_path, config, { prompt: input.prompt });
+    return analyzeImage(input.image_path, config, opts);
   }
 
-  return 'url veya image_path gerekli';
+  return 'url or image_path is required';
 }
