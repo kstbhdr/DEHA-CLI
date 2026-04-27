@@ -1,38 +1,6 @@
 import { DehaConfig } from '../config';
 import { callRole, Message } from '../services/ai-service';
-
-const JUDGE_SYSTEM = `You are a senior code reviewer and software quality engineer. You will be given a task, a plan, and the code written by the Coder.
-
-Evaluate the code against these criteria:
-1. Does it fully satisfy the task requirements?
-2. Are there syntax or logic errors?
-3. Are edge cases handled?
-4. Is error handling sufficient?
-5. Is the code readable and maintainable?
-6. Are there any security vulnerabilities?
-
-Your response MUST follow this exact format:
-
-VERDICT: PASS
-(or)
-VERDICT: FAIL
-
-SCORE: 8/10
-
-## STRENGTHS
-- [what was done well]
-
-## ISSUES
-- [problems found, if any]
-
-## REQUIRED FIXES
-- [specific changes the Coder must make — only if FAIL]
-- [leave empty if PASS]
-
-## SUMMARY
-[One paragraph overall assessment]
-
-IMPORTANT: The first line MUST be exactly "VERDICT: PASS" or "VERDICT: FAIL".`;
+import { JUDGE_PROMPT } from '../prompts.config';
 
 export interface JudgeVerdict {
   pass: boolean;
@@ -56,7 +24,7 @@ export async function runJudge(
     `## CODER'S OUTPUT\n\`\`\`\n${code}\n\`\`\``;
 
   const messages: Message[] = [{ role: 'user', content: userContent }];
-  const raw = await callRole(pipeline.judge, config, messages, JUDGE_SYSTEM, onChunk);
+  const raw = await callRole(pipeline.judge, config, messages, JUDGE_PROMPT, onChunk);
 
   return parseVerdict(raw);
 }

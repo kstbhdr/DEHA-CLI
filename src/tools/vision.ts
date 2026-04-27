@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import axios from 'axios';
 import { takeScreenshot } from './browser';
 import { DehaConfig } from '../config';
+import { VISION_PROMPT } from '../prompts.config';
 
 export type VisionProvider = 'claude' | 'openai';
 
@@ -28,7 +29,7 @@ export async function analyzeImage(
   const imageData = fs.readFileSync(imagePath);
   const base64 = imageData.toString('base64');
   const mimeType = getMimeType(imagePath);
-  const prompt = opts.prompt ?? 'Bu görüntüyü detaylıca analiz et. UI/UX sorunları, hatalar, dikkat çeken unsurlar ve iyileştirme önerileri ver.';
+  const prompt = opts.prompt ?? VISION_PROMPT;
 
   const provider = opts.provider ?? (config.provider === 'openai' ? 'openai' : 'claude');
 
