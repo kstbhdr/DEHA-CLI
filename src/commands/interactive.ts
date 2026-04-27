@@ -18,6 +18,7 @@ import { takeScreenshot } from '../tools/browser';
 import { screenshotAndAnalyze } from '../tools/vision';
 import { modelSetup } from './model-setup';
 import { printStats } from '../services/usage-tracker';
+import { detectIntent, enrichWithSearch } from '../services/intent';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
@@ -240,7 +241,16 @@ export async function interactive(config: DehaConfig): Promise<void> {
 
       // ── Normal streaming chat ─────────────────────────────────────────────
       try {
-        const messages: Message[] = [...history, { role: 'user', content: userMessage }];
+        // Intent detection — web search gerekiyor mu?
+        let enrichedMessage = userMessage;
+        const intent = await detectIntent(userMessage, config);
+        if (intent.search && intent.keywords) {
+          process.stdout.write(chalk.dim(`\n  🌍 Searching: "${intent.keywords}"... `));
+          enrichedMessage = await enrichWithSearch(userMessage, intent.keywords);
+          console.log(chalk.green('✓'));
+        }
+
+        const messages: Message[] = [...history, { role: 'user', content: enrichedMessage }];
 
         console.log('\n' + chalk.bold.cyan('DEHA:'));
 
@@ -251,7 +261,7 @@ export async function interactive(config: DehaConfig): Promise<void> {
         });
         process.stdout.write('\n');
 
-        history.push({ role: 'user', content: userMessage });
+        history.push({ role: 'user', content: userMessage }); // orijinal mesaj kaydedilir
         history.push({ role: 'assistant', content: fullResponse });
         if (history.length > 20) history.splice(0, 2);
 
