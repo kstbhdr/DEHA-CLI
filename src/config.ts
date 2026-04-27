@@ -92,7 +92,7 @@ export interface DehaConfig {
 
 export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
   const base: DehaConfig = {
-    provider: (process.env.DEHA_PROVIDER as Provider) || 'claude',
+    provider: ((process.env.DEHA_PROVIDER || 'claude').toLowerCase() as Provider),
 
     anthropicApiKey:  process.env.ANTHROPIC_API_KEY,
     openaiApiKey:     process.env.OPENAI_API_KEY,
@@ -144,7 +144,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     pipeline: {
       planner: {
-        provider:           (process.env.PLANNER_PROVIDER as Provider) || 'claude',
+        provider:           ((process.env.PLANNER_PROVIDER || 'claude').toLowerCase() as Provider),
         model:              process.env.PLANNER_MODEL   || 'claude-opus-4-6',
         apiKey:             process.env.PLANNER_API_KEY,
         apiUrl:             process.env.PLANNER_API_URL,
@@ -153,7 +153,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         openrouterProvider: process.env.PLANNER_OPENROUTER_PROVIDER || undefined,
       },
       coder: {
-        provider:           (process.env.CODER_PROVIDER as Provider) || 'deepseek',
+        provider:           ((process.env.CODER_PROVIDER || 'deepseek').toLowerCase() as Provider),
         model:              process.env.CODER_MODEL   || 'deepseek-chat',
         apiKey:             process.env.CODER_API_KEY,
         apiUrl:             process.env.CODER_API_URL,
@@ -162,7 +162,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         openrouterProvider: process.env.CODER_OPENROUTER_PROVIDER || undefined,
       },
       judge: {
-        provider:           (process.env.JUDGE_PROVIDER as Provider) || 'xai',
+        provider:           ((process.env.JUDGE_PROVIDER || 'xai').toLowerCase() as Provider),
         model:              process.env.JUDGE_MODEL   || 'grok-3',
         apiKey:             process.env.JUDGE_API_KEY,
         apiUrl:             process.env.JUDGE_API_URL,
