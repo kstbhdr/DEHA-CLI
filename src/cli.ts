@@ -228,6 +228,16 @@ export class DehaCLI {
         }
       });
 
+    // ── deha stats ────────────────────────────────────────────────────────
+    this.program
+      .command('stats')
+      .description('Token usage and cost statistics (daily/weekly/monthly)')
+      .action(() => {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const { printStats } = require('./services/usage-tracker');
+        printStats();
+      });
+
     // ── deha (default: interaktif mod) ────────────────────────────────────
     this.program.action(async () => {
       const config = this.buildConfig();

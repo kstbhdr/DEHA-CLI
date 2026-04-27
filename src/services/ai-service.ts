@@ -1,6 +1,7 @@
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
 import { DehaConfig, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
+import { recordUsage, RoleLabel } from './usage-tracker';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -18,36 +19,38 @@ export async function callRole(
   messages: Message[],
   systemPrompt: string,
   onChunk?: (chunk: string) => void,
+  roleLabel: RoleLabel = 'chat',
 ): Promise<string> {
   const apiKey = resolveApiKey(role, globalConfig);
   const maxTokens = role.maxTokens ?? globalConfig.maxTokens;
   const temperature = role.temperature ?? globalConfig.temperature;
-
   const apiUrl = resolveApiUrl(role, globalConfig);
+
+  const track = (inp: number, out: number) =>
+    recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig);
 
   switch (role.provider) {
     case 'claude':
       return onChunk
-        ? streamClaude(messages, role.model, apiKey, maxTokens, systemPrompt, onChunk)
-        : sendClaude(messages, role.model, apiKey, maxTokens, systemPrompt);
+        ? streamClaude(messages, role.model, apiKey, maxTokens, systemPrompt, onChunk, track)
+        : sendClaude(messages, role.model, apiKey, maxTokens, systemPrompt, track);
 
     case 'ollama':
       return onChunk
         ? streamOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature, onChunk)
         : sendOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature);
 
-    // OpenAI-compatible providerlar (openai, deepseek, openrouter, xai, custom)
     case 'openai':
     case 'deepseek':
     case 'openrouter':
     case 'xai':
     case 'custom':
       return onChunk
-        ? streamOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, onChunk)
-        : sendOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature);
+        ? streamOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, onChunk, track)
+        : sendOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, track);
 
     default:
-      throw new Error(`Bilinmeyen provider: ${role.provider}`);
+      throw new Error(`Unknown provider: ${role.provider}`);
   }
 }
 
@@ -126,21 +129,25 @@ export async function sendWithTools(
 
 // ─── Claude implementasyonu ─────────────────────────────────────────────────
 
+type TrackFn = (inp: number, out: number) => void;
+
 async function sendClaude(
   messages: Message[],
   model: string,
   apiKey: string | undefined,
   maxTokens: number,
   systemPrompt: string,
+  track?: TrackFn,
 ): Promise<string> {
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY tanımlı değil.');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model, max_tokens: maxTokens, system: systemPrompt,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   });
+  track?.(response.usage.input_tokens, response.usage.output_tokens);
   const block = response.content[0];
-  if (block.type !== 'text') throw new Error('Beklenmeyen yanıt tipi');
+  if (block.type !== 'text') throw new Error('Unexpected response type');
   return block.text;
 }
 
@@ -151,8 +158,9 @@ async function streamClaude(
   maxTokens: number,
   systemPrompt: string,
   onChunk: (chunk: string) => void,
+  track?: TrackFn,
 ): Promise<string> {
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY tanımlı değil.');
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
   const client = new Anthropic({ apiKey });
   let full = '';
   const stream = client.messages.stream({
@@ -165,6 +173,8 @@ async function streamClaude(
       full += event.delta.text;
     }
   }
+  const final = await stream.finalMessage();
+  track?.(final.usage.input_tokens, final.usage.output_tokens);
   return full;
 }
 
@@ -178,8 +188,9 @@ async function sendOpenAICompat(
   systemPrompt: string,
   maxTokens: number,
   temperature: number,
+  track?: TrackFn,
 ): Promise<string> {
-  if (!apiKey) throw new Error(`API key eksik (${baseUrl})`);
+  if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   const response = await axios.post(
     `${baseUrl}/chat/completions`,
     {
@@ -190,6 +201,8 @@ async function sendOpenAICompat(
     },
     { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } },
   );
+  const usage = response.data.usage;
+  if (usage) track?.(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
   return response.data.choices[0].message.content;
 }
 
@@ -202,8 +215,9 @@ async function streamOpenAICompat(
   maxTokens: number,
   temperature: number,
   onChunk: (chunk: string) => void,
+  track?: TrackFn,
 ): Promise<string> {
-  if (!apiKey) throw new Error(`API key eksik (${baseUrl})`);
+  if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   const response = await axios.post(
     `${baseUrl}/chat/completions`,
     {
@@ -212,13 +226,14 @@ async function streamOpenAICompat(
       max_tokens: maxTokens,
       temperature,
       stream: true,
+      stream_options: { include_usage: true },
     },
     {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       responseType: 'stream',
     },
   );
-  return parseSSEStream(response.data, onChunk);
+  return parseSSEStream(response.data, onChunk, track);
 }
 
 // ─── Ollama ─────────────────────────────────────────────────────────────────
@@ -284,6 +299,7 @@ async function streamOllama(
 function parseSSEStream(
   stream: NodeJS.ReadableStream,
   onChunk: (chunk: string) => void,
+  track?: TrackFn,
 ): Promise<string> {
   let full = '';
   let buf = '';
@@ -299,6 +315,10 @@ function parseSSEStream(
           const parsed = JSON.parse(trimmed);
           const delta: string = parsed.choices?.[0]?.delta?.content ?? '';
           if (delta) { onChunk(delta); full += delta; }
+          // Some providers send usage in the final chunk (stream_options: include_usage)
+          if (parsed.usage && track) {
+            track(parsed.usage.prompt_tokens ?? 0, parsed.usage.completion_tokens ?? 0);
+          }
         } catch { /* skip */ }
       }
     });

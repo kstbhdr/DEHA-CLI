@@ -20,5 +20,5 @@ export async function runCoder(
   }
 
   const messages: Message[] = [{ role: 'user', content: userContent }];
-  return callRole(pipeline.coder, config, messages, CODER_PROMPT, onChunk);
+  return callRole(pipeline.coder, config, messages, CODER_PROMPT, onChunk, 'coder');
 }

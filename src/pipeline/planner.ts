@@ -9,5 +9,5 @@ export async function runPlanner(
 ): Promise<string> {
   const { pipeline } = config;
   const messages: Message[] = [{ role: 'user', content: `Task: ${task}` }];
-  return callRole(pipeline.planner, config, messages, PLANNER_PROMPT, onChunk);
+  return callRole(pipeline.planner, config, messages, PLANNER_PROMPT, onChunk, 'planner');
 }

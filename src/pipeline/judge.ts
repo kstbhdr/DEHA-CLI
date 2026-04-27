@@ -24,7 +24,7 @@ export async function runJudge(
     `## CODER'S OUTPUT\n\`\`\`\n${code}\n\`\`\``;
 
   const messages: Message[] = [{ role: 'user', content: userContent }];
-  const raw = await callRole(pipeline.judge, config, messages, JUDGE_PROMPT, onChunk);
+  const raw = await callRole(pipeline.judge, config, messages, JUDGE_PROMPT, onChunk, 'judge');
 
   return parseVerdict(raw);
 }

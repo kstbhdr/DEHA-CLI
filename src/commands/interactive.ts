@@ -17,6 +17,7 @@ import { runSmokeTests, buildQuickChecks, printSmokeReport } from '../tools/smok
 import { takeScreenshot } from '../tools/browser';
 import { screenshotAndAnalyze } from '../tools/vision';
 import { modelSetup } from './model-setup';
+import { printStats } from '../services/usage-tracker';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
@@ -39,6 +40,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/smoketest <url>')}              HTTP smoke testi yap
   ${chalk.cyan('/screenshot <url>')}             Ekran görüntüsü al
   ${chalk.cyan('/vision <url>')}                 Screenshot + AI analizi
+  ${chalk.cyan('/stats')}                        Token kullanımı ve maliyet istatistikleri
   ${chalk.cyan('/exit')}                         Çıkış yap
 
 ${chalk.bold('@dosya.ts sözdizimi:')}
@@ -90,6 +92,11 @@ export async function interactive(config: DehaConfig): Promise<void> {
         console.clear();
         console.log(BANNER);
         console.log(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));
+        prompt(); return;
+      }
+
+      if (trimmed === '/stats') {
+        printStats();
         prompt(); return;
       }
 
