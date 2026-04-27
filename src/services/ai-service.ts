@@ -26,6 +26,10 @@ export async function callRole(
   const temperature = role.temperature ?? globalConfig.temperature;
   const apiUrl = resolveApiUrl(role, globalConfig);
 
+  // OpenRouter sub-provider: role-level > global > undefined
+  const openrouterProvider =
+    role.openrouterProvider ?? globalConfig.openrouterProvider ?? undefined;
+
   const track = (inp: number, out: number) =>
     recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig);
 
@@ -46,8 +50,8 @@ export async function callRole(
     case 'xai':
     case 'custom':
       return onChunk
-        ? streamOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, onChunk, track)
-        : sendOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, track);
+        ? streamOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, onChunk, track, openrouterProvider)
+        : sendOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, track, openrouterProvider);
 
     default:
       throw new Error(`Unknown provider: ${role.provider}`);
@@ -189,18 +193,21 @@ async function sendOpenAICompat(
   maxTokens: number,
   temperature: number,
   track?: TrackFn,
+  openrouterProvider?: string,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
-  const response = await axios.post(
-    `${baseUrl}/chat/completions`,
-    {
-      model,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
-      max_tokens: maxTokens,
-      temperature,
-    },
-    { headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } },
-  );
+  const body: Record<string, unknown> = {
+    model,
+    messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    max_tokens: maxTokens,
+    temperature,
+  };
+  if (openrouterProvider) {
+    body.provider = { only: [openrouterProvider], allow_fallbacks: false };
+  }
+  const response = await axios.post(`${baseUrl}/chat/completions`, body, {
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+  });
   const usage = response.data.usage;
   if (usage) track?.(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
   return response.data.choices[0].message.content;
@@ -216,23 +223,24 @@ async function streamOpenAICompat(
   temperature: number,
   onChunk: (chunk: string) => void,
   track?: TrackFn,
+  openrouterProvider?: string,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
-  const response = await axios.post(
-    `${baseUrl}/chat/completions`,
-    {
-      model,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
-      max_tokens: maxTokens,
-      temperature,
-      stream: true,
-      stream_options: { include_usage: true },
-    },
-    {
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      responseType: 'stream',
-    },
-  );
+  const body: Record<string, unknown> = {
+    model,
+    messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    max_tokens: maxTokens,
+    temperature,
+    stream: true,
+    stream_options: { include_usage: true },
+  };
+  if (openrouterProvider) {
+    body.provider = { only: [openrouterProvider], allow_fallbacks: false };
+  }
+  const response = await axios.post(`${baseUrl}/chat/completions`, body, {
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    responseType: 'stream',
+  });
   return parseSSEStream(response.data, onChunk, track);
 }
 

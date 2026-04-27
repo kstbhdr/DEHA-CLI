@@ -16,6 +16,7 @@ export interface RoleConfig {
   apiUrl?: string;      // custom provider için endpoint URL'i
   maxTokens?: number;
   temperature?: number;
+  openrouterProvider?: string;  // OpenRouter sub-provider (e.g. "DeepInfra", "Chutes")
 }
 
 // ─── Pipeline Konfigürasyonu ────────────────────────────────────────────────
@@ -54,6 +55,9 @@ export interface DehaConfig {
 
   // Custom endpoint
   customApiUrl: string;
+
+  // OpenRouter sub-provider routing (global default)
+  openrouterProvider?: string;
 
   // Vision
   visionProvider: string;
@@ -109,6 +113,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     customApiUrl: process.env.CUSTOM_API_URL || 'http://localhost:8080/v1',
 
+    openrouterProvider: process.env.OPENROUTER_PROVIDER || undefined,
+
     visionProvider: process.env.VISION_PROVIDER || 'claude',
     visionModel:    process.env.VISION_MODEL    || 'claude-opus-4-6',
     visionApiKey:   process.env.VISION_API_KEY,
@@ -138,28 +144,31 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     pipeline: {
       planner: {
-        provider:    (process.env.PLANNER_PROVIDER as Provider) || 'claude',
-        model:       process.env.PLANNER_MODEL   || 'claude-opus-4-6',
-        apiKey:      process.env.PLANNER_API_KEY,
-        apiUrl:      process.env.PLANNER_API_URL,
-        maxTokens:   parseInt(process.env.PLANNER_MAX_TOKENS   || '2048', 10),
-        temperature: parseFloat(process.env.PLANNER_TEMPERATURE || '0.3'),
+        provider:           (process.env.PLANNER_PROVIDER as Provider) || 'claude',
+        model:              process.env.PLANNER_MODEL   || 'claude-opus-4-6',
+        apiKey:             process.env.PLANNER_API_KEY,
+        apiUrl:             process.env.PLANNER_API_URL,
+        maxTokens:          parseInt(process.env.PLANNER_MAX_TOKENS   || '2048', 10),
+        temperature:        parseFloat(process.env.PLANNER_TEMPERATURE || '0.3'),
+        openrouterProvider: process.env.PLANNER_OPENROUTER_PROVIDER || undefined,
       },
       coder: {
-        provider:    (process.env.CODER_PROVIDER as Provider) || 'deepseek',
-        model:       process.env.CODER_MODEL   || 'deepseek-chat',
-        apiKey:      process.env.CODER_API_KEY,
-        apiUrl:      process.env.CODER_API_URL,
-        maxTokens:   parseInt(process.env.CODER_MAX_TOKENS   || '8192', 10),
-        temperature: parseFloat(process.env.CODER_TEMPERATURE || '0.2'),
+        provider:           (process.env.CODER_PROVIDER as Provider) || 'deepseek',
+        model:              process.env.CODER_MODEL   || 'deepseek-chat',
+        apiKey:             process.env.CODER_API_KEY,
+        apiUrl:             process.env.CODER_API_URL,
+        maxTokens:          parseInt(process.env.CODER_MAX_TOKENS   || '8192', 10),
+        temperature:        parseFloat(process.env.CODER_TEMPERATURE || '0.2'),
+        openrouterProvider: process.env.CODER_OPENROUTER_PROVIDER || undefined,
       },
       judge: {
-        provider:    (process.env.JUDGE_PROVIDER as Provider) || 'xai',
-        model:       process.env.JUDGE_MODEL   || 'grok-3',
-        apiKey:      process.env.JUDGE_API_KEY,
-        apiUrl:      process.env.JUDGE_API_URL,
-        maxTokens:   parseInt(process.env.JUDGE_MAX_TOKENS   || '2048', 10),
-        temperature: parseFloat(process.env.JUDGE_TEMPERATURE || '0.1'),
+        provider:           (process.env.JUDGE_PROVIDER as Provider) || 'xai',
+        model:              process.env.JUDGE_MODEL   || 'grok-3',
+        apiKey:             process.env.JUDGE_API_KEY,
+        apiUrl:             process.env.JUDGE_API_URL,
+        maxTokens:          parseInt(process.env.JUDGE_MAX_TOKENS   || '2048', 10),
+        temperature:        parseFloat(process.env.JUDGE_TEMPERATURE || '0.1'),
+        openrouterProvider: process.env.JUDGE_OPENROUTER_PROVIDER || undefined,
       },
       maxIterations: parseInt(process.env.PIPELINE_MAX_ITERATIONS || '3', 10),
     },
