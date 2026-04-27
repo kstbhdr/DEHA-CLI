@@ -61,17 +61,19 @@ export interface DehaConfig {
   visionApiKey?: string;
   visionApiUrl?: string;
 
-  // Pricing (USD per million tokens)
-  claudeInputPrice: number;
-  claudeOutputPrice: number;
-  openaiInputPrice: number;
-  openaiOutputPrice: number;
-  deepseekInputPrice: number;
-  deepseekOutputPrice: number;
-  openrouterInputPrice: number;
-  openrouterOutputPrice: number;
-  xaiInputPrice: number;
-  xaiOutputPrice: number;
+  // Pricing per role (USD per million tokens)
+  chatInputPrice: number;
+  chatOutputPrice: number;
+  plannerInputPrice: number;
+  plannerOutputPrice: number;
+  coderInputPrice: number;
+  coderOutputPrice: number;
+  judgeInputPrice: number;
+  judgeOutputPrice: number;
+  visionInputPrice: number;
+  visionOutputPrice: number;
+  agentInputPrice: number;
+  agentOutputPrice: number;
 
   // Genel
   systemPrompt: string;
@@ -112,16 +114,18 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     visionApiKey:   process.env.VISION_API_KEY,
     visionApiUrl:   process.env.VISION_API_URL,
 
-    claudeInputPrice:      parseFloat(process.env.CLAUDE_INPUT_PRICE      || '3.00'),
-    claudeOutputPrice:     parseFloat(process.env.CLAUDE_OUTPUT_PRICE     || '15.00'),
-    openaiInputPrice:      parseFloat(process.env.OPENAI_INPUT_PRICE      || '2.50'),
-    openaiOutputPrice:     parseFloat(process.env.OPENAI_OUTPUT_PRICE     || '10.00'),
-    deepseekInputPrice:    parseFloat(process.env.DEEPSEEK_INPUT_PRICE    || '0.27'),
-    deepseekOutputPrice:   parseFloat(process.env.DEEPSEEK_OUTPUT_PRICE   || '1.10'),
-    openrouterInputPrice:  parseFloat(process.env.OPENROUTER_INPUT_PRICE  || '3.00'),
-    openrouterOutputPrice: parseFloat(process.env.OPENROUTER_OUTPUT_PRICE || '15.00'),
-    xaiInputPrice:         parseFloat(process.env.XAI_INPUT_PRICE         || '5.00'),
-    xaiOutputPrice:        parseFloat(process.env.XAI_OUTPUT_PRICE        || '15.00'),
+    chatInputPrice:     parseFloat(process.env.CHAT_INPUT_PRICE     || '3.00'),
+    chatOutputPrice:    parseFloat(process.env.CHAT_OUTPUT_PRICE    || '15.00'),
+    plannerInputPrice:  parseFloat(process.env.PLANNER_INPUT_PRICE  || '3.00'),
+    plannerOutputPrice: parseFloat(process.env.PLANNER_OUTPUT_PRICE || '15.00'),
+    coderInputPrice:    parseFloat(process.env.CODER_INPUT_PRICE    || '0.27'),
+    coderOutputPrice:   parseFloat(process.env.CODER_OUTPUT_PRICE   || '1.10'),
+    judgeInputPrice:    parseFloat(process.env.JUDGE_INPUT_PRICE    || '5.00'),
+    judgeOutputPrice:   parseFloat(process.env.JUDGE_OUTPUT_PRICE   || '15.00'),
+    visionInputPrice:   parseFloat(process.env.VISION_INPUT_PRICE   || '3.00'),
+    visionOutputPrice:  parseFloat(process.env.VISION_OUTPUT_PRICE  || '15.00'),
+    agentInputPrice:    parseFloat(process.env.AGENT_INPUT_PRICE    || '3.00'),
+    agentOutputPrice:   parseFloat(process.env.AGENT_OUTPUT_PRICE   || '15.00'),
 
     systemPrompt: process.env.DEHA_SYSTEM_PROMPT || (() => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires

@@ -45,60 +45,22 @@ function writeStore(store: UsageStore): void {
 
 // ─── Pricing helpers ─────────────────────────────────────────────────────────
 
-export interface ModelPrice {
-  inputPerMillion: number;   // USD
-  outputPerMillion: number;  // USD
-}
-
-function getPrice(provider: string, model: string, config: DehaConfig): ModelPrice {
-  // Per-model price from config (set via .env)
-  const p = (config as DehaConfig & { pricing?: Record<string, ModelPrice> }).pricing;
-  if (p && p[model]) return p[model];
-
-  // Fall back to provider-level defaults from config
-  switch (provider) {
-    case 'claude':
-      return {
-        inputPerMillion:  config.claudeInputPrice  ?? 3.00,
-        outputPerMillion: config.claudeOutputPrice ?? 15.00,
-      };
-    case 'openai':
-      return {
-        inputPerMillion:  config.openaiInputPrice  ?? 2.50,
-        outputPerMillion: config.openaiOutputPrice ?? 10.00,
-      };
-    case 'deepseek':
-      return {
-        inputPerMillion:  config.deepseekInputPrice  ?? 0.27,
-        outputPerMillion: config.deepseekOutputPrice ?? 1.10,
-      };
-    case 'openrouter':
-      return {
-        inputPerMillion:  config.openrouterInputPrice  ?? 3.00,
-        outputPerMillion: config.openrouterOutputPrice ?? 15.00,
-      };
-    case 'xai':
-      return {
-        inputPerMillion:  config.xaiInputPrice  ?? 5.00,
-        outputPerMillion: config.xaiOutputPrice ?? 15.00,
-      };
-    default:
-      return { inputPerMillion: 0, outputPerMillion: 0 };
-  }
-}
-
 export function calcCost(
-  provider: string,
-  model: string,
+  role: RoleLabel,
   inputTokens: number,
   outputTokens: number,
   config: DehaConfig,
 ): number {
-  const price = getPrice(provider, model, config);
-  return (
-    (inputTokens  / 1_000_000) * price.inputPerMillion +
-    (outputTokens / 1_000_000) * price.outputPerMillion
-  );
+  const priceMap: Record<RoleLabel, [number, number]> = {
+    chat:    [config.chatInputPrice,    config.chatOutputPrice],
+    planner: [config.plannerInputPrice, config.plannerOutputPrice],
+    coder:   [config.coderInputPrice,   config.coderOutputPrice],
+    judge:   [config.judgeInputPrice,   config.judgeOutputPrice],
+    vision:  [config.visionInputPrice,  config.visionOutputPrice],
+    agent:   [config.agentInputPrice,   config.agentOutputPrice],
+  };
+  const [inp, out] = priceMap[role] ?? [0, 0];
+  return (inputTokens / 1_000_000) * inp + (outputTokens / 1_000_000) * out;
 }
 
 // ─── Record a usage event ─────────────────────────────────────────────────────
@@ -120,7 +82,7 @@ export function recordUsage(
     role,
     inputTokens,
     outputTokens,
-    costUsd: calcCost(provider, model, inputTokens, outputTokens, config),
+    costUsd: calcCost(role, inputTokens, outputTokens, config),
   });
   // Keep only last 10 000 entries to prevent unbounded growth
   if (store.entries.length > 10_000) store.entries = store.entries.slice(-10_000);

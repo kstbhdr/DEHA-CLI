@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-import 'dotenv/config';
+import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+// Always load .env from the package directory, regardless of where `deha` is run from
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
 import chalk from 'chalk';
 import { DehaCLI } from './cli';
 
