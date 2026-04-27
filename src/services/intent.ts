@@ -45,12 +45,13 @@ interface IntentResult {
 async function modelIntent(message: string, config: DehaConfig): Promise<IntentResult> {
   try {
     const messages: Message[] = [{ role: 'user', content: message }];
-    const raw = await sendMessage(messages, {
-      ...config,
-      systemPrompt: INTENT_SYSTEM,
-      maxTokens: 80,
-      temperature: 0,
-    });
+    // Intent check için thinking mode'u kapatmak adına deepseek-chat (non-thinking alias) kullan.
+    // Diğer providerlar için mevcut modeli kullan ama token limitini yeterince yüksek tut.
+    const intentConfig = { ...config, maxTokens: 512, temperature: 0 };
+    if (config.provider === 'deepseek') {
+      intentConfig.deepseekModel = 'deepseek-chat'; // non-thinking mode alias
+    }
+    const raw = await sendMessage(messages, { ...intentConfig, systemPrompt: INTENT_SYSTEM });
 
     // JSON bul — markdown içinde olabilir
     const match = raw.match(/\{[^}]+\}/);
