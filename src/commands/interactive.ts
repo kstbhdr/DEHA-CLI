@@ -16,6 +16,7 @@ import { runPythonCode, detectPython } from '../tools/python';
 import { runSmokeTests, buildQuickChecks, printSmokeReport } from '../tools/smoke';
 import { takeScreenshot } from '../tools/browser';
 import { screenshotAndAnalyze } from '../tools/vision';
+import { modelSetup } from './model-setup';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
@@ -28,7 +29,7 @@ const HELP_TEXT = `
 ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/help')}                    Bu yardım mesajını göster
   ${chalk.cyan('/clear')}                   Sohbet geçmişini temizle
-  ${chalk.cyan('/model')}                   Aktif model/provider bilgisini göster
+  ${chalk.cyan('/model')}                   Model & provider ayarlarını düzenle (Chat/Planner/Coder/Judge/Vision)
   ${chalk.cyan('/agent <soru>')}            Araç çağırabilen ajan modu (Claude)
   ${chalk.cyan('/file <yol>')}              Dosyayı bağlama ekle
   ${chalk.cyan('/mcp <list|status|...>')}        MCP sunucu yönetimi
@@ -93,10 +94,15 @@ export async function interactive(config: DehaConfig): Promise<void> {
       }
 
       if (trimmed === '/model') {
-        console.log(
-          '\n' + chalk.dim('Provider: ') + chalk.green(getProviderLabel(config.provider)) +
-          chalk.dim('  |  Model: ') + chalk.yellow(getActiveModel(config)) + '\n',
-        );
+        rl.pause();
+        try {
+          await modelSetup(config);
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).name !== 'ExitPromptError') {
+            console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
+          }
+        }
+        rl.resume();
         prompt(); return;
       }
 
