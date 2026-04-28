@@ -93,12 +93,13 @@ export const DEHA_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'run_shell',
-    description: 'Run a shell command. Use for builds, tests, git operations, etc.',
+    description: 'Run a shell command. Use for builds, tests, git operations, etc. Safe commands only — destructive operations are blocked.',
     input_schema: {
       type: 'object',
       properties: {
-        command: { type: 'string', description: 'Command to run' },
-        cwd:     { type: 'string', description: 'Working directory (optional)' },
+        command: { type: 'string', description: 'Command to run (max 2000 chars, destructive commands blocked)' },
+        cwd:     { type: 'string', description: 'Working directory (must be within project root)' },
+        timeout: { type: 'number', description: 'Timeout in seconds (default: 30, max: 60)' },
       },
       required: ['command'],
     },
@@ -240,6 +241,7 @@ interface ToolInput {
   recursive?: boolean;
   command?: string;
   cwd?: string;
+  timeout?: number;
   pattern?: string;
   directory?: string;
   extension?: string;
@@ -255,6 +257,42 @@ interface ToolInput {
   from_line?: number;
   to_line?: number;
 }
+
+// ─── Güvenlik sabitleri ──────────────────────────────────────────────────────
+
+/** Proje kök dizini (deha-cli dizini) — shell komutları buradan dışarı çıkamaz */
+const PROJECT_ROOT = path.resolve(__dirname, '../..');
+
+/** İzin verilmeyen yıkıcı komut kalıpları */
+const DANGEROUS_COMMANDS = [
+  /^rm\s+-rf\s+\//,       // rm -rf /
+  /^rm\s+-rf\s+~/,         // rm -rf ~
+  /^rm\s+-rf\s+\*/,        // rm -rf *
+  /^rm\s+-rf\s+--no-preserve-root/,
+  /^dd\s+if=/,             // dd if=/dev/zero...
+  /^mkfs\./,               // mkfs.ext4, mkfs.btrfs
+  /^fdisk\s/,              // fdisk
+  /^format\s/,             // Windows format
+  /^del\s+\/f\s+\/s\s+/,  // Windows force recursive delete
+  /^rd\s+\/s\s+\/q\s+/,   // Windows force remove directory
+  /^shutdown\s/,           // shutdown /s /r
+  /^reboot\s?$/,
+  /^init\s+0/,             // Linux shutdown
+  /^halt\s?$/,
+  /^poweroff\s?$/,
+  /^>\/dev\/sda/,          // direct disk write
+  /^chmod\s+-R\s+0\s+\//, // chmod 0 /
+  /^:\(\)\s*\{/,           // fork bomb
+];
+
+/** Maksimum komut uzunluğu (karakter) */
+const MAX_COMMAND_LENGTH = 2000;
+
+/** Varsayılan timeout (ms) */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Maksimum timeout (ms) — 5 dakika */
+const MAX_TIMEOUT_MS = 300_000;
 
 // Sync toollar
 export function executeTool(name: string, input: Record<string, unknown>): string {
@@ -403,13 +441,61 @@ function listRecursive(base: string, dir: string, depth: number, maxDepth: numbe
   return lines.filter(Boolean).join('\n');
 }
 
+// Tehlikeli/yıkıcı komut kalıpları — agent asla bunları çalıştıramaz
+const FORBIDDEN_PATTERNS = [
+  /(\|\s*)?rm\s+(-rf?\s+)?(\/|\/\*|\$HOME|\$PWD|\.\s*$)/i,
+  /(\|\s*)?dd\s+if=/i,
+  /(\|\s*)?mkfs/i,
+  /(\|\s*)?fdisk/i,
+  /(\|\s*)?format/i,
+  /(\|\s*)?sudo\s+(rm|dd|mkfs|fdisk|format|shutdown|reboot|poweroff|init)/i,
+  /(\|\s*)?chmod\s+777\s+\//i,
+  /(\|\s*)?chown\s/i,
+  /(\|\s*)?>(\s*\/dev\/(sda|sdb|sdc|nvme|mmc))/i,
+  /(\|\s*)?shred/i,
+  /(\|\s*)?:\(\)\s*\{.*:\s*\};/i, // fork bomb
+  /(\|\s*)?wget\s+-O\s+\/dev\/null/i,
+];
+
+function isSafeCommand(command: string): { safe: boolean; reason?: string } {
+  // Maksimum komut uzunluğu
+  if (command.length > 2000) {
+    return { safe: false, reason: `Komut çok uzun (${command.length} karakter, maks. 2000)` };
+  }
+
+  for (const pattern of FORBIDDEN_PATTERNS) {
+    if (pattern.test(command)) {
+      return { safe: false, reason: `Güvenlik nedeniyle engellendi: "${pattern}" ile eşleşen komut` };
+    }
+  }
+
+  return { safe: true };
+}
+
 function toolRunShell(inp: ToolInput): string {
   if (!inp.command) throw new Error('command gerekli');
+
+  // Güvenlik kontrolü
+  const check = isSafeCommand(inp.command);
+  if (!check.safe) {
+    throw new Error(`❌ ${check.reason}\nAgent shell komutları sınırlıdır. Dosya işlemleri için write_file/edit_file/read_file tool'larını kullanın.`);
+  }
+
+  // Çalışma dizinini proje köküyle sınırla
+  const projectRoot = process.cwd();
+  const cwd = inp.cwd ? path.resolve(inp.cwd) : projectRoot;
+
+  // Proje dışına çıkışı engelle
+  if (!cwd.startsWith(projectRoot)) {
+    throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nProje kökü: ${projectRoot}`);
+  }
+
   const result = execSync(inp.command, {
-    cwd: inp.cwd ?? process.cwd(),
-    timeout: 30000,
+    cwd,
+    timeout: Math.min(inp.timeout ?? 30, 60) * 1000, // max 60 saniye
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
+    maxBuffer: 10 * 1024 * 1024, // 10MB
   });
   return result || '(çıktı yok)';
 }

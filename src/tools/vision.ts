@@ -5,6 +5,7 @@ import axios from 'axios';
 import { takeScreenshot } from './browser';
 import { DehaConfig } from '../config';
 import { VISION_PROMPT } from '../prompts.config';
+import { recordUsage } from '../services/usage-tracker';
 
 export type VisionProvider = 'claude' | 'openai';
 
@@ -107,6 +108,12 @@ async function analyzeWithClaude(
     ],
   });
 
+  // Track usage
+  const usage = (response as any).usage;
+  if (usage) {
+    recordUsage('anthropic', model, 'vision', usage.input_tokens ?? 0, usage.output_tokens ?? 0, config);
+  }
+
   const block = response.content[0];
   if (block.type !== 'text') throw new Error('Beklenmeyen yanıt');
   return block.text;
@@ -148,6 +155,12 @@ async function analyzeWithOpenAI(
     },
     { headers: { Authorization: `Bearer ${apiKey}` } },
   );
+
+  // Track usage
+  const usage = response.data.usage;
+  if (usage) {
+    recordUsage('openai', model, 'vision', usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0, config);
+  }
 
   return response.data.choices[0].message.content;
 }

@@ -114,14 +114,10 @@ export async function runPipeline(
       pipeline.judge.model,
     );
 
-    let judgeRaw = '';
-    await runJudge(task, plan, code, config, (chunk) => {
+    verdict = await runJudge(task, plan, code, config, (chunk) => {
       process.stdout.write(chalk.yellow(chunk));
-      judgeRaw += chunk;
     });
     process.stdout.write('\n');
-
-    verdict = parseVerdictFromRaw(judgeRaw);
     verdictLine(verdict);
 
     if (verdict.pass) break;
@@ -138,12 +134,4 @@ export async function runPipeline(
   return { plan, finalCode: code, verdict, iterations: iteration };
 }
 
-function parseVerdictFromRaw(raw: string): JudgeVerdict {
-  const passMatch  = /VERDICT:\s*(PASS|FAIL)/i.exec(raw);
-  const scoreMatch = /SCORE:\s*([\d.]+\/10)/i.exec(raw);
-  const pass  = passMatch ? passMatch[1].toUpperCase() === 'PASS' : false;
-  const score = scoreMatch ? scoreMatch[1] : '?/10';
-  const fixSection = raw.match(/## GEREKLİ DÜZELTİMLER\n([\s\S]*?)(?=##|$)/i);
-  const feedback = fixSection ? fixSection[1].trim() : raw;
-  return { pass, score, feedback, raw };
-}
+

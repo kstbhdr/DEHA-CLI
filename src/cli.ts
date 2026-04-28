@@ -13,6 +13,8 @@ import { runPythonCode } from './tools/python';
 import { runSmokeTests, buildQuickChecks, printSmokeReport } from './tools/smoke';
 import { takeScreenshot } from './tools/browser';
 import { screenshotAndAnalyze } from './tools/vision';
+import { doctor } from './commands/doctor';
+import { initCommand } from './commands/init';
 
 export class DehaCLI {
   private program: Command;
@@ -61,7 +63,7 @@ export class DehaCLI {
       .option('--judge-url <u>',        'Judge custom API URL')
       .option('--planner-url <u>',      'Planner custom API URL')
       .option('--coder-url <u>',        'Coder custom API URL')
-      .option('--iterations <n>',       'Max iterasyon sayısı', '3')
+      .option('--iterations <n>',       'Max iterasyon sayısı', '200')
       .action(async (task: string, opts) => {
         const config = this.buildConfig();
 
@@ -236,6 +238,22 @@ export class DehaCLI {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { printStats } = require('./services/usage-tracker');
         printStats();
+      });
+
+    // ── deha init ─────────────────────────────────────────────────────────
+    this.program
+      .command('init')
+      .description('Proje başlatma: .env, API keys, MCP, Playwright kurulumu')
+      .action(async () => {
+        await initCommand();
+      });
+
+    // ── deha doctor ──────────────────────────────────────────────────────
+    this.program
+      .command('doctor')
+      .description('Sistem tanılaması: bağımlılık, config ve ortam kontrolleri')
+      .action(async () => {
+        await doctor();
       });
 
     // ── deha (default: interaktif mod) ────────────────────────────────────

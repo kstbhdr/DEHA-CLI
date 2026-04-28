@@ -4,8 +4,6 @@ import { Message, OAIMessage, sendWithTools, sendWithToolsOpenAICompat } from '.
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
 
-const MAX_TOOL_ROUNDS = 10;
-
 export async function runAgent(
   userMessage: string,
   config: DehaConfig,
@@ -27,6 +25,8 @@ export async function runAgent(
   return runAgentOpenAI(userMessage, config, history, allTools);
 }
 
+const MAX_TOOL_ROUNDS = 10; // default fallback, config'den override edilir
+
 // ─── Claude agent döngüsü ────────────────────────────────────────────────────
 
 async function runAgentClaude(
@@ -36,10 +36,11 @@ async function runAgentClaude(
   allTools: typeof DEHA_TOOLS,
 ): Promise<string> {
   const messages: Message[] = [...history, { role: 'user', content: userMessage }];
+  const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
   let round = 0;
   let finalText = '';
 
-  while (round < MAX_TOOL_ROUNDS) {
+  while (round < maxRounds) {
     round++;
     console.log('\n' + chalk.bold.cyan('DEHA:'));
 
@@ -87,10 +88,11 @@ async function runAgentOpenAI(
     { role: 'user', content: userMessage },
   ];
 
+  const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
   let round = 0;
   let finalText = '';
 
-  while (round < MAX_TOOL_ROUNDS) {
+  while (round < maxRounds) {
     round++;
     console.log('\n' + chalk.bold.cyan('DEHA:'));
 

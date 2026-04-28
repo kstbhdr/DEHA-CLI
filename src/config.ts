@@ -1,3 +1,5 @@
+import { CHAT_PROMPT } from './prompts.config';
+
 export type Provider =
   | 'claude'
   | 'openai'
@@ -79,6 +81,9 @@ export interface DehaConfig {
   agentInputPrice: number;
   agentOutputPrice: number;
 
+  // Agent
+  maxToolRounds: number;
+
   // Genel
   systemPrompt: string;
   maxTokens: number;
@@ -139,6 +144,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
       return CHAT_PROMPT as string;
     })(),
 
+    maxToolRounds: parseInt(process.env.DEHA_MAX_TOOL_ROUNDS || '10', 10),
+
     maxTokens:   parseInt(process.env.DEHA_MAX_TOKENS   || '4096', 10),
     temperature: parseFloat(process.env.DEHA_TEMPERATURE || '0.7'),
 
@@ -170,7 +177,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         temperature:        parseFloat(process.env.JUDGE_TEMPERATURE || '0.1'),
         openrouterProvider: process.env.JUDGE_OPENROUTER_PROVIDER || undefined,
       },
-      maxIterations: parseInt(process.env.PIPELINE_MAX_ITERATIONS || '3', 10),
+      maxIterations: parseInt(process.env.PIPELINE_MAX_ITERATIONS || '200', 10),
     },
   };
 

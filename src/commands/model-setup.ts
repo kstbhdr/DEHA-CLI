@@ -335,13 +335,11 @@ function applyToConfig(
   if (judge.maxTokens)   config.pipeline.judge.maxTokens   = judge.maxTokens;
   if (judge.temperature !== undefined) config.pipeline.judge.temperature = judge.temperature;
 
-  // Vision (stored on config for this session)
-  (config as DehaConfig & { _vision?: { provider: string; model: string; apiKey?: string; apiUrl?: string } })._vision = {
-    provider: vision.provider,
-    model:    vision.model,
-    apiKey:   vision.apiKey || undefined,
-    apiUrl:   vision.apiUrl || undefined,
-  };
+  // Vision — config'deki vision alanlarına yaz
+  config.visionProvider = vision.provider;
+  config.visionModel    = vision.model;
+  if (vision.apiKey) config.visionApiKey = vision.apiKey;
+  if (vision.apiUrl) config.visionApiUrl = vision.apiUrl;
 
   // Pipeline
   config.pipeline.maxIterations = pipeline.maxIterations;

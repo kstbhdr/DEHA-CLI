@@ -325,14 +325,3 @@ function resolveAtFiles(message: string): string {
   });
 }
 
-/** Streaming sırasında kod bloğu header'larını renklendirir */
-let _codeBlockOpen = false;
-function formatChunkLive(chunk: string): string {
-  // Basit live renklendirme: kod bloğu içindeyken cyan, değilse default
-  let out = '';
-  for (const ch of chunk) {
-    if (chunk.includes('```')) _codeBlockOpen = !_codeBlockOpen;
-    out += _codeBlockOpen ? chalk.cyan(ch) : ch;
-  }
-  return out;
-}

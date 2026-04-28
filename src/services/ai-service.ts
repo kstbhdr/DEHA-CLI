@@ -2,6 +2,7 @@ import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
 import { DehaConfig, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
+import { getCached, setCache } from './cache';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -77,8 +78,15 @@ function roleFromConfig(config: DehaConfig): RoleConfig {
   };
 }
 
-export async function sendMessage(messages: Message[], config: DehaConfig): Promise<string> {
-  return callRole(roleFromConfig(config), config, messages, config.systemPrompt);
+export async function sendMessage(messages: Message[], config: DehaConfig, useCache = false): Promise<string> {
+  const model = roleFromConfig(config).model;
+  if (useCache) {
+    const cached = getCached(config.systemPrompt, messages, model);
+    if (cached !== null) return cached;
+  }
+  const result = await callRole(roleFromConfig(config), config, messages, config.systemPrompt);
+  if (useCache) setCache(config.systemPrompt, messages, model, result);
+  return result;
 }
 
 export async function streamMessage(

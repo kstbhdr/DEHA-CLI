@@ -19,36 +19,50 @@ export interface CrawlResult {
 // ─── DuckDuckGo Search ───────────────────────────────────────────────────────
 
 /** DuckDuckGo Lite search via native https (axios triggers bot detection) */
-function ddgLiteFetch(query: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const body = `q=${encodeURIComponent(query)}&kl=wt-wt`;
-    const options: https.RequestOptions = {
-      hostname: 'lite.duckduckgo.com',
-      path: '/lite/',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': Buffer.byteLength(body),
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://lite.duckduckgo.com/',
-        'Origin': 'https://lite.duckduckgo.com',
-      },
-    };
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-      res.on('end', () => {
-        if (res.statusCode !== 200) reject(new Error(`DDG returned ${res.statusCode}`));
-        else resolve(data);
+async function ddgLiteFetch(query: string): Promise<string> {
+  // Try primary endpoint first, fallback to HTML version
+  const endpoints = [
+    { hostname: 'lite.duckduckgo.com', path: '/lite/', method: 'POST' as const, makeBody: (q: string) => `q=${encodeURIComponent(q)}&kl=wt-wt` },
+    { hostname: 'html.duckduckgo.com', path: '/html/', method: 'POST' as const, makeBody: (q: string) => `q=${encodeURIComponent(q)}` },
+  ];
+
+  for (const ep of endpoints) {
+    try {
+      const result = await new Promise<string>((resolve, reject) => {
+        const body = ep.makeBody(query);
+        const options: https.RequestOptions = {
+          hostname: ep.hostname,
+          path: ep.path,
+          method: ep.method,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Length': Buffer.byteLength(body),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': `https://${ep.hostname}/`,
+            'Origin': `https://${ep.hostname}`,
+          },
+        };
+        const req = https.request(options, (res) => {
+          let data = '';
+          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+          res.on('end', () => {
+            if (res.statusCode !== 200) reject(new Error(`${ep.hostname} returned ${res.statusCode}`));
+            else resolve(data);
+          });
+        });
+        req.setTimeout(15000, () => { req.destroy(); reject(new Error(`${ep.hostname} timeout`)); });
+        req.on('error', reject);
+        req.write(body);
+        req.end();
       });
-    });
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error('DDG timeout')); });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
+      return result;
+    } catch {
+      continue; // try next endpoint
+    }
+  }
+  throw new Error('All DuckDuckGo endpoints failed');
 }
 
 export async function duckDuckGoSearch(
