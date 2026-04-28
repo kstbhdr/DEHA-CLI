@@ -1,4 +1,5 @@
 import axios from 'axios';
+import * as https from 'https';
 import * as cheerio from 'cheerio';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -17,42 +18,58 @@ export interface CrawlResult {
 
 // ─── DuckDuckGo Search ───────────────────────────────────────────────────────
 
+/** DuckDuckGo Lite search via native https (axios triggers bot detection) */
+function ddgLiteFetch(query: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const body = `q=${encodeURIComponent(query)}&kl=wt-wt`;
+    const options: https.RequestOptions = {
+      hostname: 'lite.duckduckgo.com',
+      path: '/lite/',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(body),
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://lite.duckduckgo.com/',
+        'Origin': 'https://lite.duckduckgo.com',
+      },
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+      res.on('end', () => {
+        if (res.statusCode !== 200) reject(new Error(`DDG returned ${res.statusCode}`));
+        else resolve(data);
+      });
+    });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('DDG timeout')); });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 export async function duckDuckGoSearch(
   query: string,
   maxResults = 8,
 ): Promise<SearchResult[]> {
-  // DuckDuckGo HTML endpoint — no API key needed
-  const res = await axios.get('https://html.duckduckgo.com/html/', {
-    params: { q: query },
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-    timeout: 15000,
-  });
-
-  const $ = cheerio.load(res.data);
+  const html = await ddgLiteFetch(query);
+  const $ = cheerio.load(html);
   const results: SearchResult[] = [];
 
-  $('.result__body').each((_, el) => {
+  // DDG Lite structure: result links are plain <a href="https://..."> tags
+  // Snippet is in the next <tr>'s last <td>
+  $('a').each((_, el) => {
     if (results.length >= maxResults) return false;
-
-    const titleEl = $(el).find('.result__title a');
-    const snippetEl = $(el).find('.result__snippet');
-
-    const title = titleEl.text().trim();
-    let url = titleEl.attr('href') ?? '';
-    const snippet = snippetEl.text().trim();
-
-    // DuckDuckGo wraps links — extract real URL from uddg param
-    if (url.startsWith('//duckduckgo.com/l/')) {
-      try {
-        const parsed = new URL('https:' + url);
-        url = decodeURIComponent(parsed.searchParams.get('uddg') ?? url);
-      } catch { /* keep original */ }
-    }
-
-    if (title && url) results.push({ title, url, snippet });
+    const href = $(el).attr('href') ?? '';
+    if (!href.startsWith('http') || href.includes('duckduckgo.com')) return;
+    const title = $(el).text().trim();
+    const row = $(el).closest('tr');
+    const nextRow = row.next('tr');
+    const snippet = nextRow.find('td').last().text().trim();
+    if (title && href) results.push({ title, url: href, snippet });
   });
 
   return results;
