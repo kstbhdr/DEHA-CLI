@@ -19,6 +19,17 @@ import { screenshotAndAnalyze } from '../tools/vision';
 import { modelSetup } from './model-setup';
 import { printStats } from '../services/usage-tracker';
 import { detectIntent, enrichWithSearch } from '../services/intent';
+import {
+  loadSession,
+  appendMessage,
+  buildContextMessages,
+  detectWorkDir,
+  setWorkDir,
+  getWorkDir,
+  summarizeOld,
+  flushOnExit,
+  getSessionStats,
+} from '../services/session-memory';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
@@ -60,6 +71,9 @@ export async function interactive(config: DehaConfig): Promise<void> {
   );
   console.log(chalk.dim('Çıkmak için /exit  •  Yardım için /help\n'));
 
+  // Session memory yükle (önceki oturumdan kalan varsa)
+  await loadSession();
+
   // MCP sunucularına bağlan (arka planda, hata sessiz geç)
   mcpManager.connectAll(true).catch(() => {});
 
@@ -72,6 +86,7 @@ export async function interactive(config: DehaConfig): Promise<void> {
     terminal: true,
   });
 
+  // Geriye dönük uyumluluk için boş history (session-memory bunu yönetiyor artık)
   const history: Message[] = [];
 
   const prompt = () => {
@@ -239,7 +254,14 @@ export async function interactive(config: DehaConfig): Promise<void> {
       // ── @dosya.ts sözdizimi ───────────────────────────────────────────────
       const userMessage = resolveAtFiles(trimmed);
 
-      // ── Chat (araç çağrısı destekli) ─────────────────────────────────────
+      // ── WorkDir tespiti — kullanıcı dizin verdi mi? ───────────────────────
+      const detectedDir = detectWorkDir(trimmed);
+      if (detectedDir) {
+        setWorkDir(detectedDir);
+        console.log(chalk.dim(`  📁 Çalışma dizini: ${detectedDir}\n`));
+      }
+
+      // ── Chat (araç çağrısı destekli, session-memory ile) ─────────────────
       try {
         // Intent detection — web search gerekiyor mu?
         let enrichedMessage = userMessage;
@@ -250,11 +272,29 @@ export async function interactive(config: DehaConfig): Promise<void> {
           console.log(chalk.green('✓'));
         }
 
-        const fullResponse = await runAgent(enrichedMessage, config, history);
+        // Session memory'den bağlamı al (özet + son 5 mesaj)
+        const contextHistory = buildContextMessages();
 
-        history.push({ role: 'user', content: userMessage }); // orijinal mesaj kaydedilir
+        const fullResponse = await runAgent(enrichedMessage, config, contextHistory);
+
+        // Her iki kaynağa da kaydet
+        await appendMessage({ role: 'user', content: userMessage });
+        await appendMessage({ role: 'assistant', content: fullResponse });
+
+        // Geriye dönük uyumluluk için history array'ini de güncelle
+        history.push({ role: 'user', content: userMessage });
         history.push({ role: 'assistant', content: fullResponse });
-        if (history.length > 20) history.splice(0, 2);
+        if (history.length > 40) history.splice(0, 2);
+
+        // Eski mesajları özetle (arka planda, context büyüdüğünde)
+        const stats = getSessionStats();
+        if (stats.messages > 15 && stats.messages % 10 === 0) {
+          summarizeOld(async (msgs) => {
+            const { sendMessage } = await import('../services/ai-service');
+            const summaryPrompt = `Summarize this conversation in 3-5 sentences. Focus on: what the user asked, what was done/found, current working directory and project state. Be concise.\n\n${msgs.map(m => `${m.role}: ${m.content.slice(0, 200)}`).join('\n')}`;
+            return sendMessage([{ role: 'user', content: summaryPrompt }], config);
+          }).catch(() => {});
+        }
 
         console.log(chalk.dim('─'.repeat(50)) + '\n');
       } catch (err: unknown) {
@@ -271,18 +311,28 @@ export async function interactive(config: DehaConfig): Promise<void> {
     process.exit(0);
   });
 
+  // Beklenmedik kapanmada da flush et
+  process.once('SIGTERM', async () => {
+    await flushOnExit().catch(() => {});
+    process.exit(0);
+  });
+
   prompt();
 }
 
 // ─── Yardımcılar ───────────────────────────────────────────────────────────
 
 async function exitCleanup(history: Message[], config: DehaConfig): Promise<void> {
+  // Session memory'yi cold storage'a flush et (Redis → dosya)
+  process.stdout.write(chalk.dim('\n  💾 Sohbet kaydediliyor...'));
+  await flushOnExit().catch(() => {});
+  console.log(chalk.green(' ✓'));
+
+  // Geriye dönük uyumluluk: eski conversation manager'a da kaydet
   if (history.length >= 2) {
-    const filePath = saveConversation(history, config.provider, getActiveModel(config));
-    if (filePath) {
-      console.log(chalk.dim(`\n💾 Sohbet kaydedildi → ${filePath}`));
-    }
+    saveConversation(history, config.provider, getActiveModel(config));
   }
+
   await mcpManager.disconnectAll().catch(() => {});
   console.log(chalk.dim('Görüşürüz! 👋\n'));
 }

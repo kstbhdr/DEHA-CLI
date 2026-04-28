@@ -3,6 +3,19 @@ import { DehaConfig } from '../config';
 import { Message, OAIMessage, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
+import { getWorkDir } from '../services/session-memory';
+
+/** WorkDir bilgisini config'e system prompt olarak enjekte et */
+function injectWorkDir(config: DehaConfig): DehaConfig {
+  const workDir = getWorkDir();
+  const workDirNote = workDir
+    ? `\n\n## ACTIVE WORKING DIRECTORY\nYou are working inside: ${workDir}\nALWAYS use this directory as the base for ALL file operations (read_file, list_dir, search_in_files, write_file, run_shell). NEVER look outside this directory unless explicitly told to.`
+    : '';
+  return {
+    ...config,
+    systemPrompt: config.systemPrompt + workDirNote,
+  };
+}
 
 export async function runAgent(
   userMessage: string,
@@ -16,13 +29,16 @@ export async function runAgent(
     console.log(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
   }
 
+  // WorkDir'i system prompt'a enjekte et
+  const enrichedConfig = injectWorkDir(config);
+
   // Claude → native tool calling
   if (config.provider === 'claude') {
-    return runAgentClaude(userMessage, config, history, allTools);
+    return runAgentClaude(userMessage, enrichedConfig, history, allTools);
   }
 
   // OpenAI-uyumlu providerlar (DeepSeek, OpenAI, OpenRouter, xAI, custom)
-  return runAgentOpenAI(userMessage, config, history, allTools);
+  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools);
 }
 
 const MAX_TOOL_ROUNDS = 10; // default fallback, config'den override edilir
