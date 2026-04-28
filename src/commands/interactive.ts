@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
 import { DehaConfig, getProviderLabel } from '../config';
-import { Message, streamMessage } from '../services/ai-service';
+import { Message } from '../services/ai-service';
 import { formatResponse } from './chat';
 import { runAgent } from './agent';
 import { mcpManager } from '../mcp/manager';
@@ -239,7 +239,7 @@ export async function interactive(config: DehaConfig): Promise<void> {
       // ── @dosya.ts sözdizimi ───────────────────────────────────────────────
       const userMessage = resolveAtFiles(trimmed);
 
-      // ── Normal streaming chat ─────────────────────────────────────────────
+      // ── Chat (araç çağrısı destekli) ─────────────────────────────────────
       try {
         // Intent detection — web search gerekiyor mu?
         let enrichedMessage = userMessage;
@@ -250,16 +250,7 @@ export async function interactive(config: DehaConfig): Promise<void> {
           console.log(chalk.green('✓'));
         }
 
-        const messages: Message[] = [...history, { role: 'user', content: enrichedMessage }];
-
-        console.log('\n' + chalk.bold.cyan('DEHA:'));
-
-        let fullResponse = '';
-        await streamMessage(messages, config, (chunk) => {
-          process.stdout.write(formatChunkLive(chunk));
-          fullResponse += chunk;
-        });
-        process.stdout.write('\n');
+        const fullResponse = await runAgent(enrichedMessage, config, history);
 
         history.push({ role: 'user', content: userMessage }); // orijinal mesaj kaydedilir
         history.push({ role: 'assistant', content: fullResponse });
