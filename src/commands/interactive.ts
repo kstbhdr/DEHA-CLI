@@ -20,15 +20,14 @@ import { modelSetup } from './model-setup';
 import { printStats } from '../services/usage-tracker';
 import { detectIntent, enrichWithSearch } from '../services/intent';
 import {
-  loadSession,
-  appendMessage,
-  buildContextMessages,
+  addMessage,
+  getContext,
+  closeMemory,
+  getMemoryStatus,
+} from '../services/memory';
+import {
   detectWorkDir,
   setWorkDir,
-  getWorkDir,
-  summarizeOld,
-  flushOnExit,
-  getSessionStats,
 } from '../services/session-memory';
 
 const BANNER = `
@@ -71,8 +70,13 @@ export async function interactive(config: DehaConfig): Promise<void> {
   );
   console.log(chalk.dim('Çıkmak için /exit  •  Yardım için /help\n'));
 
-  // Session memory yükle (önceki oturumdan kalan varsa)
-  await loadSession();
+  // Memory bağlantı durumunu arka planda kontrol et (sessiz)
+  getMemoryStatus().then(s => {
+    const parts: string[] = [];
+    if (s.redis) parts.push('Redis ✓');
+    if (s.chromadb) parts.push('ChromaDB ✓');
+    if (parts.length) console.log(chalk.dim(`  Memory: ${parts.join('  ')}\n`));
+  }).catch(() => {});
 
   // MCP sunucularına bağlan (arka planda, hata sessiz geç)
   mcpManager.connectAll(true).catch(() => {});
@@ -272,29 +276,18 @@ export async function interactive(config: DehaConfig): Promise<void> {
           console.log(chalk.green('✓'));
         }
 
-        // Session memory'den bağlamı al (özet + son 5 mesaj)
-        const contextHistory = buildContextMessages();
+        // Bağlamı oluştur: son 5 mesaj + Redis'ten semantic olarak alakalı eskiler
+        const contextHistory = await getContext(enrichedMessage, history);
 
         const fullResponse = await runAgent(enrichedMessage, config, contextHistory);
 
-        // Her iki kaynağa da kaydet
-        await appendMessage({ role: 'user', content: userMessage });
-        await appendMessage({ role: 'assistant', content: fullResponse });
-
-        // Geriye dönük uyumluluk için history array'ini de güncelle
+        // history array'ine ekle (son 5 için ihtiyacımız var)
         history.push({ role: 'user', content: userMessage });
         history.push({ role: 'assistant', content: fullResponse });
-        if (history.length > 40) history.splice(0, 2);
 
-        // Eski mesajları özetle (arka planda, context büyüdüğünde)
-        const stats = getSessionStats();
-        if (stats.messages > 15 && stats.messages % 10 === 0) {
-          summarizeOld(async (msgs) => {
-            const { sendMessage } = await import('../services/ai-service');
-            const summaryPrompt = `Summarize this conversation in 3-5 sentences. Focus on: what the user asked, what was done/found, current working directory and project state. Be concise.\n\n${msgs.map(m => `${m.role}: ${m.content.slice(0, 200)}`).join('\n')}`;
-            return sendMessage([{ role: 'user', content: summaryPrompt }], config);
-          }).catch(() => {});
-        }
+        // Redis'e kaydet + ChromaDB'ye arka planda yaz (non-blocking)
+        addMessage({ role: 'user', content: userMessage }).catch(() => {});
+        addMessage({ role: 'assistant', content: fullResponse }).catch(() => {});
 
         console.log(chalk.dim('─'.repeat(50)) + '\n');
       } catch (err: unknown) {
@@ -311,9 +304,8 @@ export async function interactive(config: DehaConfig): Promise<void> {
     process.exit(0);
   });
 
-  // Beklenmedik kapanmada da flush et
   process.once('SIGTERM', async () => {
-    await flushOnExit().catch(() => {});
+    await closeMemory().catch(() => {});
     process.exit(0);
   });
 
@@ -323,10 +315,7 @@ export async function interactive(config: DehaConfig): Promise<void> {
 // ─── Yardımcılar ───────────────────────────────────────────────────────────
 
 async function exitCleanup(history: Message[], config: DehaConfig): Promise<void> {
-  // Session memory'yi cold storage'a flush et (Redis → dosya)
-  process.stdout.write(chalk.dim('\n  💾 Sohbet kaydediliyor...'));
-  await flushOnExit().catch(() => {});
-  console.log(chalk.green(' ✓'));
+  await closeMemory().catch(() => {});
 
   // Geriye dönük uyumluluk: eski conversation manager'a da kaydet
   if (history.length >= 2) {
