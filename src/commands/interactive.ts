@@ -23,12 +23,12 @@ import {
   addMessage,
   getContext,
   closeMemory,
-  getMemoryStatus,
 } from '../services/memory';
 import {
   detectWorkDir,
   setWorkDir,
 } from '../services/session-memory';
+import { startServices, stopServices } from '../services/process-manager';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
@@ -70,12 +70,12 @@ export async function interactive(config: DehaConfig): Promise<void> {
   );
   console.log(chalk.dim('Çıkmak için /exit  •  Yardım için /help\n'));
 
-  // Memory bağlantı durumunu arka planda kontrol et (sessiz)
-  getMemoryStatus().then(s => {
+  // Redis + ChromaDB'yi otomatik başlat
+  startServices().then(s => {
     const parts: string[] = [];
-    if (s.redis) parts.push('Redis ✓');
-    if (s.chromadb) parts.push('ChromaDB ✓');
-    if (parts.length) console.log(chalk.dim(`  Memory: ${parts.join('  ')}\n`));
+    if (s.redis !== 'unavailable') parts.push(`Redis ${s.redis === 'started' ? chalk.green('↑') : chalk.dim('✓')}`);
+    if (s.chromadb !== 'unavailable') parts.push(`ChromaDB ${s.chromadb === 'started' ? chalk.green('↑') : chalk.dim('✓')}`);
+    if (parts.length) process.stdout.write(chalk.dim('  ') + parts.join(chalk.dim('  ')) + '\n\n');
   }).catch(() => {});
 
   // MCP sunucularına bağlan (arka planda, hata sessiz geç)
@@ -316,6 +316,7 @@ export async function interactive(config: DehaConfig): Promise<void> {
 
 async function exitCleanup(history: Message[], config: DehaConfig): Promise<void> {
   await closeMemory().catch(() => {});
+  stopServices();
 
   // Geriye dönük uyumluluk: eski conversation manager'a da kaydet
   if (history.length >= 2) {
