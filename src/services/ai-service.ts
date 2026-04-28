@@ -89,19 +89,34 @@ export async function streamMessage(
   return callRole(roleFromConfig(config), config, messages, config.systemPrompt, onChunk);
 }
 
-// ─── Tool Calling (Claude native, pipeline içinde kullanılmaz ama agent modunda var) ──
+// ─── Tool Calling ────────────────────────────────────────────────────────────
 
+export type ToolCall = { name: string; input: Record<string, unknown>; id: string };
+export type ToolResult = { id: string; content: string };
+
+/** Anthropic (input_schema) → OpenAI (parameters) format dönüşümü */
+function toOpenAITools(tools: ToolDefinition[]): Record<string, unknown>[] {
+  return tools.map((t) => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: (t as unknown as { input_schema: Record<string, unknown> }).input_schema,
+    },
+  }));
+}
+
+/** Claude native tool calling */
 export async function sendWithTools(
   messages: Message[],
   config: DehaConfig,
   tools: ToolDefinition[],
   onChunk?: (chunk: string) => void,
-): Promise<{ text: string; toolCalls: Array<{ name: string; input: Record<string, unknown>; id: string }> }> {
+): Promise<{ text: string; toolCalls: ToolCall[] }> {
   if (config.provider !== 'claude') {
-    const text = onChunk
-      ? await streamMessage(messages, config, onChunk)
-      : await sendMessage(messages, config);
-    return { text, toolCalls: [] };
+    const oaiMessages: OAIMessage[] = messages.map((m) => ({ role: m.role, content: m.content }));
+    const r = await sendWithToolsOpenAICompat(oaiMessages, config, tools, onChunk);
+    return { text: r.text, toolCalls: r.toolCalls };
   }
 
   const apiKey = config.anthropicApiKey;
@@ -117,7 +132,7 @@ export async function sendWithTools(
   });
 
   let text = '';
-  const toolCalls: Array<{ name: string; input: Record<string, unknown>; id: string }> = [];
+  const toolCalls: ToolCall[] = [];
 
   for (const block of response.content) {
     if (block.type === 'text') {
@@ -130,6 +145,55 @@ export async function sendWithTools(
 
   return { text, toolCalls };
 }
+
+// OpenAI raw mesaj tipi — tool call/result için genişletilmiş
+export type OAIMessage = Record<string, unknown>;
+
+/** OpenAI-uyumlu tool calling (DeepSeek, OpenAI, OpenRouter, xAI) */
+export async function sendWithToolsOpenAICompat(
+  messages: OAIMessage[],
+  config: DehaConfig,
+  tools: ToolDefinition[],
+  onChunk?: (chunk: string) => void,
+): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage }> {
+  const role = roleFromConfig(config);
+  const apiKey = resolveApiKey(role, config);
+  const apiUrl = resolveApiUrl(role, config);
+  if (!apiKey) throw new Error(`API key missing (${apiUrl})`);
+
+  const body: Record<string, unknown> = {
+    model: role.model,
+    messages,
+    tools: toOpenAITools(tools),
+    tool_choice: 'auto',
+    max_tokens: config.maxTokens,
+    temperature: config.temperature,
+  };
+
+  if (config.openrouterProvider) {
+    body.provider = { only: [config.openrouterProvider], allow_fallbacks: false };
+  }
+
+  const response = await axios.post(`${apiUrl}/chat/completions`, body, {
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    timeout: 120000,
+  });
+
+  const msg = response.data.choices[0].message as OAIMessage;
+
+  const text: string = (msg.content as string) ?? '';
+  if (text && onChunk) onChunk(text);
+
+  const toolCalls: ToolCall[] = ((msg.tool_calls as Record<string, unknown>[]) ?? []).map((tc) => {
+    const fn = tc.function as { name: string; arguments: string };
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(fn.arguments); } catch { /* ignore */ }
+    return { name: fn.name, input, id: tc.id as string };
+  });
+
+  return { text, toolCalls, rawAssistantMsg: msg };
+}
+
 
 // ─── Claude implementasyonu ─────────────────────────────────────────────────
 
