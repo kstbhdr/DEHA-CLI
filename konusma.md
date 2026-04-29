@@ -333,3 +333,38 @@ Kullanıcı panoya kopyaladığı kod bloklarını veya birden fazla satırlık 
 ## 3. Sonuç
 Kullanıcı artık DEHA-CLI'a sorunsuz bir şekilde kopyala/yapıştır yapabilir. Kopyalanan yüzlerce satırlık veri bile tek parça halinde eksiksiz alınır.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #5
+
+**Tarih:** 2026-04-29  
+**Kapsam:** `/exit` sonrası yeniden girişte son mesajların ekranda gösterilmesi
+
+---
+
+## 1. Sorun Tanımı
+DEHA arka planda konuşma geçmişini (`warm-session.json` veya Redis üzerinden) hatırlıyor olsa da, kullanıcı `/exit` yapıp tekrar `deha` komutuyla girdiğinde terminal boş açılıyordu. Kullanıcı nerede kaldığını görmek için en azından son mesajları görmek istedi.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 `src/services/session-memory.ts`
+- Yüklenen oturum geçmişini okuyabilmek için `getSessionMessages()` fonksiyonu dışa aktarıldı.
+
+### 2.2 `src/commands/interactive.ts`
+- **Senkronizasyon:** `loadSession()` fonksiyonu `await` ile bekletilerek belleğin terminal açılmadan hemen önce tam olarak yüklenmesi garanti altına alındı.
+- **Ekrana Yazdırma:** Terminal açılışında, eğer oturum bellekten başarıyla yüklendiyse (ve komut satırından yeni bir history verilmediyse), `getSessionMessages()` ile geçmiş çekildi.
+- **Son 5 Mesaj:** Geçmişteki mesajların sadece son 5 tanesi seçildi. Çok uzun metinler ekranda yer kaplamasın diye içerik **100 karakter** ile sınırlandırılıp (`...` eklenerek) formatlı ve renkli bir şekilde ekrana basıldı.
+
+## 3. Sonuç
+Kullanıcı `deha` komutunu çalıştırdığında artık boş bir ekran yerine:
+```text
+  ↩ Önceki oturumdan 12 mesaj yüklendi.
+─── Son Konuşmalar ─────────────────────────────────
+Sen: önceki koda bunu ekler misin...
+DEHA: Tabi, ekledim...
+────────────────────────────────────────────────────
+```
+gibi temiz bir özet görecek ve nerede kaldığını anında hatırlayacaktır.
+
+
