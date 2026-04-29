@@ -16,6 +16,7 @@ import { screenshotAndAnalyze } from './tools/vision';
 import { doctor } from './commands/doctor';
 import { initCommand } from './commands/init';
 import { runSystemTest } from './commands/test-runner';
+import { loadConversationMessages } from './conversations/manager';
 
 export class DehaCLI {
   private program: Command;
@@ -247,6 +248,20 @@ export class DehaCLI {
       .description('Proje başlatma: .env, API keys, MCP, Playwright kurulumu')
       .action(async () => {
         await initCommand();
+      });
+
+    // ── deha resume <id> ──────────────────────────────────────────────────
+    this.program
+      .command('resume <id>')
+      .description('Önceki bir sohbeti ID ile devam ettir')
+      .action(async (id: string) => {
+        const config = this.buildConfig();
+        const messages = loadConversationMessages(id);
+        if (!messages) {
+          console.error(chalk.red(`✗ Sohbet bulunamadı: ${id}`));
+          process.exit(1);
+        }
+        await interactive(config, messages);
       });
 
     // ── deha test ─────────────────────────────────────────────────────────

@@ -64,7 +64,7 @@ ${chalk.bold('MCP kısayolları:')}
   /mcp install filesystem   → dosya sistemi sunucusunu kur
 `;
 
-export async function interactive(config: DehaConfig): Promise<void> {
+export async function interactive(config: DehaConfig, initialHistory: Message[] = []): Promise<void> {
   console.log(BANNER);
   console.log(
     chalk.dim('Provider: ') + chalk.green(getProviderLabel(config.provider)) +
@@ -93,7 +93,10 @@ export async function interactive(config: DehaConfig): Promise<void> {
   });
 
   // Geriye dönük uyumluluk için boş history (session-memory bunu yönetiyor artık)
-  const history: Message[] = [];
+  const history: Message[] = [...initialHistory];
+  if (initialHistory.length > 0) {
+    console.log(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
+  }
 
   const prompt = () => {
     rl.question(chalk.bold.cyan('DEHA ❯ '), async (input) => {
@@ -330,13 +333,21 @@ async function exitCleanup(history: Message[], config: DehaConfig): Promise<void
   await closeMemory().catch(() => {});
   stopServices();
 
-  // Geriye dönük uyumluluk: eski conversation manager'a da kaydet
+  let sessionId: string | null = null;
   if (history.length >= 2) {
-    saveConversation(history, config.provider, getActiveModel(config));
+    const filePath = saveConversation(history, config.provider, getActiveModel(config));
+    if (filePath) {
+      sessionId = path.basename(filePath, '.md');
+    }
   }
 
   await mcpManager.disconnectAll().catch(() => {});
-  console.log(chalk.dim('Görüşürüz! 👋\n'));
+  console.log(chalk.dim('Görüşürüz! 👋'));
+  if (sessionId) {
+    console.log(chalk.dim('To continue this session, run: ') + chalk.cyan(`deha resume ${sessionId}`) + '\n');
+  } else {
+    console.log();
+  }
 }
 
 function getActiveModel(config: DehaConfig): string {

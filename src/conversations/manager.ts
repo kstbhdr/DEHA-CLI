@@ -68,6 +68,29 @@ export function readConversation(id: string): string | null {
   return fs.readFileSync(filePath, 'utf-8');
 }
 
+export function loadConversationMessages(id: string): Message[] | null {
+  const raw = readConversation(id);
+  if (!raw) return null;
+
+  const messages: Message[] = [];
+  // Split on role headers
+  const parts = raw.split(/^## (?:🧑 Kullanıcı|🤖 DEHA)\s*$/m);
+
+  // Determine role order by scanning headers in order
+  const headerMatches = [...raw.matchAll(/^## (🧑 Kullanıcı|🤖 DEHA)\s*$/gm)];
+
+  for (let i = 0; i < headerMatches.length; i++) {
+    const header = headerMatches[i][1];
+    const role = header === '🧑 Kullanıcı' ? 'user' : 'assistant';
+    const content = (parts[i + 1] || '')
+      .replace(/\n---\s*$/, '') // trailing separator
+      .trim();
+    if (content) messages.push({ role, content });
+  }
+
+  return messages.length > 0 ? messages : null;
+}
+
 export function searchConversations(query: string): ConversationMeta[] {
   const dir = getConvDir();
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
