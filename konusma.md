@@ -304,3 +304,32 @@ Kullanıcı, DEHA'nın uzun bir cevap üretirken veya yanlış bir yönde ilerle
 - Değiştirilen 3 dosya SCP ile VPS'e yüklendi.
 - VPS'te `npx tsc` ile yeniden derleme yapıldı (Hata yok, Build başarılı).
 - Özellik anında kullanıma hazır hale getirildi.
+
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #4
+
+**Tarih:** 2026-04-29  
+**Kapsam:** Çoklu Satır (Multi-line) ve Hızlı Yapıştırma (Paste) Desteği
+
+---
+
+## 1. Sorun Tanımı
+Kullanıcı panoya kopyaladığı kod bloklarını veya birden fazla satırlık metinleri terminale yapıştırdığında (paste), Node.js'in standart `readline.question` mekanizması yalnızca ilk satırı okuyup anında modele gönderiyordu (Enter/newline yüzünden). Bu da kodun geri kalanının dışarıda kalmasına veya art arda hatalı komutların tetiklenmesine yol açıyordu.
+
+## 2. Yapılan Çözüm
+
+### 2.1 `src/commands/interactive.ts`
+- **Değişiklik:** `rl.question` yapısı tamamen kaldırılarak, `Promise` tabanlı özel bir `rl.on('line')` dinleyicisi yazıldı.
+- **50ms Debounce (Hızlı Paste Tespiti):**
+  - Terminale dışarıdan toplu bir metin yapıştırıldığında, satırlar sisteme 1-2 milisaniye arayla akar.
+  - Yeni sistemde gelen her satırdan sonra `50ms` bekleniyor. Eğer o 50ms içinde yeni bir satır daha gelirse (paste), bu satırlar birleştiriliyor (buffer) ve zamanlayıcı sıfırlanıyor.
+  - Veri akışı durduğunda (50ms sessizlik), metnin tamamı tek seferde işleme alınıp modele gönderiliyor.
+- **Ters Eğik Çizgi (`\`) ile Manuel Devamlılık:**
+  - Kullanıcı uzun bir girdiyi kendi eliyle (yazarak) oluşturmak isterse, satır sonuna `\` (backslash) koyup Enter'a basması yeterli.
+  - Sistem bunu gördüğünde işlemi modele göndermez, `... ` şeklinde yeni bir prompt açar ve bir sonraki satırı bekler. (Kodu sonlandıran backslash atılır).
+
+## 3. Sonuç
+Kullanıcı artık DEHA-CLI'a sorunsuz bir şekilde kopyala/yapıştır yapabilir. Kopyalanan yüzlerce satırlık veri bile tek parça halinde eksiksiz alınır.
+

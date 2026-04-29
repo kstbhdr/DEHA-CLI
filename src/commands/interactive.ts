@@ -106,11 +106,39 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
     console.log(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
   }
 
-  const prompt = () => {
-    rl.question(chalk.bold.cyan('DEHA ❯ '), async (input) => {
-      const trimmed = input.trim();
+  const prompt = async () => {
+    const input = await new Promise<string>((resolve) => {
+      let buffer = '';
+      let timeout: NodeJS.Timeout | null = null;
 
-      if (!trimmed) { prompt(); return; }
+      rl.setPrompt(chalk.bold.cyan('DEHA ❯ '));
+      rl.prompt();
+
+      const onLine = (line: string) => {
+        // Satır \ ile bitiyorsa manuel multi-line (alt satıra geç)
+        if (line.endsWith('\\')) {
+          buffer += (buffer ? '\n' : '') + line.slice(0, -1);
+          rl.setPrompt('... ');
+          rl.prompt();
+          return;
+        }
+
+        buffer += (buffer ? '\n' : '') + line;
+        
+        // Hızlı yapıştırma (paste) tespiti için 50ms bekle
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          rl.removeListener('line', onLine);
+          resolve(buffer);
+        }, 50);
+      };
+
+      rl.on('line', onLine);
+    });
+
+    const trimmed = input.trim();
+
+    if (!trimmed) { prompt(); return; }
 
       // ── Dahili komutlar ───────────────────────────────────────────────────
       if (trimmed === '/exit' || trimmed === 'exit' || trimmed === 'quit') {
@@ -389,7 +417,6 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
       }
 
       prompt();
-    });
   };
 
   rl.on('SIGINT', async () => {
