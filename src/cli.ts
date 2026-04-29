@@ -15,6 +15,7 @@ import { takeScreenshot } from './tools/browser';
 import { screenshotAndAnalyze } from './tools/vision';
 import { doctor } from './commands/doctor';
 import { initCommand } from './commands/init';
+import { runSystemTest } from './commands/test-runner';
 
 export class DehaCLI {
   private program: Command;
@@ -246,6 +247,20 @@ export class DehaCLI {
       .description('Proje başlatma: .env, API keys, MCP, Playwright kurulumu')
       .action(async () => {
         await initCommand();
+      });
+
+    // ── deha test ─────────────────────────────────────────────────────────
+    this.program
+      .command('test')
+      .description('API bağlantı ve pipeline entegrasyon testleri')
+      .action(async () => {
+        const config = this.buildConfig();
+        try {
+          await runSystemTest(config);
+        } catch (err: unknown) {
+          console.error(chalk.red('\nTest hatası: ') + (err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
       });
 
     // ── deha doctor ──────────────────────────────────────────────────────

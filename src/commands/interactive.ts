@@ -29,6 +29,7 @@ import {
   setWorkDir,
 } from '../services/session-memory';
 import { startServices, stopServices } from '../services/process-manager';
+import { runSystemTest } from './test-runner';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
@@ -52,6 +53,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/screenshot <url>')}             Ekran görüntüsü al
   ${chalk.cyan('/vision <url>')}                 Screenshot + AI analizi
   ${chalk.cyan('/stats')}                        Token kullanımı ve maliyet istatistikleri
+  ${chalk.cyan('/test')}                         API ve pipeline sistem testi
   ${chalk.cyan('/exit')}                         Çıkış yap
 
 ${chalk.bold('@dosya.ts sözdizimi:')}
@@ -235,6 +237,16 @@ export async function interactive(config: DehaConfig): Promise<void> {
           }
         } catch (err: unknown) {
           console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
+        }
+        prompt(); return;
+      }
+
+      // ── /test ─────────────────────────────────────────────────────────────
+      if (trimmed === '/test') {
+        try {
+          await runSystemTest(config);
+        } catch (err: unknown) {
+          console.error(chalk.red('\n✗ Test hatası: ') + (err instanceof Error ? err.message : String(err)) + '\n');
         }
         prompt(); return;
       }
