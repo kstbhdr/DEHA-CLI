@@ -149,6 +149,10 @@ export function buildContextMessages(pendingUserMessage?: string): Message[] {
   return result;
 }
 
+export function getSessionMessages(): Message[] {
+  return _state.messages;
+}
+
 // ─── WorkDir yönetimi ─────────────────────────────────────────────────────────
 
 export function setWorkDir(dir: string): void {

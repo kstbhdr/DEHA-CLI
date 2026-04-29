@@ -31,6 +31,7 @@ import {
   autoCompress,
   loadSession,
   getContextStats,
+  getSessionMessages,
 } from '../services/session-memory';
 import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
@@ -86,7 +87,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
   }).catch(() => {});
 
   // Session memory'yi yükle (önceki session'dan devam edebilmek için)
-  loadSession().catch(() => {});
+  await loadSession().catch(() => {});
 
   // MCP sunucularına bağlan (arka planda, hata sessiz geç)
   mcpManager.connectAll(true).catch(() => {});
@@ -104,6 +105,23 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
   const history: Message[] = [...initialHistory];
   if (initialHistory.length > 0) {
     console.log(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
+  } else {
+    // Session memory'den gelenleri göster
+    const sessionMsgs = getSessionMessages();
+    if (sessionMsgs.length > 0) {
+      console.log(chalk.dim(`  ↩ Önceki oturumdan ${sessionMsgs.length} mesaj yüklendi.\n`));
+      
+      const last5 = sessionMsgs.slice(-5);
+      console.log(chalk.dim('─── Son Konuşmalar ─────────────────────────────────'));
+      for (const msg of last5) {
+        const role = msg.role === 'user' ? 'Sen' : 'DEHA';
+        const color = msg.role === 'user' ? chalk.green : chalk.cyan;
+        let content = msg.content;
+        if (content.length > 100) content = content.slice(0, 100).replace(/\n/g, ' ') + '...';
+        console.log(color(role + ': ') + chalk.dim(content));
+      }
+      console.log(chalk.dim('────────────────────────────────────────────────────\n'));
+    }
   }
 
   const prompt = async () => {
