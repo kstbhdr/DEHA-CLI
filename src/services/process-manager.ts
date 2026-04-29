@@ -90,8 +90,7 @@ export async function ensureRedis(): Promise<'running' | 'started' | 'unavailabl
 export async function ensureChroma(): Promise<'running' | 'started' | 'unavailable'> {
   if (await isPortOpen(CHROMA_PORT)) return 'running';
 
-  const py = which('python3') ? 'python3' : which('python') ? 'python' : null;
-  if (!py) return 'unavailable';
+  const py = which('python3') ? 'python3' : 'python';
 
   // İlk kullanımda chromadb pip paketi kur (flag dosyası yoksa)
   if (!fs.existsSync(CHROMA_FLAG)) {
@@ -103,7 +102,7 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
       fs.mkdirSync(path.dirname(CHROMA_FLAG), { recursive: true });
       fs.writeFileSync(CHROMA_FLAG, new Date().toISOString());
     } catch {
-      return 'unavailable'; // pip yoksa veya internet yoksa geç
+      return 'unavailable';
     }
   }
 
