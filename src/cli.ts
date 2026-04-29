@@ -92,6 +92,37 @@ export class DehaCLI {
         }
       });
 
+    // ── deha judge <file> <task...> ──────────────────────────────────────────
+    this.program
+      .command('judge <file> <task...>')
+      .description('Sadece Judge rolünü çalıştırarak bir dosyayı değerlendir')
+      .action(async (file: string, taskParts: string[]) => {
+        const config = this.buildConfig();
+        const task = taskParts.join(' ');
+        const fs = await import('fs');
+        if (!fs.existsSync(file)) {
+          console.error(chalk.red(`✗ Dosya bulunamadı: ${file}`));
+          process.exit(1);
+        }
+        const code = fs.readFileSync(file, 'utf-8');
+        try {
+          console.log(chalk.bold(`\n⚖️  JUDGE çalışıyor... [Dosya: ${file}]`));
+          const { runJudge } = await import('./pipeline/judge');
+          const verdict = await runJudge(task, 'Manuel Değerlendirme (No Plan)', code, config, (chunk) => {
+            process.stdout.write(chalk.yellow(chunk));
+          });
+          console.log('\n' + chalk.bold('─'.repeat(40)));
+          if (verdict.pass) {
+            console.log(chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • Skor: ${verdict.score}`));
+          } else {
+            console.log(chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • Skor: ${verdict.score}`));
+          }
+        } catch (err: unknown) {
+          console.error(chalk.red('\nJudge hatası: ') + (err instanceof Error ? err.message : String(err)));
+          process.exit(1);
+        }
+      });
+
     // ── deha setup ────────────────────────────────────────────────────────
     this.program
       .command('setup')

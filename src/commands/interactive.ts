@@ -60,6 +60,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/vision <url>')}                 Screenshot + AI analizi
   ${chalk.cyan('/stats')}                        Token kullanımı ve maliyet istatistikleri
   ${chalk.cyan('/test')}                         API ve pipeline sistem testi
+  ${chalk.cyan('/judge <dosya> <görev>')}   Sadece Judge rolünü çalıştırarak bir dosyayı değerlendir
   ${chalk.cyan('/exit')}                         Çıkış yap
 
 ${chalk.bold('@dosya.ts sözdizimi:')}
@@ -189,6 +190,42 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           }
         }
         rl.resume();
+        prompt(); return;
+      }
+
+      if (trimmed.startsWith('/judge ')) {
+        const parts = trimmed.slice(7).trim().split(/\s+/);
+        const filePath = parts[0];
+        const task = parts.slice(1).join(' ').trim();
+
+        if (!filePath || !task) {
+          console.log(chalk.yellow('ℹ Kullanım: /judge <dosya> <görev>\n'));
+          prompt(); return;
+        }
+
+        if (!fs.existsSync(filePath)) {
+          console.log(chalk.red(`✗ Dosya bulunamadı: ${filePath}\n`));
+          prompt(); return;
+        }
+
+        const code = fs.readFileSync(filePath, 'utf-8');
+        try {
+          console.log(chalk.bold(`\n⚖️  JUDGE çalışıyor... [Dosya: ${filePath}]`));
+          const { runJudge } = await import('../pipeline/judge');
+          const verdict = await runJudge(task, 'Manuel Değerlendirme (No Plan)', code, config, (chunk) => {
+            process.stdout.write(chalk.yellow(chunk));
+          });
+          console.log('\n' + chalk.bold('─'.repeat(40)));
+          if (verdict.pass) {
+            console.log(chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • Skor: ${verdict.score}`));
+          } else {
+            console.log(chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • Skor: ${verdict.score}`));
+          }
+          console.log('\n');
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+        }
         prompt(); return;
       }
 

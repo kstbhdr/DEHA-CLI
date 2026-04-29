@@ -367,4 +367,32 @@ DEHA: Tabi, ekledim...
 ```
 gibi temiz bir özet görecek ve nerede kaldığını anında hatırlayacaktır.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #6
+
+**Tarih:** 2026-04-30  
+**Kapsam:** Bağımsız "Judge" (Yargıç) Çağırma Özelliği
+
+---
+
+## 1. Sorun Tanımı
+Kullanıcı `deha build` ile tüm pipeline'ı (Planner -> Coder -> Judge) otonom olarak çalıştırabiliyor. Ancak bazen kullanıcı zaten yazdığı bir kodu sadece "Judge" (Yargıç) rolüne inceletip puanlatmak isteyebilir.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 `src/cli.ts`
+- **Yeni Komut:** `deha judge <file> <task...>`
+  - Dosya yolunu ve istenen görevi alır.
+  - Bağımsız olarak sadece Judge rolünü çalıştırır.
+
+### 2.2 `src/commands/interactive.ts`
+- **Yeni İnteraktif Komut:** `/judge <dosya> <görev>`
+  - Sohbet ekranından çıkmadan bir dosyayı belirtilen kritere göre test ettirebilirsiniz.
+
+## 3. Sonuç
+Kullanıcılar artık diledikleri zaman sadece `deha judge` veya `/judge` diyerek yazdıkları kodun doğruluğunu veya kalitesini DEHA'ya sorabilir.
+
+
 
