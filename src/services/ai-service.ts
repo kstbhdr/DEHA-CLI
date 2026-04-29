@@ -120,10 +120,11 @@ export async function sendWithTools(
   config: DehaConfig,
   tools: ToolDefinition[],
   onChunk?: (chunk: string) => void,
+  abortSignal?: AbortSignal,
 ): Promise<{ text: string; toolCalls: ToolCall[] }> {
   if (config.provider !== 'claude') {
     const oaiMessages: OAIMessage[] = messages.map((m) => ({ role: m.role, content: m.content }));
-    const r = await sendWithToolsOpenAICompat(oaiMessages, config, tools, onChunk);
+    const r = await sendWithToolsOpenAICompat(oaiMessages, config, tools, onChunk, abortSignal);
     return { text: r.text, toolCalls: r.toolCalls };
   }
 
@@ -137,7 +138,7 @@ export async function sendWithTools(
     system: config.systemPrompt,
     tools,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-  });
+  }, { signal: abortSignal });
 
   let text = '';
   const toolCalls: ToolCall[] = [];
@@ -163,6 +164,7 @@ export async function sendWithToolsOpenAICompat(
   config: DehaConfig,
   tools: ToolDefinition[],
   onChunk?: (chunk: string) => void,
+  abortSignal?: AbortSignal,
 ): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage }> {
   const role = roleFromConfig(config);
   const apiKey = resolveApiKey(role, config);
@@ -185,6 +187,7 @@ export async function sendWithToolsOpenAICompat(
   const response = await axios.post(`${apiUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     timeout: 120000,
+    signal: abortSignal,
   });
 
   const msg = response.data.choices[0].message as OAIMessage;

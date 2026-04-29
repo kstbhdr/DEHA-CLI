@@ -21,6 +21,7 @@ export async function runAgent(
   userMessage: string,
   config: DehaConfig,
   history: Message[] = [],
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const mcpTools = mcpManager.getAnthropicTools();
   const allTools = [...DEHA_TOOLS, ...mcpTools];
@@ -34,11 +35,11 @@ export async function runAgent(
 
   // Claude → native tool calling
   if (config.provider === 'claude') {
-    return runAgentClaude(userMessage, enrichedConfig, history, allTools);
+    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal);
   }
 
   // OpenAI-uyumlu providerlar (DeepSeek, OpenAI, OpenRouter, xAI, custom)
-  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools);
+  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal);
 }
 
 const MAX_TOOL_ROUNDS = 10; // default fallback, config'den override edilir
@@ -50,6 +51,7 @@ async function runAgentClaude(
   config: DehaConfig,
   history: Message[],
   allTools: typeof DEHA_TOOLS,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const messages: Message[] = [...history, { role: 'user', content: userMessage }];
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
@@ -63,7 +65,7 @@ async function runAgentClaude(
     const { text, toolCalls } = await sendWithTools(messages, config, allTools, (chunk) => {
       process.stdout.write(chunk);
       finalText += chunk;
-    });
+    }, abortSignal);
 
     if (text) process.stdout.write('\n');
     if (toolCalls.length === 0) break;
@@ -96,6 +98,7 @@ async function runAgentOpenAI(
   config: DehaConfig,
   history: Message[],
   allTools: typeof DEHA_TOOLS,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   // Geçmiş mesajları OpenAI formatına dönüştür
   const messages: OAIMessage[] = [
@@ -120,6 +123,7 @@ async function runAgentOpenAI(
         process.stdout.write(chunk);
         finalText += chunk;
       },
+      abortSignal,
     );
 
     if (text) process.stdout.write('\n');

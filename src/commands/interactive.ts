@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
 import { DehaConfig, getProviderLabel } from '../config';
-import { Message } from '../services/ai-service';
+import { Message, sendMessage } from '../services/ai-service';
 import { formatResponse } from './chat';
 import { runAgent } from './agent';
 import { mcpManager } from '../mcp/manager';
@@ -21,13 +21,18 @@ import { printStats } from '../services/usage-tracker';
 import { detectIntent, enrichWithSearch } from '../services/intent';
 import {
   addMessage,
-  getContext,
   closeMemory,
 } from '../services/memory';
 import {
   detectWorkDir,
   setWorkDir,
+  appendMessage,
+  buildContextMessages,
+  autoCompress,
+  loadSession,
+  getContextStats,
 } from '../services/session-memory';
+import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
 import { runSystemTest } from './test-runner';
 
@@ -79,6 +84,9 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
     if (s.chromadb !== 'unavailable') parts.push(`ChromaDB ${s.chromadb === 'started' ? chalk.green('↑') : chalk.dim('✓')}`);
     if (parts.length) process.stdout.write(chalk.dim('  ') + parts.join(chalk.dim('  ')) + '\n\n');
   }).catch(() => {});
+
+  // Session memory'yi yükle (önceki session'dan devam edebilmek için)
+  loadSession().catch(() => {});
 
   // MCP sunucularına bağlan (arka planda, hata sessiz geç)
   mcpManager.connectAll(true).catch(() => {});
@@ -257,15 +265,33 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
       // ── /agent <soru> ─────────────────────────────────────────────────────
       if (trimmed.startsWith('/agent ')) {
         const agentPrompt = trimmed.slice(7).trim();
+        
+        const abortController = new AbortController();
+        const onKeypress = (str: string, key: any) => {
+          if (key && key.name === 'escape') {
+            abortController.abort();
+            process.stdout.write(chalk.red('\n[İptal edildi - ESC]\n'));
+          }
+        };
+        process.stdin.on('keypress', onKeypress);
+
         try {
-          const response = await runAgent(agentPrompt, config, history);
+          const response = await runAgent(agentPrompt, config, history, abortController.signal);
           history.push({ role: 'user', content: agentPrompt });
           history.push({ role: 'assistant', content: response });
-          if (history.length > 20) history.splice(0, 2);
+          // Session memory'ye de ekle
+          await appendMessage({ role: 'user', content: agentPrompt });
+          await appendMessage({ role: 'assistant', content: response });
           console.log(chalk.dim('\n' + '─'.repeat(50)) + '\n');
         } catch (err: unknown) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+          if (abortController.signal.aborted || (err instanceof Error && err.name === 'AbortError') || (err instanceof Error && err.message.includes('canceled'))) {
+            // İptal edildi, hata yazdırma
+          } else {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+          }
+        } finally {
+          process.stdin.removeListener('keypress', onKeypress);
         }
         prompt(); return;
       }
@@ -291,23 +317,75 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           console.log(chalk.green('✓'));
         }
 
-        // Bağlamı oluştur: son 5 mesaj + Redis'ten semantic olarak alakalı eskiler
-        const contextHistory = await getContext(enrichedMessage, history);
+        // Bağlamı session-memory'den oluştur (özet + tüm mevcut mesajlar + yeni mesaj)
+        const contextHistory = buildContextMessages(enrichedMessage);
 
-        const fullResponse = await runAgent(enrichedMessage, config, contextHistory);
+        const abortController = new AbortController();
+        const onKeypress = (str: string, key: any) => {
+          if (key && key.name === 'escape') {
+            abortController.abort();
+            process.stdout.write(chalk.red('\n[İptal edildi - ESC]\n'));
+          }
+        };
+        process.stdin.on('keypress', onKeypress);
 
-        // history array'ine ekle (son 5 için ihtiyacımız var)
+        let fullResponse = '';
+        try {
+          fullResponse = await runAgent(enrichedMessage, config, contextHistory, abortController.signal);
+        } finally {
+          process.stdin.removeListener('keypress', onKeypress);
+        }
+
+        // history array'ine ekle (agent ve /file uyumluluğu için)
         history.push({ role: 'user', content: userMessage });
         history.push({ role: 'assistant', content: fullResponse });
 
-        // Redis'e kaydet + ChromaDB'ye arka planda yaz (non-blocking)
+        // Session memory'ye ekle (context compression için)
+        await appendMessage({ role: 'user', content: userMessage });
+        await appendMessage({ role: 'assistant', content: fullResponse });
+
+        // Redis/ChromaDB'ye de yaz (long-term memory, semantic search)
         addMessage({ role: 'user', content: userMessage }).catch(() => {});
         addMessage({ role: 'assistant', content: fullResponse }).catch(() => {});
 
+        // Context sınıra yaklaştıysa compress et
+        const maxCtxTokens = config.maxContextTokens > 0
+          ? config.maxContextTokens
+          : getMaxContextTokens(config.provider, getActiveModel(config));
+
+        const compressed = await autoCompress(
+          async (msgs) => {
+            const summaryPrompt = [
+              'Aşağıdaki konuşmayı kısa ve öz şekilde özetle.',
+              'ÖNEMLİ: Yapılan işleri, kararları, çözülen sorunları ve devam eden görevleri koru.',
+              'Geçerliliğini yitirmiş bilgileri (eski hatalar, denenip vazgeçilen yaklaşımlar) çıkar.',
+              'Özet Türkçe olsun.\n\n---\n',
+              ...msgs.map(m => `${m.role === 'user' ? 'Kullanıcı' : 'DEHA'}: ${m.content.slice(0, 1000)}`),
+            ].join('\n');
+            return sendMessage([{ role: 'user', content: summaryPrompt }], config);
+          },
+          maxCtxTokens,
+          config.compressThreshold,
+          config.minHotMessages,
+        );
+
+        if (compressed) {
+          const stats = getContextStats(maxCtxTokens);
+          console.log(
+            chalk.dim('  📦 Context compressed') +
+            chalk.dim(` — ${stats.messages} mesaj korundu, `) +
+            chalk.dim(`~${Math.round(stats.usagePercent)}% kullanım\n`),
+          );
+        }
+
         console.log(chalk.dim('─'.repeat(50)) + '\n');
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+        if ((err instanceof Error && err.name === 'AbortError') || (err instanceof Error && err.message.includes('canceled'))) {
+          // İptal edildi sessizce yut (hata catch dışında handle edildi)
+        } else {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+        }
       }
 
       prompt();

@@ -1,29 +1,29 @@
 /**
- * Session Memory Service
+ * Session Memory Service — v2 (Context Compression Destekli)
  *
  * Katmanlı bellek mimarisi:
- *  - Tier 1 (hot):  Redis (REDIS_URL varsa) veya in-memory Map — anlık erişim
+ *  - Tier 1 (hot):  Redis (REDIS_URL varsa, yoksa localhost:6379 fallback) veya in-memory Map — anlık erişim
  *  - Tier 2 (warm): .deha/session-buffer.json — CLI yeniden başlatılırsa geri yükle
  *  - Tier 3 (cold): ~/.deha/conversations/*.json — kalıcı arşiv (20 mesajda bir flush)
  *
- * Otomatik özetleme:
- *  - Son 5 mesaj bağlama tam olarak eklenir.
- *  - 5-20 arası mesajlar AI ile özetlenir → tek bir "context recap" olarak enjekte edilir.
- *  - 20'den eski mesajlar cold storage'a taşınır.
+ * Context Compression:
+ *  - Token sayısı maxContextTokens * compressThreshold'u geçince otomatik compress
+ *  - Eski mesajlar AI ile özetlenir → tek bir "context recap" olarak enjekte edilir
+ *  - Son minHotMessages mesaj her zaman tam kalır (özetlenmez)
+ *  - Özet birikimli: yeni özet = eski özet + yeni özetlenen mesajlar
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { Message } from './ai-service';
+import { estimateTokens, estimateMessagesTokens, getMaxContextTokens } from './token-counter';
 
 // ─── Sabitler ────────────────────────────────────────────────────────────────
 
 const SESSION_BUFFER_DIR = path.join(process.cwd(), '.deha');
 const SESSION_BUFFER_FILE = path.join(SESSION_BUFFER_DIR, 'session-buffer.json');
 const COLD_STORAGE_DIR = path.join(os.homedir(), '.deha', 'conversations');
-const HOT_WINDOW = 5;    // bağlama tam olarak eklenecek son N mesaj
-const WARM_WINDOW = 20;  // bu kadar mesajda bir cold storage'a yaz
 const FLUSH_THRESHOLD = 20;
 
 // ─── Redis (opsiyonel) ────────────────────────────────────────────────────────
@@ -39,8 +39,8 @@ interface RedisLike {
 
 async function getRedis(): Promise<RedisLike | null> {
   if (redisClient !== null) return redisClient;
-  const url = process.env.REDIS_URL;
-  if (!url) return null;
+  // REDIS_URL varsa onu kullan, yoksa localhost:6379'a fallback (memory.ts ile tutarlı)
+  const url = process.env.REDIS_URL || 'redis://localhost:6379';
   try {
     const { default: Redis } = await import('ioredis');
     const client = new Redis(url, { lazyConnect: true, connectTimeout: 3000 });
@@ -60,6 +60,7 @@ interface SessionState {
   summary: string;        // eski mesajların AI özeti
   workDir: string;        // aktif çalışma dizini
   flushedCount: number;   // cold storage'a kaç mesaj yazıldı
+  compressCount: number;  // kaç kez compress yapıldı
 }
 
 let _state: SessionState = {
@@ -68,9 +69,8 @@ let _state: SessionState = {
   summary: '',
   workDir: process.cwd(),
   flushedCount: 0,
+  compressCount: 0,
 };
-
-const REDIS_KEY = `deha:session:${_state.sessionId}`;
 
 // ─── Başlangıç yükleme ───────────────────────────────────────────────────────
 
@@ -119,8 +119,9 @@ export async function appendMessage(message: Message): Promise<void> {
 
 /**
  * Modele gönderilecek mesaj dizisini oluşturur:
- * - Özet (varsa) başa eklenir
- * - Son HOT_WINDOW mesaj tam olarak eklenir
+ * - Özet (varsa) başa "context recap" olarak eklenir
+ * - Tüm mevcut mesajlar eklenir (compress sonrası sadece hot window kalır)
+ * - Bekleyen kullanıcı mesajı varsa sona eklenir
  */
 export function buildContextMessages(pendingUserMessage?: string): Message[] {
   const msgs = _state.messages;
@@ -130,17 +131,16 @@ export function buildContextMessages(pendingUserMessage?: string): Message[] {
   if (_state.summary) {
     result.push({
       role: 'user',
-      content: `[CONTEXT RECAP — previous conversation summary]\n${_state.summary}`,
+      content: `[CONTEXT RECAP — önceki konuşma özeti]\n${_state.summary}`,
     });
     result.push({
       role: 'assistant',
-      content: 'Understood. I have the context from our previous conversation.',
+      content: 'Tamam, önceki konuşmamızın bağlamını aldım. Devam edelim.',
     });
   }
 
-  // Son HOT_WINDOW mesajı tam ekle
-  const hot = msgs.slice(-HOT_WINDOW);
-  result.push(...hot);
+  // Tüm mevcut mesajları ekle (compress yapıldıysa zaten sadece hot window kalmıştır)
+  result.push(...msgs);
 
   if (pendingUserMessage) {
     result.push({ role: 'user', content: pendingUserMessage });
@@ -181,30 +181,91 @@ export function detectWorkDir(message: string): string | null {
   return null;
 }
 
-// ─── Özet oluşturma ──────────────────────────────────────────────────────────
+// ─── Context Compression ─────────────────────────────────────────────────────
 
 /**
- * Eski mesajları AI ile özetler (çağıran taraf sendMessage sağlamalı).
- * Son HOT_WINDOW mesajı özetlemez, bunlar bağlamda tam kalır.
+ * Context sınıra yaklaştıysa otomatik compress yapar.
+ * @returns compress yapıldıysa true
+ */
+export async function autoCompress(
+  summarizeFn: (messages: Message[]) => Promise<string>,
+  maxContextTokens: number,
+  compressThreshold: number,
+  minHotMessages: number,
+): Promise<boolean> {
+  const totalTokens = estimateMessagesTokens(_state.messages);
+  const summaryTokens = estimateTokens(_state.summary);
+  const currentUsage = totalTokens + summaryTokens;
+  const threshold = maxContextTokens * compressThreshold;
+
+  if (currentUsage < threshold) return false;
+
+  // En az minHotMessages mesaj korunmalı, gerisi özetlenecek
+  return summarizeOld(summarizeFn, minHotMessages);
+}
+
+/**
+ * Eski mesajları AI ile özetler.
+ * Son hotCount mesajı özetlemez, bunlar bağlamda tam kalır.
  */
 export async function summarizeOld(
   summarizeFn: (messages: Message[]) => Promise<string>,
-): Promise<void> {
+  hotCount?: number,
+): Promise<boolean> {
+  const minHot = hotCount ?? 10;
   const msgs = _state.messages;
-  if (msgs.length <= HOT_WINDOW) return;
+  if (msgs.length <= minHot) return false;
 
-  const toSummarize = msgs.slice(0, -HOT_WINDOW);
-  if (toSummarize.length < 4) return; // özetlenecek kadar yok
+  const toSummarize = msgs.slice(0, -minHot);
+  if (toSummarize.length < 4) return false; // özetlenecek kadar yok
 
   try {
     const newSummary = await summarizeFn(toSummarize);
-    _state.summary = newSummary;
+
+    // Birikimli özet: eski özet + yeni özet
+    if (_state.summary) {
+      _state.summary = `${_state.summary}\n\n---\n\n[Sonraki bölüm]\n${newSummary}`;
+    } else {
+      _state.summary = newSummary;
+    }
+
     // Özetlenen mesajları memory'den çıkar, sadece hot window'u tut
-    _state.messages = msgs.slice(-HOT_WINDOW);
+    _state.messages = msgs.slice(-minHot);
+    _state.compressCount++;
     _writeWarmBuffer();
+    return true;
   } catch {
     // Özetleme başarısız olursa eski mesajları koru
+    return false;
   }
+}
+
+/**
+ * Mevcut context durumu hakkında bilgi döner.
+ */
+export function getContextStats(maxContextTokens: number): {
+  messages: number;
+  summaryTokens: number;
+  messagesTokens: number;
+  totalTokens: number;
+  usagePercent: number;
+  hasSummary: boolean;
+  compressCount: number;
+  workDir: string;
+} {
+  const summaryTokens = estimateTokens(_state.summary);
+  const messagesTokens = estimateMessagesTokens(_state.messages);
+  const totalTokens = summaryTokens + messagesTokens;
+  return {
+    messages: _state.messages.length,
+    summaryTokens,
+    messagesTokens,
+    totalTokens,
+    usagePercent: maxContextTokens > 0 ? (totalTokens / maxContextTokens) * 100 : 0,
+    hasSummary: !!_state.summary,
+    compressCount: _state.compressCount,
+    workDir: _state.workDir,
+  };
 }
 
 // ─── Çıkışta flush ────────────────────────────────────────────────────────────
@@ -224,7 +285,7 @@ export async function flushOnExit(): Promise<void> {
   try { fs.unlinkSync(SESSION_BUFFER_FILE); } catch { /* yok olabilir */ }
 }
 
-/** Aktif session stats */
+/** Aktif session stats (eski uyumluluk) */
 export function getSessionStats(): { messages: number; summary: boolean; workDir: string } {
   return {
     messages: _state.messages.length,

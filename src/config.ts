@@ -89,6 +89,11 @@ export interface DehaConfig {
   maxTokens: number;
   temperature: number;
 
+  // Context yönetimi
+  maxContextTokens: number;    // Model context window (token)
+  compressThreshold: number;   // Context bu orana yaklaşınca compress et (0-1)
+  minHotMessages: number;      // Her zaman tam tutulan minimum mesaj sayısı
+
   // Pipeline
   pipeline: PipelineConfig;
 }
@@ -148,6 +153,10 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     maxTokens:   parseInt(process.env.DEHA_MAX_TOKENS   || '4096', 10),
     temperature: parseFloat(process.env.DEHA_TEMPERATURE || '0.7'),
+
+    maxContextTokens: parseInt(process.env.DEHA_MAX_CONTEXT_TOKENS || '0', 10),  // 0 = otomatik (provider/model'e göre)
+    compressThreshold: parseFloat(process.env.DEHA_COMPRESS_THRESHOLD || '0.75'),
+    minHotMessages: parseInt(process.env.DEHA_MIN_HOT_MESSAGES || '10', 10),
 
     pipeline: {
       planner: {
