@@ -7,7 +7,7 @@ import { toolRunTerminal } from './terminal';
 import { toolRunPython } from './python';
 import { toolSmokeTest } from './smoke';
 import { toolBrowserAction } from './browser';
-import { toolWebSearch, toolCrawlUrl } from './search';
+import { toolWebSearch } from './search';
 import { editFile, insertLines, deleteLines } from './edit';
 // vision tool requires DehaConfig, handled separately in agent.ts
 
@@ -190,28 +190,14 @@ export const DEHA_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'web_search',
-    description: 'Search the web using DuckDuckGo and optionally crawl GitHub or StackOverflow for up-to-date information.',
+    description: 'Search the web using DuckDuckGo for up-to-date information.',
     input_schema: {
       type: 'object',
       properties: {
         query:       { type: 'string', description: 'Search query' },
-        source:      { type: 'string', enum: ['web', 'github', 'stackoverflow', 'all'], description: 'Where to search (default: web)' },
-        max_results: { type: 'number', description: 'Max results per source (default: 8)' },
-        crawl_top:   { type: 'number', description: 'Fetch full page content from top N results (default: 0)' },
+        max_results: { type: 'number', description: 'Max results (default: 8)' },
       },
       required: ['query'],
-    },
-  },
-  {
-    name: 'crawl_url',
-    description: 'Fetch and extract readable text content from any URL (GitHub repo, StackOverflow answer, docs page, etc.).',
-    input_schema: {
-      type: 'object',
-      properties: {
-        url:       { type: 'string', description: 'URL to crawl' },
-        max_chars: { type: 'number', description: 'Max characters to return (default: 4000)' },
-      },
-      required: ['url'],
     },
   },
   {
@@ -314,7 +300,6 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'browser_action':
       case 'vision_analyze':
       case 'web_search':
-      case 'crawl_url':
         return `__ASYNC_TOOL__:${name}`;
       default: return `Bilinmeyen tool: ${name}`;
     }
@@ -346,8 +331,6 @@ export async function executeToolAsync(
       }
       case 'web_search':
         return await toolWebSearch(input as Parameters<typeof toolWebSearch>[0]);
-      case 'crawl_url':
-        return await toolCrawlUrl(input as Parameters<typeof toolCrawlUrl>[0]);
       default:
         return executeTool(name, input);
     }
@@ -374,7 +357,6 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     vision_analyze:  '👁️ ',
     search_in_files: '🔍',
     web_search:      '🌍',
-    crawl_url:       '🕷️ ',
   };
   const icon = icons[name] ?? '🔧';
   const preview = Object.entries(input)
