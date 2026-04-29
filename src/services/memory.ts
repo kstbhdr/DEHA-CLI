@@ -88,8 +88,16 @@ async function getChromaCollection(): Promise<ChromaCollection | null> {
   const url = process.env.CHROMA_URL || 'http://localhost:8000';
   try {
     const { ChromaClient } = await import('chromadb');
-    const client = new ChromaClient({ path: url });
-    const col = await client.getOrCreateCollection({ name: 'deha_conversations' });
+    const parsed = new URL(url);
+    const client = new ChromaClient({
+      host: parsed.hostname,
+      port: parseInt(parsed.port || '8000', 10),
+      ssl: parsed.protocol === 'https:',
+    });
+    const col = await client.getOrCreateCollection({
+      name: 'deha_conversations',
+      embeddingFunction: null as unknown as undefined, // kendi embedding'imizi kullanıyoruz
+    });
     _chromaCollection = col as unknown as ChromaCollection;
   } catch {
     _chromaCollection = null;
