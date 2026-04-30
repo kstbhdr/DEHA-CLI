@@ -291,7 +291,6 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'insert_lines':    return insertLines(inp as Parameters<typeof insertLines>[0]);
       case 'delete_lines':    return deleteLines(inp as Parameters<typeof deleteLines>[0]);
       case 'list_dir':        return toolListDir(inp);
-      case 'run_shell':       return toolRunShell(inp);
       case 'search_in_files': return toolSearchInFiles(inp);
       // Async toollar için placeholder — agent.ts'te executeToolAsync kullanılır
       case 'run_terminal':
@@ -300,6 +299,7 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'browser_action':
       case 'vision_analyze':
       case 'web_search':
+      case 'run_shell':
         return `__ASYNC_TOOL__:${name}`;
       default: return `Bilinmeyen tool: ${name}`;
     }
@@ -316,6 +316,8 @@ export async function executeToolAsync(
 ): Promise<string> {
   try {
     switch (name) {
+      case 'run_shell':
+        return await toolRunShell(input as ToolInput);
       case 'run_terminal':
         return await toolRunTerminal(input as Parameters<typeof toolRunTerminal>[0]);
       case 'run_python':
@@ -424,8 +426,10 @@ function listRecursive(base: string, dir: string, depth: number, maxDepth: numbe
 }
 
 // Tehlikeli/yıkıcı komut kalıpları — agent asla bunları çalıştıramaz
+let autoAllowDangerousCommands = false;
+
 const FORBIDDEN_PATTERNS = [
-  /(\|\s*)?rm\s+(-rf?\s+)?(\/|\/\*|\$HOME|\$PWD|\.\s*$)/i,
+  /(\|\s*)?rm\s+(-rf?\s+)?(\/(\s|$)|\/\*|\$HOME|\$PWD|\.\s*$)/i,
   /(\|\s*)?dd\s+if=/i,
   /(\|\s*)?mkfs/i,
   /(\|\s*)?fdisk/i,
@@ -454,13 +458,36 @@ function isSafeCommand(command: string): { safe: boolean; reason?: string } {
   return { safe: true };
 }
 
-function toolRunShell(inp: ToolInput): string {
+async function toolRunShell(inp: ToolInput): Promise<string> {
   if (!inp.command) throw new Error('command gerekli');
 
   // Güvenlik kontrolü
   const check = isSafeCommand(inp.command);
   if (!check.safe) {
-    throw new Error(`❌ ${check.reason}\nAgent shell komutları sınırlıdır. Dosya işlemleri için write_file/edit_file/read_file tool'larını kullanın.`);
+    if (!autoAllowDangerousCommands) {
+      const inquirer = await import('inquirer').then(m => m.default || m);
+      const { action } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'action',
+          message: chalk.yellow(`\n⚠️ TEHLİKELİ KOMUT TESPİT EDİLDİ:\n`) + 
+                   chalk.white(`   Komut: `) + chalk.cyan(inp.command) + '\n' +
+                   chalk.white(`   Sebep: `) + chalk.red(check.reason) + '\n\n' +
+                   chalk.bold('Bu komutu çalıştırmak istiyor musunuz?'),
+          choices: [
+            { name: '❌ İptal Et (Agent\'a hata dön)', value: 'cancel' },
+            { name: '✅ Sadece bu seferlik izin ver', value: 'once' },
+            { name: '🔥 Bu oturum boyunca HER ŞEYE izin ver (Bir daha sorma)', value: 'always' },
+          ],
+        }
+      ]);
+
+      if (action === 'cancel') {
+        throw new Error(`❌ Kullanıcı güvenlik nedeniyle bu komutu reddetti.\nAgent shell komutları sınırlıdır. Dosya işlemleri için write_file/edit_file/read_file tool'larını kullanın.`);
+      } else if (action === 'always') {
+        autoAllowDangerousCommands = true;
+      }
+    }
   }
 
   // Çalışma dizinini proje köküyle sınırla
