@@ -505,6 +505,33 @@ Artık dışarıdan devasa kod blokları yapıştırıldığında sistem aniden 
 ## 3. Sonuç
 Sistem stabilitesi, görsel özelliklerin önüne koyularak terminalin akıcılığı restore edildi. DEHA şu an en stabil ve en hafif haliyle çalışmaktadır.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #11
+
+**Tarih:** 2026-04-30  
+**Kapsam:** `grep` Aracı (Alias) Ekleme ve Model Halüsinasyon Önleme
+
+---
+
+## 1. Sorun Tanımı
+DEHA modelleri (AI), dosya içinde arama yapmak için bazen sistemde tanımlı olan `search_in_files` yerine, alışkanlıktan dolayı doğrudan `grep` komutunu bir "tool" olarak çağırmaya çalışıyordu. Bu durum "Bilinmeyen tool: grep" hatasına yol açıyor ve akışı kesiyordu.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 `grep` Tool Tanımı (`src/tools/index.ts`)
+- `search_in_files` aracıyla birebir aynı parametreleri alan (pattern, directory, extension) bir `grep` aracı sisteme eklendi.
+- Bu araç, arka planda zaten var olan ve JS ile implement edilmiş olan `toolSearchInFiles` fonksiyonunu çağırıyor.
+
+### 2.2 UI ve İkon Desteği
+- `printToolCall` fonksiyonuna `grep` için arama ikonu (🔍) eklendi.
+- Modeller artık hem `search_in_files` hem de `grep` diyerek arama yapabilecek, sistem her ikisini de doğru anlayacak.
+
+## 3. Sonuç
+Modellerin "grep" halüsinasyonu artık bir hata değil, geçerli bir komut haline geldi. Bu sayede agent daha esnek ve hata payı düşük bir şekilde çalışmaya devam edecek.
+
+
 
 
 
