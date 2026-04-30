@@ -13,7 +13,8 @@ async function withSpinner<T>(
   const spinner = ora({
     text: chalk.dim(text),
     color: 'cyan',
-    spinner: 'dots'
+    spinner: 'dots',
+    stream: process.stderr,
   }).start();
 
   let stopped = false;
