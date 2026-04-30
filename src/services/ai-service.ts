@@ -1,38 +1,13 @@
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
-import ora from 'ora';
 import chalk from 'chalk';
 import { DehaConfig, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
 import { getCached, setCache } from './cache';
 
-async function withSpinner<T>(
-  text: string,
-  fn: (stopSpinner: () => void) => Promise<T>
-): Promise<T> {
-  const spinner = ora({
-    text: chalk.dim(text),
-    color: 'cyan',
-    spinner: 'dots',
-    stream: process.stderr,
-  }).start();
-
-  let stopped = false;
-  const stopSpinner = () => {
-    if (!stopped) {
-      spinner.stop();
-      stopped = true;
-    }
-  };
-
-  try {
-    const result = await fn(stopSpinner);
-    stopSpinner();
-    return result;
-  } catch (err) {
-    stopSpinner();
-    throw err;
-  }
+/** Basit bekleme göstergesi — readline ile çakışmaz */
+function showThinking(provider: string, model: string): void {
+  process.stderr.write(chalk.dim(`  ⏳ DEHA düşünüyor... [${provider}/${model}]\n`));
 }
 
 export interface Message {
@@ -65,36 +40,31 @@ export async function callRole(
   const track = (inp: number, out: number) =>
     recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig);
 
-  return withSpinner(`DEHA düşünüyor... [${role.provider}/${role.model}]`, async (stopSpinner) => {
-    const wrappedOnChunk = onChunk ? (chunk: string) => {
-      stopSpinner();
-      onChunk(chunk);
-    } : undefined;
+  showThinking(role.provider, role.model);
 
-    switch (role.provider) {
-      case 'claude':
-        return wrappedOnChunk
-          ? streamClaude(messages, role.model, apiKey, maxTokens, systemPrompt, wrappedOnChunk, track)
-          : sendClaude(messages, role.model, apiKey, maxTokens, systemPrompt, track);
+  switch (role.provider) {
+    case 'claude':
+      return onChunk
+        ? streamClaude(messages, role.model, apiKey, maxTokens, systemPrompt, onChunk, track)
+        : sendClaude(messages, role.model, apiKey, maxTokens, systemPrompt, track);
 
-      case 'ollama':
-        return wrappedOnChunk
-          ? streamOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature, wrappedOnChunk)
-          : sendOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature);
+    case 'ollama':
+      return onChunk
+        ? streamOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature, onChunk)
+        : sendOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature);
 
-      case 'openai':
-      case 'deepseek':
-      case 'openrouter':
-      case 'xai':
-      case 'custom':
-        return wrappedOnChunk
-          ? streamOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, wrappedOnChunk, track, openrouterProvider)
-          : sendOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, track, openrouterProvider);
+    case 'openai':
+    case 'deepseek':
+    case 'openrouter':
+    case 'xai':
+    case 'custom':
+      return onChunk
+        ? streamOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, onChunk, track, openrouterProvider)
+        : sendOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, track, openrouterProvider);
 
-      default:
-        throw new Error(`Unknown provider: ${role.provider}`);
-    }
-  });
+    default:
+      throw new Error(`Unknown provider: ${role.provider}`);
+  }
 }
 
 // ─── DehaConfig tabanlı çağrı (interaktif mod için) ────────────────────────
@@ -169,32 +139,30 @@ export async function sendWithTools(
   const apiKey = config.anthropicApiKey;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY eksik');
 
-  return withSpinner(`DEHA düşünüyor... [${config.provider}/${config.claudeModel}]`, async (stopSpinner) => {
-    const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      model: config.claudeModel,
-      max_tokens: config.maxTokens,
-      system: config.systemPrompt,
-      tools,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    }, { signal: abortSignal });
+  showThinking(config.provider, config.claudeModel);
 
-    stopSpinner();
+  const client = new Anthropic({ apiKey });
+  const response = await client.messages.create({
+    model: config.claudeModel,
+    max_tokens: config.maxTokens,
+    system: config.systemPrompt,
+    tools,
+    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+  }, { signal: abortSignal });
 
-    let text = '';
-    const toolCalls: ToolCall[] = [];
+  let text = '';
+  const toolCalls: ToolCall[] = [];
 
-    for (const block of response.content) {
-      if (block.type === 'text') {
-        text += block.text;
-        if (onChunk) onChunk(block.text);
-      } else if (block.type === 'tool_use') {
-        toolCalls.push({ name: block.name, input: block.input as Record<string, unknown>, id: block.id });
-      }
+  for (const block of response.content) {
+    if (block.type === 'text') {
+      text += block.text;
+      if (onChunk) onChunk(block.text);
+    } else if (block.type === 'tool_use') {
+      toolCalls.push({ name: block.name, input: block.input as Record<string, unknown>, id: block.id });
     }
+  }
 
-    return { text, toolCalls };
-  });
+  return { text, toolCalls };
 }
 
 // OpenAI raw mesaj tipi — tool call/result için genişletilmiş
@@ -226,29 +194,27 @@ export async function sendWithToolsOpenAICompat(
     body.provider = { only: [config.openrouterProvider], allow_fallbacks: false };
   }
 
-  return withSpinner(`DEHA düşünüyor... [${role.provider}/${role.model}]`, async (stopSpinner) => {
-    const response = await axios.post(`${apiUrl}/chat/completions`, body, {
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      timeout: 120000,
-      signal: abortSignal,
-    });
+  showThinking(role.provider, role.model);
 
-    stopSpinner();
-
-    const msg = response.data.choices[0].message as OAIMessage;
-
-    const text: string = (msg.content as string) ?? '';
-    if (text && onChunk) onChunk(text);
-
-    const toolCalls: ToolCall[] = ((msg.tool_calls as Record<string, unknown>[]) ?? []).map((tc) => {
-      const fn = tc.function as { name: string; arguments: string };
-      let input: Record<string, unknown> = {};
-      try { input = JSON.parse(fn.arguments); } catch { /* ignore */ }
-      return { name: fn.name, input, id: tc.id as string };
-    });
-
-    return { text, toolCalls, rawAssistantMsg: msg };
+  const response = await axios.post(`${apiUrl}/chat/completions`, body, {
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    timeout: 120000,
+    signal: abortSignal,
   });
+
+  const msg = response.data.choices[0].message as OAIMessage;
+
+  const text: string = (msg.content as string) ?? '';
+  if (text && onChunk) onChunk(text);
+
+  const toolCalls: ToolCall[] = ((msg.tool_calls as Record<string, unknown>[]) ?? []).map((tc) => {
+    const fn = tc.function as { name: string; arguments: string };
+    let input: Record<string, unknown> = {};
+    try { input = JSON.parse(fn.arguments); } catch { /* ignore */ }
+    return { name: fn.name, input, id: tc.id as string };
+  });
+
+  return { text, toolCalls, rawAssistantMsg: msg };
 }
 
 
