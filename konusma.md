@@ -580,6 +580,32 @@ Modelin (AI), kod içinde `format_...` gibi isimlere sahip fonksiyonları aramak
 ## 3. Sonuç
 Güvenlikten ödün vermeden, geliştirme sürecindeki "false positive" (yanlış alarm) oranı düşürüldü. Model artık kod analizi yaparken gereksiz güvenlik uyarılarına takılmadan çok daha akıcı çalışabilecek.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #14
+
+**Tarih:** 2026-04-30  
+**Kapsam:** ChromaDB Otomatik Kurulum ve PEP 668 Uyumluluğu
+
+---
+
+## 1. Sorun Tanımı
+Yeni nesil Debian ve Ubuntu sistemlerinde (PEP 668), sistem Python'una doğrudan `pip install` yapılmasına izin verilmediği (externally-managed-environment hatası) tespit edildi. Bu durum, DEHA'nın ChromaDB'yi otomatik olarak kurmasını engelliyor ve vektör veritabanının çalışmamasına neden oluyordu.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Kurulum Komutu Güncellemesi (`src/services/process-manager.ts`)
+- ChromaDB kurulum komutuna `--break-system-packages` bayrağı eklendi.
+- Bu bayrak, Debian tabanlı sistemlerdeki "externally managed environment" engelini aşarak paketin sisteme kurulmasını sağlıyor.
+
+### 2.2 Hata Yönetimi
+- Kurulumun sessizce başarısız olması yerine, artık daha güvenilir bir şekilde tamamlanması hedeflendi.
+
+## 3. Sonuç
+ChromaDB artık VPS üzerinde sorunsuz bir şekilde kurulabiliyor ve başlatılabiliyor. Uzun dönemli hafıza (cold archive) sistemi artık aktif.
+
+
 
 
 
