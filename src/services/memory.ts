@@ -56,10 +56,20 @@ async function getRedis(): Promise<RedisClient | null> {
   if (_redisChecked) return _redis;
   _redisChecked = true;
 
-  const url = process.env.REDIS_URL || 'redis://localhost:6379';
+  const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
   try {
     const { default: Redis } = await import('ioredis');
-    const client = new Redis(url, { lazyConnect: true, connectTimeout: 2000, maxRetriesPerRequest: 1 });
+    const client = new Redis(url, { 
+      lazyConnect: true, 
+      connectTimeout: 2000, 
+      maxRetriesPerRequest: 1,
+      retryStrategy: () => null, // Bağlantı koparsa veya kurulamazsa tekrar deneme (spam engelleme)
+      showFriendlyErrorStack: false
+    });
+    // Hata dinleyicisi ekle (ECONNREFUSED hatalarının terminale dökülmesini engeller)
+    client.on('error', (err) => {
+      // Sessizce yut, Redis yoksa memory fallback çalışacak
+    });
     await client.connect();
     _redis = client as unknown as RedisClient;
   } catch {
