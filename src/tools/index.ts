@@ -147,6 +147,19 @@ export const DEHA_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'grep',
+    description: 'Alias for search_in_files. Search for a text pattern across files in a directory.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pattern:   { type: 'string', description: 'Text or regex pattern to search for' },
+        directory: { type: 'string', description: 'Directory to search in' },
+        extension: { type: 'string', description: 'File extension filter (e.g. .ts, .py)' },
+      },
+      required: ['pattern', 'directory'],
+    },
+  },
+  {
     name: 'smoke_test',
     description: 'Run HTTP health checks against one or more endpoints.',
     input_schema: {
@@ -291,7 +304,8 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'insert_lines':    return insertLines(inp as Parameters<typeof insertLines>[0]);
       case 'delete_lines':    return deleteLines(inp as Parameters<typeof deleteLines>[0]);
       case 'list_dir':        return toolListDir(inp);
-      case 'search_in_files': return toolSearchInFiles(inp);
+      case 'search_in_files':
+      case 'grep':            return toolSearchInFiles(inp);
       // Async toollar için placeholder — agent.ts'te executeToolAsync kullanılır
       case 'run_terminal':
       case 'run_python':
@@ -358,6 +372,7 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     browser_action:  '🌐',
     vision_analyze:  '👁️ ',
     search_in_files: '🔍',
+    grep:            '🔍',
     web_search:      '🌍',
   };
   const icon = icons[name] ?? '🔧';
