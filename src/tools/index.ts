@@ -496,9 +496,9 @@ let autoAllowDangerousCommands = false;
 const FORBIDDEN_PATTERNS = [
   /(\|\s*)?rm\s+(-rf?\s+)?(\/(\s|$)|\/\*|\$HOME|\$PWD|\.\s*$)/i,
   /(\|\s*)?dd\s+if=/i,
-  /(\|\s*)?mkfs/i,
-  /(\|\s*)?fdisk/i,
-  /(\|\s*)?format/i,
+  /(\|\s*)?mkfs\b/i,
+  /(\|\s*)?fdisk\b/i,
+  /(\|\s*)?\bformat\s+/i,
   /(\|\s*)?sudo\s+(rm|dd|mkfs|fdisk|format|shutdown|reboot|poweroff|init)/i,
   /(\|\s*)?chmod\s+777\s+\//i,
   /(\|\s*)?chown\s/i,
