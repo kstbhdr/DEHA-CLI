@@ -477,6 +477,35 @@ Bir önceki güncellemede, kopyalanan kod bloklarının terminalde düzgün alı
 ## 3. Sonuç
 Artık dışarıdan devasa kod blokları yapıştırıldığında sistem aniden tepki vermiyor. Kullanıcı kodun sonuna kendi sorusunu ekleme şansı buluyor ve sadece onayladığında istek gidiyor.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #10
+
+**Tarih:** 2026-04-30  
+**Kapsam:** UI ve Input Optimizasyonlarının Geri Çekilmesi (Stabilite Odaklı Revert)
+
+---
+
+## 1. Sorun Tanımı
+Önceki iki oturumda eklenen "Yükleme Animasyonu (Spinner)" ve "Çoklu Satır Yapıştırma Koruması" özelliklerinin, Node.js `readline` modülüyle ciddi bir uyumsuzluk yaşadığı tespit edildi. Özellikle spinner'ın terminal akışını bozması ve yapıştırma korumasındaki gecikmelerin klavye girişini (stdin) kilitlemesi nedeniyle kullanıcı terminalde yazı yazamaz veya mesaj gönderemez hale geldi.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Spinner ve Thinking Göstergesinin Kaldırılması
+- `ora` kütüphanesi ve terminaldeki "⏳ DEHA düşünüyor..." yazıları tamamen kaldırıldı. 
+- API servisleri (`ai-service.ts`) en yalın ve en hızlı haline geri döndürüldü. 
+- Terminalin kontrolü tamamen `readline`'a bırakılarak kilitlenme sorunu giderildi.
+
+### 2.2 Input Lojiğinin Sadeleştirilmesi
+- Yapıştırma tespiti için kullanılan `50ms debounce` ve `isMultilineMode` mantığı iptal edildi. 
+- Terminal girişi eskisi gibi satır tabanlı (line-by-line) hale getirildi. 
+- Kullanıcılar çoklu satır için manuel olarak `\` (ters eğik çizgi) kullanmaya devam edebilir.
+
+## 3. Sonuç
+Sistem stabilitesi, görsel özelliklerin önüne koyularak terminalin akıcılığı restore edildi. DEHA şu an en stabil ve en hafif haliyle çalışmaktadır.
+
+
 
 
 
