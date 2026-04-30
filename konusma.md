@@ -558,6 +558,29 @@ Ajanların (AI) geliştirme alışkanlıklarından dolayı en temel dosya işlem
 ## 3. Sonuç
 Modelin halüsinasyon yapma riski olan en temel komutlar artık birer resmi "tool" haline getirildi. DEHA modelleri artık birer kıdemli yazılımcı gibi en kısa ve öz komutları kullanarak işlerini yürütebilecek.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #13
+
+**Tarih:** 2026-04-30  
+**Kapsam:** `run_shell` Güvenlik Filtresi Optimizasyonu (False Positive Azaltma)
+
+---
+
+## 1. Sorun Tanımı
+Modelin (AI), kod içinde `format_...` gibi isimlere sahip fonksiyonları aramak için `grep` komutu kullandığı durumlarda, komutun içindeki "format" kelimesinin disk biçimlendirme komutu olan `format` ile karıştırıldığı ve güvenlik filtresine takıldığı gözlemlendi. Bu durum, masum arama komutları için bile kullanıcıdan gereksiz onay istenmesine ve akışın "takılmasına" neden oluyordu.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Regex Filtrelerinin Daraltılması (`src/tools/index.ts`)
+- **`format` filtresi:** Sadece tam kelime olarak ve yanında boşluk/parametre varsa (`\bformat\s+`) tetiklenecek şekilde güncellendi. Bu sayede `format_currency` veya `format_weather` gibi fonksiyon isimlerini aramak artık bir tehlike olarak görülmüyor.
+- **Diger filtreler:** `mkfs` ve `fdisk` gibi kritik sistem komutları da sadece tam kelime eşleşmesi (`\b`) aranacak şekilde optimize edildi.
+
+## 3. Sonuç
+Güvenlikten ödün vermeden, geliştirme sürecindeki "false positive" (yanlış alarm) oranı düşürüldü. Model artık kod analizi yaparken gereksiz güvenlik uyarılarına takılmadan çok daha akıcı çalışabilecek.
+
+
 
 
 
