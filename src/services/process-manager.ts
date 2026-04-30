@@ -95,7 +95,8 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
   // İlk kullanımda chromadb pip paketi kur (flag dosyası yoksa)
   if (!fs.existsSync(CHROMA_FLAG)) {
     try {
-      execSync(`${py} -m pip install chromadb --quiet --disable-pip-version-check`, {
+      // PEP 668 engeli için --break-system-packages ekliyoruz (Debian/Ubuntu 12+ için gerekli)
+      execSync(`${py} -m pip install chromadb --quiet --disable-pip-version-check --break-system-packages`, {
         stdio: 'pipe',
         timeout: 120_000,
       });
