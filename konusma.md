@@ -628,6 +628,34 @@ Yerel PC (Windows) üzerinde Redis çalışmadığında veya `localhost` IPv6 ü
 ## 3. Sonuç
 Yerelde Redis kurulu olmasa veya o an çalışmasa bile DEHA artık hata vermeden, sessizce "in-memory" (geçici hafıza) moduna düşüyor. Terminal akıcılığı korundu.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #16
+
+**Tarih:** 2026-04-30  
+**Kapsam:** ChromaDB 1.x Uyumluluğu ve IPv6 Localhost Desteği
+
+---
+
+## 1. Sorun Tanımı
+ChromaDB'nin yeni ana sürümüyle (1.x.x) birlikte gelen CLI değişiklikleri ve Windows üzerinde varsayılan olarak IPv6 (`::1`) üzerinden dinleme yapması nedeniyle iki ana sorun tespit edildi:
+1. Eski `python -m chromadb.cli.cli` komutu artık çalışmıyor.
+2. Port kontrol mekanizması sadece `127.0.0.1` (IPv4) baktığı için ChromaDB'yi "kapalı" sanıyor.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Çoklu Başlatma Stratejisi (`src/services/process-manager.ts`)
+- Sistemde varsa doğrudan `chroma` binary'sini kullanma önceliği eklendi.
+- Binary yoksa, Python üzerinden doğrudan `app()` entrypoint'ini tetikleyen bir başlatma script'i (fallback) eklendi. Bu sayede hem 0.5 hem de 1.x sürümleriyle tam uyumluluk sağlandı.
+
+### 2.2 Localhost Port Kontrolü
+- `isPortOpen` fonksiyonunda host belirtimi kaldırıldı. Böylece işletim sisteminin `localhost` çözümlemesine (IPv4 veya IPv6) dinamik olarak uyum sağlanması sağlandı.
+
+## 3. Sonuç
+ChromaDB artık hem Windows (yerel) hem de Linux (VPS) ortamlarında, farklı Python sürümleri ve paket versiyonları olsa dahi kararlı bir şekilde başlayabiliyor. Hafıza sistemi artık tam kapasite aktif.
+
+
 
 
 
