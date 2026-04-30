@@ -531,6 +531,34 @@ DEHA modelleri (AI), dosya içinde arama yapmak için bazen sistemde tanımlı o
 ## 3. Sonuç
 Modellerin "grep" halüsinasyonu artık bir hata değil, geçerli bir komut haline geldi. Bu sayede agent daha esnek ve hata payı düşük bir şekilde çalışmaya devam edecek.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #12
+
+**Tarih:** 2026-04-30  
+**Kapsam:** Temel Terminal Komutları (ls, cat, mkdir) İçin Tool Desteği
+
+---
+
+## 1. Sorun Tanımı
+Ajanların (AI) geliştirme alışkanlıklarından dolayı en temel dosya işlemlerini (listeleme, okuma, klasör oluşturma) kendi içlerinde tanımlı olan karmaşık isimli tool'lar (örn: `list_dir`) yerine standart terminal komut isimleriyle (`ls`, `cat`, `mkdir`) çağırma eğiliminde oldukları gözlemlendi. Bu durumun "Bilinmeyen tool" hatalarına yol açmaması için sistem esnetildi.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Alias ve Yeni Tool Tanımları (`src/tools/index.ts`)
+- **`ls`**: `list_dir` aracına alias (takma ad) olarak eklendi.
+- **`cat`**: `read_file` aracına alias olarak eklendi.
+- **`mkdir`**: Dizin oluşturmak için yeni bir yerleşik (built-in) tool olarak eklendi. (Daha önce sadece `run_shell` ile yapılabiliyordu).
+
+### 2.2 UI İyileştirmeleri
+- `printToolCall` fonksiyonuna bu yeni komutlar için uygun ikonlar (📁, 📄) atandı.
+- Artık model çok daha doğal bir şekilde dosya sisteminde gezinebiliyor ve işlem yapabiliyor.
+
+## 3. Sonuç
+Modelin halüsinasyon yapma riski olan en temel komutlar artık birer resmi "tool" haline getirildi. DEHA modelleri artık birer kıdemli yazılımcı gibi en kısa ve öz komutları kullanarak işlerini yürütebilecek.
+
+
 
 
 
