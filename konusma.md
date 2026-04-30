@@ -605,6 +605,30 @@ Yeni nesil Debian ve Ubuntu sistemlerinde (PEP 668), sistem Python'una doğrudan
 ## 3. Sonuç
 ChromaDB artık VPS üzerinde sorunsuz bir şekilde kurulabiliyor ve başlatılabiliyor. Uzun dönemli hafıza (cold archive) sistemi artık aktif.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #15
+
+**Tarih:** 2026-04-30  
+**Kapsam:** Yerel Redis Bağlantı Hataları ve Spam Engelleme
+
+---
+
+## 1. Sorun Tanımı
+Yerel PC (Windows) üzerinde Redis çalışmadığında veya `localhost` IPv6 üzerinden çözümlenmeye çalışıldığında, `ioredis` kütüphanesinin terminale sürekli "ECONNREFUSED" hataları bastığı ve akışı bozduğu tespit edildi.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 IPv4 ve Hata Yönetimi (`src/services/memory.ts`)
+- Varsayılan Redis URL'si `localhost` yerine doğrudan `127.0.0.1` olarak güncellendi (IPv6 çakışmasını önlemek için).
+- Redis istemcisine `.on('error')` dinleyicisi eklenerek bağlantı hatalarının terminale dökülmesi engellendi.
+- `retryStrategy: () => null` eklenerek, bağlantı kurulamadığında sürekli deneme yapıp terminali kilitlemesi engellendi.
+
+## 3. Sonuç
+Yerelde Redis kurulu olmasa veya o an çalışmasa bile DEHA artık hata vermeden, sessizce "in-memory" (geçici hafıza) moduna düşüyor. Terminal akıcılığı korundu.
+
+
 
 
 
