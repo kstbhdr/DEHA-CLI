@@ -160,6 +160,42 @@ export const DEHA_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'ls',
+    description: 'Alias for list_dir. List the contents of a directory.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:      { type: 'string', description: 'Directory path' },
+        recursive: { type: 'boolean', description: 'Include subdirectories (default: false)' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'cat',
+    description: 'Alias for read_file. Read the contents of a file.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path:       { type: 'string', description: 'File path' },
+        start_line: { type: 'number', description: 'Start line' },
+        end_line:   { type: 'number', description: 'End line' },
+      },
+      required: ['path'],
+    },
+  },
+  {
+    name: 'mkdir',
+    description: 'Create a new directory (including parents).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Directory path to create' },
+      },
+      required: ['path'],
+    },
+  },
+  {
     name: 'smoke_test',
     description: 'Run HTTP health checks against one or more endpoints.',
     input_schema: {
@@ -298,14 +334,17 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
   const inp = input as ToolInput;
   try {
     switch (name) {
-      case 'read_file':       return toolReadFile(inp);
+      case 'read_file':
+      case 'cat':             return toolReadFile(inp);
       case 'write_file':      return toolWriteFile(inp);
       case 'edit_file':       return editFile(inp as Parameters<typeof editFile>[0]);
       case 'insert_lines':    return insertLines(inp as Parameters<typeof insertLines>[0]);
       case 'delete_lines':    return deleteLines(inp as Parameters<typeof deleteLines>[0]);
-      case 'list_dir':        return toolListDir(inp);
+      case 'list_dir':
+      case 'ls':              return toolListDir(inp);
       case 'search_in_files':
       case 'grep':            return toolSearchInFiles(inp);
+      case 'mkdir':           return toolMkdir(inp);
       // Async toollar için placeholder — agent.ts'te executeToolAsync kullanılır
       case 'run_terminal':
       case 'run_python':
@@ -360,11 +399,14 @@ export async function executeToolAsync(
 export function printToolCall(name: string, input: Record<string, unknown>): void {
   const icons: Record<string, string> = {
     read_file:       '📄',
+    cat:             '📄',
     write_file:      '✏️ ',
     edit_file:       '🖊️ ',
     insert_lines:    '➕',
     delete_lines:    '🗑️ ',
     list_dir:        '📁',
+    ls:              '📁',
+    mkdir:           '📁',
     run_shell:       '⚡',
     run_terminal:    '💻',
     run_python:      '🐍',
@@ -422,6 +464,14 @@ function toolListDir(inp: ToolInput): string {
     return `${isDir ? '📁' : '📄'} ${e.name}${isDir ? '/' : ''}`;
   });
   return `[${resolved}]\n${lines.join('\n')}`;
+}
+
+function toolMkdir(inp: ToolInput): string {
+  if (!inp.path) throw new Error('path gerekli');
+  const resolved = path.resolve(inp.path);
+  if (fs.existsSync(resolved)) return `Dizin zaten mevcut: ${resolved}`;
+  fs.mkdirSync(resolved, { recursive: true });
+  return `Dizin oluşturuldu: ${resolved}`;
 }
 
 function listRecursive(base: string, dir: string, depth: number, maxDepth: number): string {
