@@ -450,6 +450,34 @@ Agent çok tehlikeli bir komut (`rm -rf` vs) çalıştırdığında kullanıcıy
 ## 3. Sonuç
 Kullanıcılar artık enter'a bastıktan sonra sistemin arkada çalıştığını net bir görsel geri bildirimle görebiliyor.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #9
+
+**Tarih:** 2026-04-30  
+**Kapsam:** Terminal Çoklu Satır Yapıştırma (Paste) Koruması ve Gönderim Optimizasyonu
+
+---
+
+## 1. Sorun Tanımı
+Bir önceki güncellemede, kopyalanan kod bloklarının terminalde düzgün alınabilmesi için `50ms debounce` mekanizması kurulmuştu. Ancak bu sistem, 50ms bittiği an panodan alınan kod bloğunu "Kullanıcı Enter'a bastı" varsayarak otomatik olarak modele gönderiyordu. Bu yüzden kullanıcı yapıştırdığı kodun sonuna "Bu koddaki hata nedir?" gibi ekstra bir şey ekleyemiyor ve model anlamsız cevaplar veriyordu.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Çoklu Satır Tespiti (`src/commands/interactive.ts`)
+- 50ms bekleme süresi dolduğunda tampona (buffer) alınan metin kontrol edilir. Eğer 1 satırdan fazlaysa (yapıştırma yapılmışsa), mesaj **otomatik olarak gönderilmez**.
+- Terminal otomatik olarak "Multi-line" (Çoklu Satır) moduna geçer ve `...` işaretiyle beklemeye başlar.
+
+### 2.2 Kullanıcı Yönlendirmesi
+- Yapıştırma tespit edildiğinde ekrana anında şu bilgi mesajı basılır:
+  ` (Çoklu satır yapıştırıldı. Mesajını yazmaya devam edebilirsin. Göndermek için boş satırda Enter'a bas.)`
+- Kullanıcı dilediği gibi yazı yazmaya devam eder. Mesajını bitirdiğinde sadece boş bir satırda Enter'a basması mesajın topluca gönderilmesi için yeterlidir.
+
+## 3. Sonuç
+Artık dışarıdan devasa kod blokları yapıştırıldığında sistem aniden tepki vermiyor. Kullanıcı kodun sonuna kendi sorusunu ekleme şansı buluyor ve sadece onayladığında istek gidiyor.
+
+
 
 
 
