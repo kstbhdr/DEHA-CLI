@@ -24,7 +24,7 @@ let _chromaProc: ChildProcess | null = null;
 
 function isPortOpen(port: number): Promise<boolean> {
   return new Promise(resolve => {
-    const s = net.createConnection({ port, host: '127.0.0.1' });
+    const s = net.createConnection({ port }); // host belirtmeyerek localhost (IPv4/IPv6) desteği sağlıyoruz
     s.setTimeout(600);
     s.on('connect', () => { s.destroy(); resolve(true); });
     s.on('error',   () => resolve(false));
@@ -110,11 +110,26 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
   // Veri dizini
   fs.mkdirSync(CHROMA_DATA, { recursive: true });
 
-  _chromaProc = spawn(
-    py,
-    ['-m', 'chromadb.cli.cli', 'run', '--path', CHROMA_DATA, '--port', String(CHROMA_PORT)],
-    { stdio: 'ignore', env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
-  );
+  // Yeni ChromaDB (1.x+) CLI modülü olarak çalıştırılamıyor (if __name__ == "__main__" bloğu yok)
+  // Bu yüzden doğrudan app() fonksiyonunu tetikleyen bir script veya varsa 'chroma' binary'sini kullanıyoruz.
+  const chromaBin = which('chroma') ? 'chroma' : null;
+
+  if (chromaBin) {
+    _chromaProc = spawn(
+      chromaBin,
+      ['run', '--path', CHROMA_DATA, '--port', String(CHROMA_PORT)],
+      { stdio: 'ignore', env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
+    );
+  } else {
+    // Python üzerinden app entrypoint'ini manuel tetikle (1.x ve 0.x uyumluluğu için)
+    const startScript = `from chromadb.cli.cli import app; import sys; sys.argv=['chroma','run','--path',r'${CHROMA_DATA}','--port','${CHROMA_PORT}']; app()`;
+    _chromaProc = spawn(
+      py,
+      ['-c', startScript],
+      { stdio: 'ignore', env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
+    );
+  }
+  
   _chromaProc.on('error', () => {});
 
   const ok = await waitPort(CHROMA_PORT, 12_000); // Python import süresi için 12 sn
