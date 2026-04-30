@@ -423,6 +423,34 @@ DEHA'nın yanlışlıkla sistemi bozmaması için konulan Regex kuralı çok kat
 ## 3. Sonuç
 Agent çok tehlikeli bir komut (`rm -rf` vs) çalıştırdığında kullanıcıya soracak. İstenirse kalıcı onay verilerek hızla devam edilebilecek.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #8
+
+**Tarih:** 2026-04-30  
+**Kapsam:** Yapay Zeka Bekleme Süresi İçin Yükleme Animasyonu (Spinner)
+
+---
+
+## 1. Sorun Tanımı
+Özellikle Tool (Araç) kullanımı olan isteklerde veya DeepSeek-R1 / Grok-Reasoning gibi düşünme (thinking) süresi uzun olan modellerde, sistem API'ye istek attıktan sonra ilk cevabı alana kadar terminalde hiçbir hareket olmuyordu. Bu durum, kullanıcının "Sistem dondu mu, çalışıyor mu?" diye şüpheye düşmesine sebep oluyordu.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 `ora` Spinner Entegrasyonu (`src/services/ai-service.ts`)
+- Terminalde yükleme animasyonları göstermek için projede zaten yüklü olan `ora` kütüphanesi kullanıldı.
+- `withSpinner` adında genel bir yardımcı asenkron fonksiyon yazıldı. Bu fonksiyon tüm API çağrılarını saracak şekilde tasarlandı.
+- Animasyon metni olarak `DEHA düşünüyor... [provider/model]` formatı belirlendi. (Örn: `DEHA düşünüyor... [openrouter/deepseek-r1]`)
+
+### 2.2 Akış Optimizasyonu
+- API isteği tetiklendiği anda mavi renkli dönen bir `dots` animasyonu başlatılıyor.
+- API'den **ilk kelime (chunk)** geldiği milisaniye spinner durduruluyor ve o satır temizlenip normal stream (akış) ile kelimeler yazdırılmaya başlanıyor.
+
+## 3. Sonuç
+Kullanıcılar artık enter'a bastıktan sonra sistemin arkada çalıştığını net bir görsel geri bildirimle görebiliyor.
+
+
 
 
 
