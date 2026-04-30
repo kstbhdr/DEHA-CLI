@@ -128,51 +128,23 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
   const prompt = async () => {
     const input = await new Promise<string>((resolve) => {
       let buffer = '';
-      let timeout: NodeJS.Timeout | null = null;
-      let isMultilineMode = false;
 
       rl.setPrompt(chalk.bold.cyan('DEHA ❯ '));
       rl.prompt();
 
       const onLine = (line: string) => {
-        if (isMultilineMode && line.trim() === '') {
-          if (timeout) clearTimeout(timeout);
-          rl.removeListener('line', onLine);
-          resolve(buffer);
-          return;
-        }
-
+        // Satır \ ile bitiyorsa manuel multi-line (alt satıra geç)
         if (line.endsWith('\\')) {
           buffer += (buffer ? '\n' : '') + line.slice(0, -1);
-          isMultilineMode = true;
           rl.setPrompt('... ');
           rl.prompt();
           return;
         }
 
         buffer += (buffer ? '\n' : '') + line;
-
-        if (timeout) clearTimeout(timeout);
-
-        if (isMultilineMode) {
-          rl.setPrompt('... ');
-          rl.prompt();
-          return;
-        }
-
-        timeout = setTimeout(() => {
-          const lineCount = buffer.split('\n').length;
-          
-          if (lineCount > 1) {
-            isMultilineMode = true;
-            console.log(chalk.dim('\n  (Çoklu satır yapıştırıldı. Mesajını yazmaya devam edebilirsin. Göndermek için boş satırda Enter\'a bas.)'));
-            rl.setPrompt('... ');
-            rl.prompt();
-          } else {
-            rl.removeListener('line', onLine);
-            resolve(buffer);
-          }
-        }, 50);
+        
+        rl.removeListener('line', onLine);
+        resolve(buffer);
       };
 
       rl.on('line', onLine);

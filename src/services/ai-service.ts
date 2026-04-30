@@ -5,11 +5,6 @@ import { DehaConfig, RoleConfig, resolveApiKey, resolveApiUrl } from '../config'
 import { recordUsage, RoleLabel } from './usage-tracker';
 import { getCached, setCache } from './cache';
 
-/** Basit bekleme göstergesi — readline ile çakışmaz */
-function showThinking(provider: string, model: string): void {
-  process.stderr.write(chalk.dim(`  ⏳ DEHA düşünüyor... [${provider}/${model}]\n`));
-}
-
 export interface Message {
   role: 'user' | 'assistant';
   content: string;
@@ -39,8 +34,6 @@ export async function callRole(
 
   const track = (inp: number, out: number) =>
     recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig);
-
-  showThinking(role.provider, role.model);
 
   switch (role.provider) {
     case 'claude':
@@ -139,8 +132,6 @@ export async function sendWithTools(
   const apiKey = config.anthropicApiKey;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY eksik');
 
-  showThinking(config.provider, config.claudeModel);
-
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model: config.claudeModel,
@@ -193,8 +184,6 @@ export async function sendWithToolsOpenAICompat(
   if (config.openrouterProvider) {
     body.provider = { only: [config.openrouterProvider], allow_fallbacks: false };
   }
-
-  showThinking(role.provider, role.model);
 
   const response = await axios.post(`${apiUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
