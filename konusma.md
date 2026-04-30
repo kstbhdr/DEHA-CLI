@@ -394,5 +394,35 @@ Kullanıcı `deha build` ile tüm pipeline'ı (Planner -> Coder -> Judge) otonom
 ## 3. Sonuç
 Kullanıcılar artık diledikleri zaman sadece `deha judge` veya `/judge` diyerek yazdıkları kodun doğruluğunu veya kalitesini DEHA'ya sorabilir.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #7
+
+**Tarih:** 2026-04-30  
+**Kapsam:** Yıkıcı Komutlarda Güvenlik Kontrolü ve Etkileşimli İzin Mekanizması
+
+---
+
+## 1. Sorun Tanımı
+DEHA'nın yanlışlıkla sistemi bozmaması için konulan Regex kuralı çok katıydı (`rm -rf /` yerine içinde ilk `/` geçen `rm /root/CLAUDE.md` gibi dosyaları da sildirmiyordu). Ayrıca engellendiği durumlarda kullanıcıdan teyit almak yerine doğrudan hata atıyordu.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Regex Düzeltmesi (`src/tools/index.ts`)
+- `\/` olan kısım `\/(\s|$)` olarak değiştirildi. Böylece sadece kök dizini silmek (yanında slash'tan sonra boşluk veya stringin sonu geliyorsa) yasaklandı, normal absolute (mutlak) yol silmeleri serbest bırakıldı.
+
+### 2.2 İnteraktif Onay Mekanizması
+- `run_shell` (Terminal) tool'u tamamen asenkron yapıya (`executeToolAsync`) taşındı.
+- Tehlikeli bir komut tespit edildiğinde hemen hata dönmek yerine `inquirer` kullanılarak ekrana uyarı basılması sağlandı.
+- Kullanıcıya üç seçenek sunuldu:
+  1. **İptal Et:** Klasik hata fırlatılır.
+  2. **Bir kerelik izin ver:** Sadece o komuta özgü güvenlik kalkanı aşılarak çalıştırılır.
+  3. **Her şeye izin ver:** Oturum açık kaldığı sürece (`autoAllowDangerousCommands = true`) bir daha hiçbir komut için soru sormaz.
+
+## 3. Sonuç
+Agent çok tehlikeli bir komut (`rm -rf` vs) çalıştırdığında kullanıcıya soracak. İstenirse kalıcı onay verilerek hızla devam edilebilecek.
+
+
 
 
