@@ -24,11 +24,18 @@ let _chromaProc: ChildProcess | null = null;
 
 function isPortOpen(port: number): Promise<boolean> {
   return new Promise(resolve => {
-    const s = net.createConnection({ port }); // host belirtmeyerek localhost (IPv4/IPv6) desteği sağlıyoruz
-    s.setTimeout(600);
-    s.on('connect', () => { s.destroy(); resolve(true); });
-    s.on('error',   () => resolve(false));
-    s.on('timeout', () => { s.destroy(); resolve(false); });
+    // Önce IPv4 sonra IPv6 dene (VPS'te Chroma genelde ::1'de çalışır)
+    const tryConnect = (host: string) => {
+      const s = net.createConnection({ port, host });
+      s.setTimeout(500);
+      s.on('connect', () => { s.destroy(); resolve(true); });
+      s.on('error',   () => {
+        if (host === '127.0.0.1') tryConnect('::1');
+        else resolve(false);
+      });
+      s.on('timeout', () => { s.destroy(); if (host === '127.0.0.1') tryConnect('::1'); else resolve(false); });
+    };
+    tryConnect('127.0.0.1');
   });
 }
 
@@ -55,20 +62,17 @@ export async function ensureRedis(): Promise<'running' | 'started' | 'unavailabl
   if (await isPortOpen(REDIS_PORT)) return 'running';
 
   try {
-    // redis-memory-server: npm paketi ile gelen binary'yi kullan
     const { RedisMemoryServer } = await import('redis-memory-server');
     const server = new RedisMemoryServer({
       instance: { port: REDIS_PORT },
       binary: { downloadDir: path.join(os.homedir(), '.deha', 'redis-bin') },
     });
     await server.start();
-    process.env.REDIS_URL = `redis://127.0.0.1:${REDIS_PORT}`;
+    process.env.REDIS_URL = `redis://localhost:${REDIS_PORT}`;
 
-    // Kapanışta durdur
     process.once('exit', () => server.stop().catch(() => {}));
     return 'started';
   } catch {
-    // redis-memory-server başaramazsa sistem redis-server'ı dene
     if (!which('redis-server')) return 'unavailable';
 
     _redisProc = spawn('redis-server', ['--port', String(REDIS_PORT), '--loglevel', 'warning'], {
@@ -78,7 +82,7 @@ export async function ensureRedis(): Promise<'running' | 'started' | 'unavailabl
 
     const ok = await waitPort(REDIS_PORT, 3000);
     if (ok) {
-      process.env.REDIS_URL = `redis://127.0.0.1:${REDIS_PORT}`;
+      process.env.REDIS_URL = `redis://localhost:${REDIS_PORT}`;
       return 'started';
     }
     return 'unavailable';
@@ -92,10 +96,8 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
 
   const py = which('python3') ? 'python3' : 'python';
 
-  // İlk kullanımda chromadb pip paketi kur (flag dosyası yoksa)
   if (!fs.existsSync(CHROMA_FLAG)) {
     try {
-      // PEP 668 engeli için --break-system-packages ekliyoruz (Debian/Ubuntu 12+ için gerekli)
       execSync(`${py} -m pip install chromadb --quiet --disable-pip-version-check --break-system-packages`, {
         stdio: 'pipe',
         timeout: 120_000,
@@ -107,22 +109,18 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
     }
   }
 
-  // Veri dizini
   fs.mkdirSync(CHROMA_DATA, { recursive: true });
 
-  // Yeni ChromaDB (1.x+) CLI modülü olarak çalıştırılamıyor (if __name__ == "__main__" bloğu yok)
-  // Bu yüzden doğrudan app() fonksiyonunu tetikleyen bir script veya varsa 'chroma' binary'sini kullanıyoruz.
   const chromaBin = which('chroma') ? 'chroma' : null;
 
   if (chromaBin) {
     _chromaProc = spawn(
       chromaBin,
-      ['run', '--path', CHROMA_DATA, '--port', String(CHROMA_PORT)],
+      ['run', '--path', CHROMA_DATA, '--port', String(CHROMA_PORT), '--host', 'localhost'],
       { stdio: 'ignore', env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
     );
   } else {
-    // Python üzerinden app entrypoint'ini manuel tetikle (1.x ve 0.x uyumluluğu için)
-    const startScript = `from chromadb.cli.cli import app; import sys; sys.argv=['chroma','run','--path',r'${CHROMA_DATA}','--port','${CHROMA_PORT}']; app()`;
+    const startScript = `from chromadb.cli.cli import app; import sys; sys.argv=['chroma','run','--path',r'${CHROMA_DATA}','--port','${CHROMA_PORT}','--host','localhost']; app()`;
     _chromaProc = spawn(
       py,
       ['-c', startScript],
@@ -132,9 +130,9 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
   
   _chromaProc.on('error', () => {});
 
-  const ok = await waitPort(CHROMA_PORT, 12_000); // Python import süresi için 12 sn
+  const ok = await waitPort(CHROMA_PORT, 15_000); // VPS'te biraz daha sabırlı olalım
   if (ok) {
-    process.env.CHROMA_URL = `http://127.0.0.1:${CHROMA_PORT}`;
+    process.env.CHROMA_URL = `http://localhost:${CHROMA_PORT}`;
     return 'started';
   }
   return 'unavailable';
