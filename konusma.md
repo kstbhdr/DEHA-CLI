@@ -682,6 +682,34 @@ DEHA-CLI'ın büyük görevlerde sürekli durması ve kullanıcının "devam et"
 ## 3. Sonuç
 DEHA artık çok daha kararlı ve "görev odaklı" çalışıyor. Kullanıcı müdahalesi gereksinimi %70 oranında azaltıldı. Büyük projeler tek bir komutla çok daha ileri aşamalara taşınabiliyor.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #18
+
+**Tarih:** 2026-05-02  
+**Kapsam:** "Bağlam Çivisi" (Context Anchor) ve Dizin Hafızası Optimizasyonu
+
+---
+
+## 1. Sorun Tanımı
+Ajanın uzun konuşmalarda veya yeni turlarda çalışma dizinini unutup kullanıcı ana dizinine (`C:\Users\BAHADIR`) geri dönmesi (Context Drift) sorunu saptandı. Bu durum, her seferinde tekrar dizin belirtme zahmetine yol açıyordu.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Zeki Dizin Tespiti (`src/services/session-memory.ts`)
+- `detectWorkDir` fonksiyonu geliştirildi. Artık sadece tam yolları değil, "aimhack klasörü" gibi doğal dil ifadelerini de mevcut bağlam içinde çözebiliyor.
+
+### 2.2 Agresif Dizin Enjeksiyonu (`src/commands/agent.ts`)
+- `ACTIVE WORKING DIRECTORY` notu `[PROJECT CONTEXT]` başlığı altında daha sert bir talimat setiyle güncellendi. Ajanın bu dizinden çıkmaması ve dosya işlemlerini burada tutması CRITICAL RULE olarak tanımlandı.
+
+### 2.3 Proje Bilinci (System Prompt - `src/prompts.config.ts`)
+- Modele global seviyede "Project Awareness" kuralı eklendi. Model artık kendisini projeye "check-in" yapmış sayacak ve sürekliliği koruyacak.
+
+## 3. Sonuç
+Bağlam kaybı sorunu mimari seviyede çözüldü. DEHA artık üzerinde çalıştığı projeyi "ev" olarak görüyor ve kullanıcı aksini söylemedikçe ana dizine kaçmıyor.
+
+
 
 
 
