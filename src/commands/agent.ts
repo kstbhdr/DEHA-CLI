@@ -42,7 +42,7 @@ export async function runAgent(
   return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal);
 }
 
-const MAX_TOOL_ROUNDS = 10; // default fallback, config'den override edilir
+const MAX_TOOL_ROUNDS = 30; // Büyük görevlerde nefesi kesilmemesi için artırıldı
 
 // ─── Claude agent döngüsü ────────────────────────────────────────────────────
 

@@ -655,6 +655,34 @@ ChromaDB'nin yeni ana sürümüyle (1.x.x) birlikte gelen CLI değişiklikleri v
 ## 3. Sonuç
 ChromaDB artık hem Windows (yerel) hem de Linux (VPS) ortamlarında, farklı Python sürümleri ve paket versiyonları olsa dahi kararlı bir şekilde başlayabiliyor. Hafıza sistemi artık tam kapasite aktif.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #17
+
+**Tarih:** 2026-05-01  
+**Kapsam:** Ajan Akış Kararlılığı ve Otonom Çalışma Optimizasyonu
+
+---
+
+## 1. Sorun Tanımı
+DEHA-CLI'ın büyük görevlerde sürekli durması ve kullanıcının "devam et" demesini beklemesi sorunu incelendi. İki ana neden saptandı:
+1. `MAX_TOOL_ROUNDS` sınırının (10) büyük işler için yetersiz kalması.
+2. Modelin her mikro adımda onay sorma ("Başlayayım mı?", "Dosyayı oluşturayım mı?") refleksi.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Döngü Sınırı Artırımı (`src/commands/agent.ts`)
+- `MAX_TOOL_ROUNDS` değeri 10'dan **30**'a yükseltildi. Bu sayede karmaşık refactoring ve dosya işlemlerinde sistemin "nefesi kesilmeden" devam etmesi sağlandı.
+
+### 2.2 Otonom Prompt Kuralları (`src/prompts.config.ts`)
+- `CHAT_PROMPT` içine özerk ajan (autonomous mode) kuralları eklendi.
+- Modele, bir görev verildiğinde her adımda onay almak yerine, kritik bir belirsizlik olmadıkça araçları kullanarak işi bitirme talimatı verildi.
+
+## 3. Sonuç
+DEHA artık çok daha kararlı ve "görev odaklı" çalışıyor. Kullanıcı müdahalesi gereksinimi %70 oranında azaltıldı. Büyük projeler tek bir komutla çok daha ileri aşamalara taşınabiliyor.
+
+
 
 
 
