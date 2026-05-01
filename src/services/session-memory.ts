@@ -164,17 +164,37 @@ export function getWorkDir(): string {
   return _state.workDir;
 }
 
-/** Kullanıcı mesajından dizin yolu tespit et (örn. "C:\Users\..." veya "/home/...") */
+/** Kullanıcı mesajından dizin yolu tespit et (örn. "C:\Users\..." veya "aimhack klasörü") */
 export function detectWorkDir(message: string): string | null {
-  // Windows absolute path: C:\... veya C:/...
+  const currentDir = _state.workDir;
+  const lowered = message.toLowerCase();
+
+  // 1. Windows absolute path: C:\... veya C:/...
   const winMatch = message.match(/\b([A-Za-z]:[\\\/][^\s,'"]+)/);
   if (winMatch) {
-    const candidate = winMatch[1].replace(/[\\\/]+$/, ''); // trailing slash kaldır
+    const candidate = winMatch[1].replace(/[\\\/]+$/, '');
     if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
       return candidate;
     }
   }
-  // Unix absolute path: /home/... or /Users/...
+
+  // 2. Klasör ismiyle geçiş (örn: "aimhack klasöründe çalışalım")
+  // Mesaj içindeki kelimeleri ayırıp mevcut dizinde böyle bir klasör var mı bakıyoruz
+  const words = message.split(/\s+/);
+  for (const word of words) {
+    const cleaned = word.replace(/['".,]/g, '');
+    if (!cleaned || cleaned.length < 3) continue;
+    
+    const candidate = path.resolve(currentDir, cleaned);
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+      // Sadece "klasör", "dizin", "project", "folder" kelimeleri yanındaysa veya direkt isimse
+      if (lowered.includes('klasör') || lowered.includes('dizin') || lowered.includes('project') || words.length < 5) {
+        return candidate;
+      }
+    }
+  }
+
+  // 3. Unix absolute path: /home/... or /Users/...
   const unixMatch = message.match(/\b(\/[^\s,'"]+)/);
   if (unixMatch) {
     const candidate = unixMatch[1].replace(/\/+$/, '');

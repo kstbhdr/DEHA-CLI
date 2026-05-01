@@ -9,7 +9,7 @@ import { getWorkDir } from '../services/session-memory';
 function injectWorkDir(config: DehaConfig): DehaConfig {
   const workDir = getWorkDir();
   const workDirNote = workDir
-    ? `\n\n## ACTIVE WORKING DIRECTORY\nYou are working inside: ${workDir}\nALWAYS use this directory as the base for ALL file operations (read_file, list_dir, search_in_files, write_file, run_shell). NEVER look outside this directory unless explicitly told to.`
+    ? `\n\n[PROJECT CONTEXT]\n- ACTIVE WORKING DIRECTORY: ${workDir}\n- CRITICAL RULE: You are currently working in this project. All file operations (read, write, list, search) and shell commands MUST be performed within this directory. Do NOT look at C:\\Users\\BAHADIR or other parent directories unless the user explicitly asks for a different project.\n- FOCUS: Stay within the project context. If you need to list files, list the ones in ${workDir} first.`
     : '';
   return {
     ...config,
