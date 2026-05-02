@@ -56,6 +56,7 @@ async function runAgentClaude(
 ): Promise<string> {
   const messages: Message[] = [...history, { role: 'user', content: userMessage }];
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
+  const aggressiveAutoContinue = wantsUninterruptedExecution(userMessage);
   let round = 0;
   let finalText = '';
   let autoContinueRounds = 0;
@@ -71,7 +72,7 @@ async function runAgentClaude(
 
     if (toolCalls.length === 0) {
       finalText = text;
-      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds)) {
+      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
         autoContinueRounds++;
         forceToolUse = true;
         messages.push({ role: 'assistant', content: text });
@@ -135,6 +136,7 @@ async function runAgentOpenAI(
   ];
 
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
+  const aggressiveAutoContinue = wantsUninterruptedExecution(userMessage);
   let round = 0;
   let finalText = '';
   let autoContinueRounds = 0;
@@ -157,7 +159,7 @@ async function runAgentOpenAI(
 
     if (toolCalls.length === 0) {
       finalText = text;
-      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds)) {
+      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
         autoContinueRounds++;
         forceToolUse = true;
         messages.push(rawAssistantMsg);
@@ -217,13 +219,18 @@ function shouldAutoContinue(
   round: number,
   maxRounds: number,
   autoContinueRounds: number,
+  aggressiveAutoContinue = false,
 ): boolean {
   if (!text.trim()) return false;
   if (round >= maxRounds) return false;
   if (autoContinueRounds >= MAX_AUTO_CONTINUE_ROUNDS) return false;
 
   const normalized = text.toLowerCase().trim();
-  if (normalized.length > 500) return false;
+  if (normalized.length > 900) return false;
+
+  if (aggressiveAutoContinue && !looksLikeFinalAnswer(normalized)) {
+    return true;
+  }
 
   const interimPatterns = [
     /\bgörelim\b/,
@@ -234,8 +241,20 @@ function shouldAutoContinue(
     /\bekleyeceğim\b/,
     /\bbelirleyelim\b/,
     /\bson satırları\b/,
+    /\bdurmuyorum\b/,
+    /\byazıyorum\b/,
+    /\bekliyorum\b/,
+    /\bdüzelteceğim\b/,
+    /\bekleyeceğim\b/,
+    /\bilerliyorum\b/,
+    /\bbitireceğim\b/,
+    /\beklemeden\b/,
     /\bfonksiyonunu\b.*\bgörelim\b/,
     /\bşimdi\b.*\b(bakayım|görelim|inceleyelim|bulayım)\b/,
+    /\bşimdi\b.*\b(yazıyorum|ekliyorum|düzeltiyorum|okuyorum|bakıyorum)\b/,
+    /\bhemen\b.*\b(yazıyorum|bakıyorum|ekliyorum|okuyorum)\b/,
+    /\bönce\b.*\b(oku|okuyayım|bakayım|görelim|bulayım)\b/,
+    /\b(yapacağım|edeceğim|ekleyeceğim|yazacağım|bakacağım|okuyacağım|bulacağım)\b/,
     /\blet me\b.*\b(check|inspect|find|look)\b/,
     /\bi('| a)?ll\b.*\b(check|inspect|look|find)\b/,
   ];
@@ -250,6 +269,37 @@ function shouldAutoContinue(
     normalized.includes('next i');
 
   return containsInterimLanguage || looksLikeProgressOnly;
+}
+
+function wantsUninterruptedExecution(userMessage: string): boolean {
+  const normalized = userMessage.toLowerCase();
+  return normalized.includes('devam et')
+    || normalized.includes('durma')
+    || normalized.includes('bitene kadar')
+    || normalized.includes('bitiresiye kadar')
+    || normalized.includes('tamam devam et')
+    || normalized.includes('sürekli devam');
+}
+
+function looksLikeFinalAnswer(text: string): boolean {
+  const finalPatterns = [
+    /\btamamlandı\b/,
+    /\bbitti\b/,
+    /\bçözüldü\b/,
+    /\bhazır\b/,
+    /\bsonuç\b/,
+    /\bözet\b/,
+    /\bdoğrulama\b/,
+    /\btest\b.*\b(geçti|başarılı)\b/,
+    /\bbuild\b.*\b(geçti|başarılı)\b/,
+    /\bfinal\b/,
+    /\bcompleted\b/,
+    /\bdone\b/,
+    /\bfixed\b/,
+  ];
+
+  if (text.includes('```')) return true;
+  return finalPatterns.some((pattern) => pattern.test(text));
 }
 
 // ─── Tool yürütücü (ortak) ───────────────────────────────────────────────────
