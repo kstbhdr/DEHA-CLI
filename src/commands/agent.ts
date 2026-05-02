@@ -284,7 +284,11 @@ async function shouldContinueAfterNoToolResponse(
     return true;
   }
 
-  if (!assistantText.trim() || looksLikeFinalAnswer(assistantText.toLowerCase().trim())) {
+  if (!assistantText.trim()) {
+    return aggressiveAutoContinue || autoContinueRounds < MAX_AUTO_CONTINUE_ROUNDS;
+  }
+
+  if (looksLikeFinalAnswer(assistantText.toLowerCase().trim())) {
     return false;
   }
 
