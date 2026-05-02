@@ -434,11 +434,15 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         const compressed = await autoCompress(
           async (msgs) => {
             const summaryPrompt = [
-              'Aşağıdaki konuşmayı kısa ve öz şekilde özetle.',
-              'ÖNEMLİ: Yapılan işleri, kararları, çözülen sorunları ve devam eden görevleri koru.',
-              'Geçerliliğini yitirmiş bilgileri (eski hatalar, denenip vazgeçilen yaklaşımlar) çıkar.',
-              'Özet Türkçe olsun.\n\n---\n',
-              ...msgs.map(m => `${m.role === 'user' ? 'Kullanıcı' : 'DEHA'}: ${m.content.slice(0, 1000)}`),
+              'Aşağıdaki teknik konuşmayı bir "Mühendislik Özeti" (Engineering Summary) olarak özetle.',
+              'ÖNEMLİ: Aşağıdaki bilgileri ASLA KAYBETME:',
+              `- Aktif Çalışma Dizini (WorkDir: ${getContextStats(maxCtxTokens).workDir})`,
+              '- Üzerinde çalışılan kritik dosya yolları ve bağımlılıklar.',
+              '- Mimari kararlar ve "Neden?" sorusunun cevapları.',
+              '- Henüz çözülmemiş teknik borçlar veya bekleyen alt görevler.',
+              'Gereksiz nezaket cümlelerini ve tekrarlanan hata mesajlarını çıkar.',
+              'Özet teknik, yoğun ve Türkçe olsun.\n\n---\n',
+              ...msgs.map(m => `${m.role === 'user' ? 'Kullanıcı' : 'DEHA'}: ${m.content.slice(0, 1500)}`),
             ].join('\n');
             return sendMessage([{ role: 'user', content: summaryPrompt }], config);
           },

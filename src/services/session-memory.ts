@@ -246,11 +246,14 @@ export async function summarizeOld(
   try {
     const newSummary = await summarizeFn(toSummarize);
 
+    // Bağlam Çivisi (Context Anchor): Aktif dizin ve kritik bilgileri koru
+    const stickyContext = `[STICKY CONTEXT]\n- ACTIVE WORKDIR: ${_state.workDir}\n- SESSION ID: ${_state.sessionId}\n- SUMMARY VERSION: ${_state.compressCount + 1}\n\n`;
+
     // Birikimli özet: eski özet + yeni özet
     if (_state.summary) {
-      _state.summary = `${_state.summary}\n\n---\n\n[Sonraki bölüm]\n${newSummary}`;
+      _state.summary = `${stickyContext}${_state.summary}\n\n---\n\n[Sonraki Bölüm Özeti]\n${newSummary}`;
     } else {
-      _state.summary = newSummary;
+      _state.summary = `${stickyContext}${newSummary}`;
     }
 
     // Özetlenen mesajları memory'den çıkar, sadece hot window'u tut
@@ -259,7 +262,6 @@ export async function summarizeOld(
     _writeWarmBuffer();
     return true;
   } catch {
-    // Özetleme başarısız olursa eski mesajları koru
     return false;
   }
 }
