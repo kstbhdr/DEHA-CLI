@@ -63,14 +63,12 @@ async function runAgentClaude(
 
   while (round < maxRounds) {
     round++;
-    console.log('\n' + chalk.bold.cyan('DEHA:'));
+    let roundText = '';
 
     const { text, toolCalls } = await sendWithTools(messages, config, allTools, (chunk) => {
-      process.stdout.write(chunk);
-      finalText += chunk;
+      roundText += chunk;
     }, abortSignal, forceToolUse ? 'required' : 'auto');
 
-    if (text) process.stdout.write('\n');
     if (toolCalls.length === 0) {
       finalText = text;
       if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds)) {
@@ -83,12 +81,23 @@ async function runAgentClaude(
         });
         continue;
       }
+      if (text) {
+        console.log('\n' + chalk.bold.cyan('DEHA:'));
+        process.stdout.write(roundText);
+        process.stdout.write('\n');
+      }
       break;
     }
 
     const toolResultBlocks: string[] = [];
     autoContinueRounds = 0;
     forceToolUse = false;
+
+    if (text) {
+      console.log('\n' + chalk.bold.cyan('DEHA:'));
+      process.stdout.write(roundText);
+      process.stdout.write('\n');
+    }
 
     for (const tc of toolCalls) {
       printToolCall(tc.name, tc.input);
@@ -133,21 +142,18 @@ async function runAgentOpenAI(
 
   while (round < maxRounds) {
     round++;
-    console.log('\n' + chalk.bold.cyan('DEHA:'));
+    let roundText = '';
 
     const { text, toolCalls, rawAssistantMsg } = await sendWithToolsOpenAICompat(
       messages,
       config,
       allTools,
       (chunk) => {
-        process.stdout.write(chunk);
-        finalText += chunk;
+        roundText += chunk;
       },
       abortSignal,
       forceToolUse ? 'required' : 'auto',
     );
-
-    if (text) process.stdout.write('\n');
 
     if (toolCalls.length === 0) {
       finalText = text;
@@ -158,6 +164,11 @@ async function runAgentOpenAI(
         messages.push({ role: 'user', content: AUTO_CONTINUE_PROMPT });
         continue;
       }
+      if (text) {
+        console.log('\n' + chalk.bold.cyan('DEHA:'));
+        process.stdout.write(roundText);
+        process.stdout.write('\n');
+      }
       break;
     }
 
@@ -165,6 +176,12 @@ async function runAgentOpenAI(
     messages.push(rawAssistantMsg);
     autoContinueRounds = 0;
     forceToolUse = false;
+
+    if (text) {
+      console.log('\n' + chalk.bold.cyan('DEHA:'));
+      process.stdout.write(roundText);
+      process.stdout.write('\n');
+    }
 
     // Tool'ları çalıştır ve sonuçları ekle
     for (const tc of toolCalls) {
