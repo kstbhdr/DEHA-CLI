@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { DehaConfig } from '../config';
-import { Message, OAIMessage, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
+import { Message, OAIMessage, sendMessage, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
 import { getWorkDir } from '../services/session-memory';
@@ -72,7 +72,7 @@ async function runAgentClaude(
 
     if (toolCalls.length === 0) {
       finalText = text;
-      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
+      if (await shouldContinueAfterNoToolResponse(userMessage, text, config, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
         autoContinueRounds++;
         forceToolUse = true;
         messages.push({ role: 'assistant', content: text });
@@ -159,7 +159,7 @@ async function runAgentOpenAI(
 
     if (toolCalls.length === 0) {
       finalText = text;
-      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
+      if (await shouldContinueAfterNoToolResponse(userMessage, text, config, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
         autoContinueRounds++;
         forceToolUse = true;
         messages.push(rawAssistantMsg);
@@ -271,6 +271,26 @@ function shouldAutoContinue(
   return containsInterimLanguage || looksLikeProgressOnly;
 }
 
+async function shouldContinueAfterNoToolResponse(
+  userMessage: string,
+  assistantText: string,
+  config: DehaConfig,
+  round: number,
+  maxRounds: number,
+  autoContinueRounds: number,
+  aggressiveAutoContinue: boolean,
+): Promise<boolean> {
+  if (shouldAutoContinue(assistantText, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
+    return true;
+  }
+
+  if (!assistantText.trim() || looksLikeFinalAnswer(assistantText.toLowerCase().trim())) {
+    return false;
+  }
+
+  return !(await isTaskComplete(userMessage, assistantText, config));
+}
+
 function wantsUninterruptedExecution(userMessage: string): boolean {
   const normalized = userMessage.toLowerCase();
   return normalized.includes('devam et')
@@ -300,6 +320,43 @@ function looksLikeFinalAnswer(text: string): boolean {
 
   if (text.includes('```')) return true;
   return finalPatterns.some((pattern) => pattern.test(text));
+}
+
+async function isTaskComplete(
+  userMessage: string,
+  assistantText: string,
+  config: DehaConfig,
+): Promise<boolean> {
+  const judgeConfig: DehaConfig = {
+    ...config,
+    temperature: 0,
+    maxTokens: 8,
+    systemPrompt: [
+      'You are a completion checker for an autonomous coding agent.',
+      'Decide whether the assistant has fully completed the user request.',
+      'Reply with exactly one word: COMPLETE or CONTINUE.',
+      'Reply COMPLETE only if the task is clearly finished, not if the assistant is describing the next step.',
+    ].join(' '),
+  };
+
+  try {
+    const verdict = await sendMessage([
+      {
+        role: 'user',
+        content: [
+          `USER_REQUEST: ${userMessage}`,
+          '',
+          `ASSISTANT_RESPONSE: ${assistantText}`,
+          '',
+          'Is the task fully complete?',
+        ].join('\n'),
+      },
+    ], judgeConfig);
+
+    return verdict.trim().toUpperCase().startsWith('COMPLETE');
+  } catch {
+    return false;
+  }
 }
 
 // ─── Tool yürütücü (ortak) ───────────────────────────────────────────────────
