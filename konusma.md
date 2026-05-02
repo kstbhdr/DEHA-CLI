@@ -735,6 +735,33 @@ VPS (Linux) ortamında Redis ve ChromaDB servislerinin "yok" görünmesi sorunu 
 ## 3. Sonuç
 Servis yönetim motoru artık hem Windows hem de Linux/VPS ortamlarında, IPv4 veya IPv6 fark etmeksizin servisleri görebiliyor ve bağlayabiliyor.
 
+---
+---
+
+# DEHA-CLI — Konuşma Özeti #20
+
+**Tarih:** 2026-05-02  
+**Kapsam:** "Kırılmaz Bağlam" (Unbreakable Context) ve Teknik Özetleme Fixi
+
+---
+
+## 1. Sorun Tanımı
+Konuşma geçmişi uzadığında (Context Compression sırasında) aktif çalışma dizini ve proje hedeflerinin kaybolması ("Kafası dağılıyor" durumu) sorunu saptandı. Mevcut özetleme mantığının teknik detayları yeterince koruyamadığı anlaşıldı.
+
+## 2. Yapılan Değişiklikler
+
+### 2.1 Bağlam Çivisi v2 (`src/services/session-memory.ts`)
+- Özetleme sonrası bağlamın en başına `[STICKY CONTEXT]` bloğu eklendi.
+- Aktif dizin (`WorkDir`) özetin dışında sabit bir etiket olarak korunmaya başlandı.
+
+### 2.2 Mühendislik Özeti Promptu (`src/commands/interactive.ts`)
+- Özetleme promptu tamamen teknik (Engineering Summary) odaklı hale getirildi.
+- Dosya yolları, bağımlılıklar ve mimari kararların özet sırasında "dokunulmaz" olarak korunması talimatı verildi.
+
+## 3. Sonuç
+Bağlam kaybı ve "kafa dağılması" sorunları mimari seviyede minimize edildi. DEHA artık uzun konuşmalarda dahi hangi dosyada ve hangi dizinde çalıştığını çok daha yüksek doğrulukla hatırlıyor.
+
+
 
 
 
