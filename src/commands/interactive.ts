@@ -395,8 +395,9 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           console.log(chalk.green('✓'));
         }
 
-        // Bağlamı session-memory'den oluştur (özet + tüm mevcut mesajlar + yeni mesaj)
-        const contextHistory = buildContextMessages(enrichedMessage);
+        // Bağlamı session-memory'den oluştur. Yeni mesajı runAgent ekleyecek;
+        // burada tekrar eklersek model aynı isteği iki kez görür.
+        const contextHistory = buildContextMessages();
 
         const abortController = new AbortController();
         const onKeypress = (str: string, key: any) => {

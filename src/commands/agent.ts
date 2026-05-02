@@ -43,6 +43,7 @@ export async function runAgent(
 }
 
 const MAX_TOOL_ROUNDS = 30; // Büyük görevlerde nefesi kesilmemesi için artırıldı
+const MAX_AUTO_CONTINUE_ROUNDS = 3;
 
 // ─── Claude agent döngüsü ────────────────────────────────────────────────────
 
@@ -57,6 +58,7 @@ async function runAgentClaude(
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
   let round = 0;
   let finalText = '';
+  let autoContinueRounds = 0;
 
   while (round < maxRounds) {
     round++;
@@ -68,9 +70,22 @@ async function runAgentClaude(
     }, abortSignal);
 
     if (text) process.stdout.write('\n');
-    if (toolCalls.length === 0) break;
+    if (toolCalls.length === 0) {
+      finalText = text;
+      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds)) {
+        autoContinueRounds++;
+        messages.push({ role: 'assistant', content: text });
+        messages.push({
+          role: 'user',
+          content: AUTO_CONTINUE_PROMPT,
+        });
+        continue;
+      }
+      break;
+    }
 
     const toolResultBlocks: string[] = [];
+    autoContinueRounds = 0;
 
     for (const tc of toolCalls) {
       printToolCall(tc.name, tc.input);
@@ -110,6 +125,7 @@ async function runAgentOpenAI(
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
   let round = 0;
   let finalText = '';
+  let autoContinueRounds = 0;
 
   while (round < maxRounds) {
     round++;
@@ -130,11 +146,18 @@ async function runAgentOpenAI(
 
     if (toolCalls.length === 0) {
       finalText = text;
+      if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds)) {
+        autoContinueRounds++;
+        messages.push(rawAssistantMsg);
+        messages.push({ role: 'user', content: AUTO_CONTINUE_PROMPT });
+        continue;
+      }
       break;
     }
 
     // Assistant mesajını (tool_calls ile birlikte) geçmişe ekle
     messages.push(rawAssistantMsg);
+    autoContinueRounds = 0;
 
     // Tool'ları çalıştır ve sonuçları ekle
     for (const tc of toolCalls) {
@@ -155,6 +178,54 @@ async function runAgentOpenAI(
   }
 
   return finalText;
+}
+
+const AUTO_CONTINUE_PROMPT = [
+  'Bu yanıt bir ara durum güncellemesi olarak algılandı.',
+  'Kullanıcıdan yeni bir mesaj bekleme ve onay isteme.',
+  'Az önce söylediğin inceleme, arama, okuma veya düzenleme adımını şimdi gerçekten uygula.',
+  'Gerekliyse tool kullanarak devam et ve görev tamamlanana kadar ilerle.',
+  'Sadece kendi başına çözülemeyen gerçek bir blokaj varsa dur.',
+].join(' ');
+
+function shouldAutoContinue(
+  text: string,
+  round: number,
+  maxRounds: number,
+  autoContinueRounds: number,
+): boolean {
+  if (!text.trim()) return false;
+  if (round >= maxRounds) return false;
+  if (autoContinueRounds >= MAX_AUTO_CONTINUE_ROUNDS) return false;
+
+  const normalized = text.toLowerCase().trim();
+  if (normalized.length > 500) return false;
+
+  const interimPatterns = [
+    /\bgörelim\b/,
+    /\bbulup\b/,
+    /\bbakayım\b/,
+    /\binceleyeyim\b/,
+    /\binceleyelim\b/,
+    /\bekleyeceğim\b/,
+    /\bbelirleyelim\b/,
+    /\bson satırları\b/,
+    /\bfonksiyonunu\b.*\bgörelim\b/,
+    /\bşimdi\b.*\b(bakayım|görelim|inceleyelim|bulayım)\b/,
+    /\blet me\b.*\b(check|inspect|find|look)\b/,
+    /\bi('| a)?ll\b.*\b(check|inspect|look|find)\b/,
+  ];
+
+  const containsInterimLanguage = interimPatterns.some((pattern) => pattern.test(normalized));
+  const looksLikeProgressOnly =
+    normalized.endsWith(':') ||
+    normalized.endsWith('...') ||
+    normalized.includes('ekleme yapacağım yeri') ||
+    normalized.includes('ona göre') ||
+    normalized.includes('then i') ||
+    normalized.includes('next i');
+
+  return containsInterimLanguage || looksLikeProgressOnly;
 }
 
 // ─── Tool yürütücü (ortak) ───────────────────────────────────────────────────
