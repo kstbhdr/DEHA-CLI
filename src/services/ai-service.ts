@@ -188,11 +188,25 @@ export async function sendWithToolsOpenAICompat(
     body.provider = { only: [config.openrouterProvider], allow_fallbacks: false };
   }
 
-  const response = await axios.post(`${apiUrl}/chat/completions`, body, {
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    timeout: 120000,
-    signal: abortSignal,
-  });
+  let response;
+  try {
+    response = await axios.post(`${apiUrl}/chat/completions`, body, {
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      timeout: 120000,
+      signal: abortSignal,
+    });
+  } catch (err: unknown) {
+    if (shouldRetryWithAutoToolChoice(err, toolChoice)) {
+      const fallbackBody = { ...body, tool_choice: 'auto' };
+      response = await axios.post(`${apiUrl}/chat/completions`, fallbackBody, {
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        timeout: 120000,
+        signal: abortSignal,
+      });
+    } else {
+      throw normalizeAxiosError(err);
+    }
+  }
 
   const msg = response.data.choices[0].message as OAIMessage;
 
@@ -207,6 +221,36 @@ export async function sendWithToolsOpenAICompat(
   });
 
   return { text, toolCalls, rawAssistantMsg: msg };
+}
+
+function shouldRetryWithAutoToolChoice(err: unknown, toolChoice: 'auto' | 'required'): boolean {
+  if (toolChoice !== 'required' || !axios.isAxiosError(err)) return false;
+  const status = err.response?.status;
+  if (status !== 400) return false;
+
+  const payload = typeof err.response?.data === 'string'
+    ? err.response.data
+    : JSON.stringify(err.response?.data ?? {});
+
+  const normalized = payload.toLowerCase();
+  return normalized.includes('tool_choice')
+    || normalized.includes('required')
+    || normalized.includes('tool use')
+    || normalized.includes('tool_calls');
+}
+
+function normalizeAxiosError(err: unknown): Error {
+  if (!axios.isAxiosError(err)) {
+    return err instanceof Error ? err : new Error(String(err));
+  }
+
+  const status = err.response?.status;
+  const payload = typeof err.response?.data === 'string'
+    ? err.response.data
+    : JSON.stringify(err.response?.data ?? {});
+
+  const detail = payload && payload !== '{}' ? ` - ${payload}` : '';
+  return new Error(`API request failed${status ? ` (${status})` : ''}${detail}`);
 }
 
 
