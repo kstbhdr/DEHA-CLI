@@ -43,7 +43,7 @@ export async function runAgent(
 }
 
 const MAX_TOOL_ROUNDS = 30; // Büyük görevlerde nefesi kesilmemesi için artırıldı
-const MAX_AUTO_CONTINUE_ROUNDS = 3;
+const MAX_AUTO_CONTINUE_ROUNDS = 6;
 
 // ─── Claude agent döngüsü ────────────────────────────────────────────────────
 
@@ -59,6 +59,7 @@ async function runAgentClaude(
   let round = 0;
   let finalText = '';
   let autoContinueRounds = 0;
+  let forceToolUse = false;
 
   while (round < maxRounds) {
     round++;
@@ -67,13 +68,14 @@ async function runAgentClaude(
     const { text, toolCalls } = await sendWithTools(messages, config, allTools, (chunk) => {
       process.stdout.write(chunk);
       finalText += chunk;
-    }, abortSignal);
+    }, abortSignal, forceToolUse ? 'required' : 'auto');
 
     if (text) process.stdout.write('\n');
     if (toolCalls.length === 0) {
       finalText = text;
       if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds)) {
         autoContinueRounds++;
+        forceToolUse = true;
         messages.push({ role: 'assistant', content: text });
         messages.push({
           role: 'user',
@@ -86,6 +88,7 @@ async function runAgentClaude(
 
     const toolResultBlocks: string[] = [];
     autoContinueRounds = 0;
+    forceToolUse = false;
 
     for (const tc of toolCalls) {
       printToolCall(tc.name, tc.input);
@@ -126,6 +129,7 @@ async function runAgentOpenAI(
   let round = 0;
   let finalText = '';
   let autoContinueRounds = 0;
+  let forceToolUse = false;
 
   while (round < maxRounds) {
     round++;
@@ -140,6 +144,7 @@ async function runAgentOpenAI(
         finalText += chunk;
       },
       abortSignal,
+      forceToolUse ? 'required' : 'auto',
     );
 
     if (text) process.stdout.write('\n');
@@ -148,6 +153,7 @@ async function runAgentOpenAI(
       finalText = text;
       if (shouldAutoContinue(text, round, maxRounds, autoContinueRounds)) {
         autoContinueRounds++;
+        forceToolUse = true;
         messages.push(rawAssistantMsg);
         messages.push({ role: 'user', content: AUTO_CONTINUE_PROMPT });
         continue;
@@ -158,6 +164,7 @@ async function runAgentOpenAI(
     // Assistant mesajını (tool_calls ile birlikte) geçmişe ekle
     messages.push(rawAssistantMsg);
     autoContinueRounds = 0;
+    forceToolUse = false;
 
     // Tool'ları çalıştır ve sonuçları ekle
     for (const tc of toolCalls) {

@@ -122,10 +122,11 @@ export async function sendWithTools(
   tools: ToolDefinition[],
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
+  toolChoice: 'auto' | 'required' = 'auto',
 ): Promise<{ text: string; toolCalls: ToolCall[] }> {
   if (config.provider !== 'claude') {
     const oaiMessages: OAIMessage[] = messages.map((m) => ({ role: m.role, content: m.content }));
-    const r = await sendWithToolsOpenAICompat(oaiMessages, config, tools, onChunk, abortSignal);
+    const r = await sendWithToolsOpenAICompat(oaiMessages, config, tools, onChunk, abortSignal, toolChoice);
     return { text: r.text, toolCalls: r.toolCalls };
   }
 
@@ -138,6 +139,7 @@ export async function sendWithTools(
     max_tokens: config.maxTokens,
     system: config.systemPrompt,
     tools,
+    tool_choice: toolChoice === 'required' ? { type: 'any' } : { type: 'auto' },
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   }, { signal: abortSignal });
 
@@ -166,6 +168,7 @@ export async function sendWithToolsOpenAICompat(
   tools: ToolDefinition[],
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
+  toolChoice: 'auto' | 'required' = 'auto',
 ): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage }> {
   const role = roleFromConfig(config);
   const apiKey = resolveApiKey(role, config);
@@ -176,7 +179,7 @@ export async function sendWithToolsOpenAICompat(
     model: role.model,
     messages,
     tools: toOpenAITools(tools),
-    tool_choice: 'auto',
+    tool_choice: toolChoice === 'required' ? 'required' : 'auto',
     max_tokens: config.maxTokens,
     temperature: config.temperature,
   };
