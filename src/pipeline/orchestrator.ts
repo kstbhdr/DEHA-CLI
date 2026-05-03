@@ -1,8 +1,8 @@
 import chalk from 'chalk';
 import { DehaConfig, getProviderLabel } from '../config';
 import { runPlanner } from './planner';
-import { runCoder } from './coder';
-import { runJudge, JudgeVerdict } from './judge';
+import { decideNeedPlan, runCoder } from './coder';
+import { decideNeedJudge, runJudge, JudgeVerdict } from './judge';
 import { parseEditBlocks, applyEditBlocks } from '../tools/edit';
 
 export interface PipelineResult {
@@ -55,19 +55,26 @@ export async function runPipeline(
   console.log(chalk.bold(`║  Görev: `) + chalk.white(task.slice(0, 44).padEnd(44)) + chalk.bold('║'));
   console.log(chalk.bold('╚═══════════════════════════════════════════════╝'));
 
-  // ── PLANNER ──────────────────────────────────────────────────────────────
-  roleHeader(
-    'PLANNER',
-    getProviderLabel(pipeline.planner.provider),
-    pipeline.planner.model,
-  );
+  let plan = `Task: ${task}\n\nImplement directly without a separate planner pass unless the task proves more complex during coding.`;
+  const planDecision = await decideNeedPlan(task, config);
+  console.log(chalk.dim(`\n  🧭 Coder routing: ${planDecision.raw}`));
 
-  let plan = '';
-  await runPlanner(task, config, (chunk) => {
-    process.stdout.write(chalk.magenta(chunk));
-    plan += chunk;
-  });
-  process.stdout.write('\n');
+  if (planDecision.needPlan) {
+    roleHeader(
+      'PLANNER',
+      getProviderLabel(pipeline.planner.provider),
+      pipeline.planner.model,
+    );
+
+    plan = '';
+    await runPlanner(task, config, (chunk) => {
+      process.stdout.write(chalk.magenta(chunk));
+      plan += chunk;
+    });
+    process.stdout.write('\n');
+  } else {
+    console.log(chalk.dim('  ↳ Planner atlandı, coder doğrudan çalışacak.'));
+  }
 
   // ── CODER + JUDGE döngüsü ─────────────────────────────────────────────
   let code = '';
@@ -107,6 +114,24 @@ export async function runPipeline(
       code = coderOutput;
     }
 
+    const judgeForced = isJudgeRequired(task, code);
+    const judgeDecision = judgeForced
+      ? { needJudge: true, reason: 'Risk heuristic triggered.', raw: 'JUDGE: Risk heuristic triggered.' }
+      : await decideNeedJudge(task, plan, code, config);
+
+    console.log(chalk.dim(`\n  ⚖ Routing: ${judgeDecision.raw}`));
+
+    if (!judgeDecision.needJudge) {
+      verdict = {
+        pass: true,
+        score: 'SKIPPED',
+        feedback: judgeDecision.reason || 'Coder marked the task as complete without formal judge review.',
+        raw: judgeDecision.raw,
+      };
+      console.log(chalk.bgGreen.black(` ✓ DONE `) + chalk.green(' • Judge atlandı'));
+      break;
+    }
+
     // JUDGE
     roleHeader(
       'JUDGE',
@@ -134,4 +159,27 @@ export async function runPipeline(
   return { plan, finalCode: code, verdict, iterations: iteration };
 }
 
+function isJudgeRequired(task: string, code: string): boolean {
+  const text = `${task}\n${code}`.toLowerCase();
+  const riskyPatterns = [
+    /\bauth\b/,
+    /\bauthoriz/,
+    /\btoken\b/,
+    /\bsecret\b/,
+    /\bpassword\b/,
+    /\bpayment\b/,
+    /\bbilling\b/,
+    /\bmigration\b/,
+    /\bdatabase\b/,
+    /\bdrop table\b/,
+    /\bdelete\b/,
+    /\brm\b/,
+    /\bexec\b/,
+    /\bshell\b/,
+    /\bsubprocess\b/,
+    /\bsecurity\b/,
+  ];
+
+  return riskyPatterns.some((pattern) => pattern.test(text));
+}
 
