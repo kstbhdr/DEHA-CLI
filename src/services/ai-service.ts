@@ -176,7 +176,7 @@ export async function sendWithToolsOpenAICompat(
   const apiKey = resolveApiKey(role, config);
   const apiUrl = resolveApiUrl(role, config);
   if (!apiKey) throw new Error(`API key missing (${apiUrl})`);
-  const toolMaxTokens = Math.max(config.maxTokens, 8192);
+  const toolMaxTokens = Math.max(config.maxTokens, config.toolMaxTokens);
 
   const body: Record<string, unknown> = {
     model: role.model,

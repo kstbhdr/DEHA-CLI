@@ -83,6 +83,7 @@ export interface DehaConfig {
 
   // Agent
   maxToolRounds: number;
+  toolMaxTokens: number;
 
   // Genel
   systemPrompt: string;
@@ -149,7 +150,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
       return CHAT_PROMPT as string;
     })(),
 
-    maxToolRounds: parseInt(process.env.DEHA_MAX_TOOL_ROUNDS || '10', 10),
+    maxToolRounds: parseInt(process.env.DEHA_MAX_TOOL_ROUNDS || '200', 10),
+    toolMaxTokens: parseInt(process.env.DEHA_TOOL_MAX_TOKENS || '49152', 10),
 
     maxTokens:   parseInt(process.env.DEHA_MAX_TOKENS   || '4096', 10),
     temperature: parseFloat(process.env.DEHA_TEMPERATURE || '0.7'),

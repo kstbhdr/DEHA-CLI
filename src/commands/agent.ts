@@ -42,7 +42,7 @@ export async function runAgent(
   return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal);
 }
 
-const MAX_TOOL_ROUNDS = 30; // Büyük görevlerde nefesi kesilmemesi için artırıldı
+const MAX_TOOL_ROUNDS = 200; // Uzun otonom görevlerde tool calling erken kesilmesin
 const MAX_AUTO_CONTINUE_ROUNDS = 6;
 const MAX_POST_TOOL_COMPLETION_ROUNDS = 8;
 
