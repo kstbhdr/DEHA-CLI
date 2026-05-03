@@ -90,6 +90,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
   // Session memory'yi yükle (önceki session'dan devam edebilmek için)
   await loadSession().catch(() => {});
+  setWorkDir(process.cwd());
 
   // MCP sunucularına bağlan (arka planda, hata sessiz geç)
   mcpManager.connectAll(true).catch(() => {});

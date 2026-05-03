@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
 import chalk from 'chalk';
@@ -169,18 +171,19 @@ export async function sendWithToolsOpenAICompat(
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
   toolChoice: 'auto' | 'required' = 'auto',
-): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage }> {
+): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage; malformedToolCalls: number }> {
   const role = roleFromConfig(config);
   const apiKey = resolveApiKey(role, config);
   const apiUrl = resolveApiUrl(role, config);
   if (!apiKey) throw new Error(`API key missing (${apiUrl})`);
+  const toolMaxTokens = Math.max(config.maxTokens, 8192);
 
   const body: Record<string, unknown> = {
     model: role.model,
     messages,
     tools: toOpenAITools(tools),
     tool_choice: toolChoice === 'required' ? 'required' : 'auto',
-    max_tokens: config.maxTokens,
+    max_tokens: toolMaxTokens,
     temperature: config.temperature,
   };
 
@@ -196,6 +199,12 @@ export async function sendWithToolsOpenAICompat(
       signal: abortSignal,
     });
   } catch (err: unknown) {
+    writeOpenAICompatDebugFile('last-openai-tool-error.json', {
+      phase: 'initial_request',
+      url: `${apiUrl}/chat/completions`,
+      body,
+      error: extractAxiosErrorPayload(err),
+    });
     if (shouldRetryWithAutoToolChoice(err, toolChoice)) {
       const fallbackBody = { ...body, tool_choice: 'auto' };
       response = await axios.post(`${apiUrl}/chat/completions`, fallbackBody, {
@@ -209,18 +218,74 @@ export async function sendWithToolsOpenAICompat(
   }
 
   const msg = response.data.choices[0].message as OAIMessage;
+  writeOpenAICompatDebugFile('last-openai-tool-message.json', msg);
+  const sanitizedAssistantMsg = sanitizeOpenAICompatAssistantMessage(msg);
+  writeOpenAICompatDebugFile('last-openai-tool-message-sanitized.json', sanitizedAssistantMsg);
 
-  const text: string = (msg.content as string) ?? '';
+  const text: string = (sanitizedAssistantMsg.content as string) ?? '';
   if (text && onChunk) onChunk(text);
 
-  const toolCalls: ToolCall[] = ((msg.tool_calls as Record<string, unknown>[]) ?? []).map((tc) => {
-    const fn = tc.function as { name: string; arguments: string };
-    let input: Record<string, unknown> = {};
-    try { input = JSON.parse(fn.arguments); } catch { /* ignore */ }
-    return { name: fn.name, input, id: tc.id as string };
-  });
+  const rawToolCalls = ((sanitizedAssistantMsg.tool_calls as Record<string, unknown>[]) ?? []);
+  const toolCalls: ToolCall[] = rawToolCalls
+    .map((tc) => {
+      const fn = tc.function as { name?: string; arguments?: string } | undefined;
+      const name = fn?.name?.trim();
+      const rawArguments = typeof fn?.arguments === 'string' ? fn.arguments.trim() : '';
+      if (!name || !rawArguments) {
+        return null;
+      }
 
-  return { text, toolCalls, rawAssistantMsg: msg };
+      try {
+        const input = JSON.parse(rawArguments) as Record<string, unknown>;
+        return { name, input, id: tc.id as string };
+      } catch {
+        return null;
+      }
+    })
+    .filter((toolCall): toolCall is ToolCall => toolCall !== null);
+
+  return {
+    text,
+    toolCalls,
+    rawAssistantMsg: sanitizedAssistantMsg,
+    malformedToolCalls: Math.max(0, rawToolCalls.length - toolCalls.length),
+  };
+}
+
+function sanitizeOpenAICompatAssistantMessage(msg: OAIMessage): OAIMessage {
+  const sanitized: OAIMessage = {
+    role: 'assistant',
+    content: typeof msg.content === 'string' ? msg.content : '',
+  };
+
+  if (typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) {
+    sanitized.reasoning_content = msg.reasoning_content;
+  }
+
+  if (Array.isArray(msg.tool_calls)) {
+    sanitized.tool_calls = msg.tool_calls
+      .map((tc) => {
+        const id = typeof tc?.id === 'string' ? tc.id : '';
+        const fn = tc?.function as { name?: unknown; arguments?: unknown } | undefined;
+        const name = typeof fn?.name === 'string' ? fn.name : '';
+        const rawArguments = typeof fn?.arguments === 'string' ? fn.arguments : '';
+        if (!id || !name || !rawArguments) {
+          return null;
+        }
+
+        return {
+          id,
+          type: 'function',
+          function: {
+            name,
+            arguments: rawArguments,
+          },
+        };
+      })
+      .filter(Boolean) as Record<string, unknown>[];
+  }
+
+  return sanitized;
 }
 
 function shouldRetryWithAutoToolChoice(err: unknown, toolChoice: 'auto' | 'required'): boolean {
@@ -251,6 +316,34 @@ function normalizeAxiosError(err: unknown): Error {
 
   const detail = payload && payload !== '{}' ? ` - ${payload}` : '';
   return new Error(`API request failed${status ? ` (${status})` : ''}${detail}`);
+}
+
+function extractAxiosErrorPayload(err: unknown): unknown {
+  if (!axios.isAxiosError(err)) {
+    return err instanceof Error ? { message: err.message, stack: err.stack } : String(err);
+  }
+
+  return {
+    message: err.message,
+    status: err.response?.status ?? null,
+    data: err.response?.data ?? null,
+  };
+}
+
+function writeOpenAICompatDebugFile(fileName: string, payload: unknown): void {
+  if (!process.env.DEHA_DEBUG_TOOL_CALLS) return;
+
+  try {
+    const debugDir = path.join(process.cwd(), '.deha');
+    fs.mkdirSync(debugDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(debugDir, fileName),
+      JSON.stringify(payload, null, 2),
+      'utf-8',
+    );
+  } catch {
+    // debug yardımcıları hiçbir zaman ana akışı bozmamalı
+  }
 }
 
 

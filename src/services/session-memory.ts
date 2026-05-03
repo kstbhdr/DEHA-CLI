@@ -80,7 +80,13 @@ export async function loadSession(): Promise<void> {
   if (redis) {
     const raw = await redis.get('deha:session:latest');
     if (raw) {
-      try { _state = { ..._state, ...JSON.parse(raw) }; return; } catch { /* bozuk veri */ }
+      try {
+        const saved = JSON.parse(raw) as Partial<SessionState>;
+        if (shouldLoadSessionForCurrentDir(saved)) {
+          _state = { ..._state, ...saved };
+          return;
+        }
+      } catch { /* bozuk veri */ }
     }
   }
 
@@ -91,10 +97,19 @@ export async function loadSession(): Promise<void> {
       const saved = JSON.parse(raw) as Partial<SessionState>;
       // 10 dakikadan eski buffer'ı yoksay
       const age = Date.now() - parseInt(saved.sessionId ?? '0', 36);
-      if (age < 10 * 60 * 1000) {
+      if (age < 10 * 60 * 1000 && shouldLoadSessionForCurrentDir(saved)) {
         _state = { ..._state, ...saved };
       }
     } catch { /* bozuk dosya */ }
+  }
+}
+
+function shouldLoadSessionForCurrentDir(saved: Partial<SessionState>): boolean {
+  if (!saved.workDir) return true;
+  try {
+    return path.resolve(saved.workDir) === path.resolve(process.cwd());
+  } catch {
+    return false;
   }
 }
 
@@ -158,6 +173,17 @@ export function getSessionMessages(): Message[] {
 export function setWorkDir(dir: string): void {
   _state.workDir = dir;
   _writeWarmBuffer();
+
+  // Eğer hafızada özet yoksa, dizindeki .deha_summary.md'yi yüklemeyi dene
+  if (!_state.summary && dir && fs.existsSync(dir)) {
+    try {
+      const summaryPath = path.join(dir, '.deha_summary.md');
+      if (fs.existsSync(summaryPath)) {
+        const content = fs.readFileSync(summaryPath, 'utf-8');
+        _state.summary = content.replace(/^# DEHA — Proje Özeti\n\n> Son Güncelleme: .*\n\n/, '');
+      }
+    } catch { /* sessiz geç */ }
+  }
 }
 
 export function getWorkDir(): string {
@@ -254,6 +280,14 @@ export async function summarizeOld(
       _state.summary = `${stickyContext}${_state.summary}\n\n---\n\n[Sonraki Bölüm Özeti]\n${newSummary}`;
     } else {
       _state.summary = `${stickyContext}${newSummary}`;
+    }
+
+    // Özeti projenin içine de kaydet (Persistence)
+    if (_state.workDir && fs.existsSync(_state.workDir)) {
+      try {
+        const summaryPath = path.join(_state.workDir, '.deha_summary.md');
+        fs.writeFileSync(summaryPath, `# DEHA — Proje Özeti\n\n> Son Güncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
+      } catch { /* sessiz geç */ }
     }
 
     // Özetlenen mesajları memory'den çıkar, sadece hot window'u tut

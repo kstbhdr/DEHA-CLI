@@ -44,6 +44,7 @@ export async function runAgent(
 
 const MAX_TOOL_ROUNDS = 30; // Büyük görevlerde nefesi kesilmemesi için artırıldı
 const MAX_AUTO_CONTINUE_ROUNDS = 6;
+const MAX_POST_TOOL_COMPLETION_ROUNDS = 8;
 
 // ─── Claude agent döngüsü ────────────────────────────────────────────────────
 
@@ -61,6 +62,8 @@ async function runAgentClaude(
   let finalText = '';
   let autoContinueRounds = 0;
   let forceToolUse = false;
+  let hadToolActivity = false;
+  let postToolCompletionRounds = 0;
 
   while (round < maxRounds) {
     round++;
@@ -72,14 +75,36 @@ async function runAgentClaude(
 
     if (toolCalls.length === 0) {
       finalText = text;
-      if (await shouldContinueAfterNoToolResponse(userMessage, text, config, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
+      const shouldContinue = hadToolActivity
+        ? await shouldContinueAfterToolPhase(
+            userMessage,
+            text,
+            config,
+            round,
+            maxRounds,
+            postToolCompletionRounds,
+          )
+        : await shouldContinueAfterNoToolResponse(
+            userMessage,
+            text,
+            config,
+            round,
+            maxRounds,
+            autoContinueRounds,
+            aggressiveAutoContinue,
+          );
+
+      if (shouldContinue) {
         autoContinueRounds++;
         forceToolUse = true;
         messages.push({ role: 'assistant', content: text });
         messages.push({
           role: 'user',
-          content: AUTO_CONTINUE_PROMPT,
+          content: hadToolActivity ? POST_TOOL_CONTINUE_PROMPT : AUTO_CONTINUE_PROMPT,
         });
+        if (hadToolActivity) {
+          postToolCompletionRounds++;
+        }
         continue;
       }
       if (text) {
@@ -91,6 +116,8 @@ async function runAgentClaude(
     }
 
     const toolResultBlocks: string[] = [];
+    hadToolActivity = true;
+    postToolCompletionRounds = 0;
     autoContinueRounds = 0;
     forceToolUse = false;
 
@@ -141,12 +168,14 @@ async function runAgentOpenAI(
   let finalText = '';
   let autoContinueRounds = 0;
   let forceToolUse = false;
+  let hadToolActivity = false;
+  let postToolCompletionRounds = 0;
 
   while (round < maxRounds) {
     round++;
     let roundText = '';
 
-    const { text, toolCalls, rawAssistantMsg } = await sendWithToolsOpenAICompat(
+    const { text, toolCalls, rawAssistantMsg, malformedToolCalls } = await sendWithToolsOpenAICompat(
       messages,
       config,
       allTools,
@@ -157,13 +186,47 @@ async function runAgentOpenAI(
       forceToolUse ? 'required' : 'auto',
     );
 
+    if (malformedToolCalls > 0 && toolCalls.length === 0) {
+      forceToolUse = true;
+      messages.push({
+        role: 'user',
+        content: MALFORMED_TOOL_CALL_PROMPT,
+      });
+      continue;
+    }
+
     if (toolCalls.length === 0) {
       finalText = text;
-      if (await shouldContinueAfterNoToolResponse(userMessage, text, config, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
+      const shouldContinue = hadToolActivity
+        ? await shouldContinueAfterToolPhase(
+            userMessage,
+            text,
+            config,
+            round,
+            maxRounds,
+            postToolCompletionRounds,
+          )
+        : await shouldContinueAfterNoToolResponse(
+            userMessage,
+            text,
+            config,
+            round,
+            maxRounds,
+            autoContinueRounds,
+            aggressiveAutoContinue,
+          );
+
+      if (shouldContinue) {
         autoContinueRounds++;
         forceToolUse = true;
         messages.push(rawAssistantMsg);
-        messages.push({ role: 'user', content: AUTO_CONTINUE_PROMPT });
+        messages.push({
+          role: 'user',
+          content: hadToolActivity ? POST_TOOL_CONTINUE_PROMPT : AUTO_CONTINUE_PROMPT,
+        });
+        if (hadToolActivity) {
+          postToolCompletionRounds++;
+        }
         continue;
       }
       if (text) {
@@ -176,6 +239,8 @@ async function runAgentOpenAI(
 
     // Assistant mesajını (tool_calls ile birlikte) geçmişe ekle
     messages.push(rawAssistantMsg);
+    hadToolActivity = true;
+    postToolCompletionRounds = 0;
     autoContinueRounds = 0;
     forceToolUse = false;
 
@@ -212,6 +277,21 @@ const AUTO_CONTINUE_PROMPT = [
   'Az önce söylediğin inceleme, arama, okuma veya düzenleme adımını şimdi gerçekten uygula.',
   'Gerekliyse tool kullanarak devam et ve görev tamamlanana kadar ilerle.',
   'Sadece kendi başına çözülemeyen gerçek bir blokaj varsa dur.',
+].join(' ');
+
+const POST_TOOL_CONTINUE_PROMPT = [
+  'Az önce tool sonuçları üretildi ama kullanıcıya dönük final yanıt henüz tamamlanmadı.',
+  'Şimdi durma.',
+  'Ya gerekli sonraki tool çağrısını yap ya da doğrudan kullanıcıya nihai, somut sonucu yaz.',
+  'Sıradaki adımı anlatma, gerçekten uygula.',
+  'Yeni kullanıcı mesajı bekleme.',
+].join(' ');
+
+const MALFORMED_TOOL_CALL_PROMPT = [
+  'Önceki tool çağrısı eksik veya bozuk JSON ile kesildi.',
+  'Aynı adımı yeniden dene ama sadece geçerli ve eksiksiz tool çağrıları üret.',
+  'Büyük bir dosya yazıyorsan içeriği daha küçük parçalara böl veya daha kısa bir araç çağrısı kullan.',
+  'Ara durum mesajı yazma.',
 ].join(' ');
 
 function shouldAutoContinue(
@@ -295,6 +375,34 @@ async function shouldContinueAfterNoToolResponse(
   return !(await isTaskComplete(userMessage, assistantText, config));
 }
 
+async function shouldContinueAfterToolPhase(
+  userMessage: string,
+  assistantText: string,
+  config: DehaConfig,
+  round: number,
+  maxRounds: number,
+  postToolCompletionRounds: number,
+): Promise<boolean> {
+  if (round >= maxRounds) return false;
+  if (postToolCompletionRounds >= MAX_POST_TOOL_COMPLETION_ROUNDS) return false;
+
+  const normalized = assistantText.toLowerCase().trim();
+
+  if (!normalized) {
+    return true;
+  }
+
+  if (shouldAutoContinue(assistantText, round, maxRounds, 0, true)) {
+    return true;
+  }
+
+  if (!looksLikeFinalAnswer(normalized)) {
+    return true;
+  }
+
+  return !(await isTaskComplete(userMessage, assistantText, config));
+}
+
 function wantsUninterruptedExecution(userMessage: string): boolean {
   const normalized = userMessage.toLowerCase();
   return normalized.includes('devam et')
@@ -311,6 +419,8 @@ function looksLikeFinalAnswer(text: string): boolean {
     /\bbitti\b/,
     /\bçözüldü\b/,
     /\bhazır\b/,
+    /\byaptım\b/,
+    /\bekledigin\b/,
     /\bsonuç\b/,
     /\bözet\b/,
     /\bdoğrulama\b/,
