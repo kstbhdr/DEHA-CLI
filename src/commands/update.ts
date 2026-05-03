@@ -1,8 +1,9 @@
 import { execSync } from 'child_process';
 import axios from 'axios';
 import chalk from 'chalk';
+import { DEHA_SEMVER, DEHA_VERSION } from '../version';
 
-const CURRENT_VERSION = '1.0.0';
+const CURRENT_VERSION = DEHA_SEMVER;
 const NPM_PACKAGE     = 'deha-cli';
 const GITHUB_REPO     = process.env.DEHA_GITHUB_REPO ?? 'kstbhdr/DEHA-CLI';
 
@@ -20,12 +21,12 @@ export async function checkForUpdates(silent = false): Promise<void> {
     if (isNewer(info.latest, CURRENT_VERSION)) {
       console.log(
         '\n' + chalk.bgYellow.black(' GÜNCELLEME MEVCUT ') +
-        chalk.yellow(` v${CURRENT_VERSION} → v${info.latest}`) +
+        chalk.yellow(` v${DEHA_VERSION} → v${info.latest}`) +
         chalk.dim(` (${info.source})`),
       );
       console.log(chalk.dim('  deha update  →  güncellemek için\n'));
     } else if (!silent) {
-      console.log(chalk.green(`\n✓ En güncel sürümü kullanıyorsun (v${CURRENT_VERSION})\n`));
+      console.log(chalk.green(`\n✓ En güncel sürümü kullanıyorsun (v${DEHA_VERSION})\n`));
     }
   } catch {
     if (!silent) console.log(chalk.dim('\nGüncelleme kontrolü başarısız.\n'));
@@ -34,7 +35,7 @@ export async function checkForUpdates(silent = false): Promise<void> {
 
 export async function runUpdate(): Promise<void> {
   console.log('\n' + chalk.bold.cyan('═══ DEHA Güncelleme ═══'));
-  console.log(chalk.dim(`  Mevcut sürüm: v${CURRENT_VERSION}\n`));
+  console.log(chalk.dim(`  Mevcut sürüm: v${DEHA_VERSION}\n`));
 
   process.stdout.write(chalk.dim('  Son sürüm kontrol ediliyor... '));
 
@@ -58,7 +59,7 @@ export async function runUpdate(): Promise<void> {
     return;
   }
 
-  console.log(chalk.yellow(`\n  Yeni sürüm bulundu: v${CURRENT_VERSION} → v${info.latest}`));
+  console.log(chalk.yellow(`\n  Yeni sürüm bulundu: v${DEHA_VERSION} → v${info.latest}`));
   console.log(chalk.dim('  Güncelleniyor...\n'));
 
   // npm ile kurulduysa npm üzerinden güncelle

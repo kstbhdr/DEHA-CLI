@@ -5,6 +5,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import chalk from 'chalk';
 import { readMcpConfig, McpServerConfig } from './config';
 import type { ToolDefinition } from '../services/ai-service';
+import { DEHA_SEMVER } from '../version';
 
 interface ConnectedServer {
   name: string;
@@ -43,7 +44,7 @@ class McpManager {
   }
 
   private async connectServer(name: string, cfg: McpServerConfig): Promise<void> {
-    const client = new Client({ name: `deha-${name}`, version: '1.0.0' });
+    const client = new Client({ name: `deha-${name}`, version: DEHA_SEMVER });
 
     let transport;
     if (cfg.transport === 'sse' && cfg.url) {

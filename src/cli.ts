@@ -17,6 +17,7 @@ import { doctor } from './commands/doctor';
 import { initCommand } from './commands/init';
 import { runSystemTest } from './commands/test-runner';
 import { loadConversationMessages } from './conversations/manager';
+import { DEHA_VERSION_LABEL } from './version';
 
 export class DehaCLI {
   private program: Command;
@@ -30,7 +31,7 @@ export class DehaCLI {
     this.program
       .name('deha')
       .description(chalk.bold('DEHA') + ' — Akıllı AI Kodlama Asistanı')
-      .version('1.0.0', '-v, --version', 'Sürümü göster')
+      .version(DEHA_VERSION_LABEL, '-v, --version', 'Sürümü göster')
       .option('-p, --provider <provider>', 'Provider: claude|openai|deepseek|ollama|openrouter|xai|custom')
       .option('-k, --api-key <key>', 'API anahtarını doğrudan gir')
       .option('-u, --url <url>', 'Custom API endpoint URL (custom provider için)');

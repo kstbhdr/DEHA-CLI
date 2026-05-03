@@ -36,11 +36,12 @@ import {
 import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
 import { runSystemTest } from './test-runner';
+import { DEHA_VERSION, DEHA_VERSION_LABEL } from '../version';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
 ${chalk.bold.cyan('║')}  ${chalk.bold.white('DEHA')} ${chalk.dim('— Akıllı Kodlama Asistanı')}         ${chalk.bold.cyan('║')}
-${chalk.bold.cyan('║')}  ${chalk.dim('v1.0.0  •  github.com/deha-cli')}         ${chalk.bold.cyan('║')}
+${chalk.bold.cyan('║')}  ${chalk.dim(`v${DEHA_VERSION}  •  github.com/deha-cli`)}         ${chalk.bold.cyan('║')}
 ${chalk.bold.cyan('╚══════════════════════════════════════════╝')}
 `;
 
@@ -172,6 +173,11 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
       if (trimmed === '/stats') {
         printStats();
+        prompt(); return;
+      }
+
+      if (trimmed === '/version' || isVersionQuestion(trimmed)) {
+        console.log(chalk.cyan(`${DEHA_VERSION_LABEL}\n`));
         prompt(); return;
       }
 
@@ -546,5 +552,21 @@ function resolveAtFiles(message: string): string {
       return _match; // değiştirmeden bırak
     }
   });
+}
+
+function isVersionQuestion(message: string): boolean {
+  const normalized = message.toLowerCase().trim();
+  const patterns = [
+    /\bversion\b/,
+    /\bversiyon\b/,
+    /\bsürüm\b/,
+    /\bhangi sürüm\b/,
+    /\bhangi versiyon\b/,
+    /\bkaçıncı sürüm\b/,
+    /\bkaçıncı versiyon\b/,
+    /\bsenin versiyonun\b/,
+  ];
+
+  return patterns.some((pattern) => pattern.test(normalized));
 }
 
