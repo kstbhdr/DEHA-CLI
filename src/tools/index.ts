@@ -7,7 +7,7 @@ import { toolRunTerminal } from './terminal';
 import { toolRunPython } from './python';
 import { toolSmokeTest } from './smoke';
 import { toolBrowserAction } from './browser';
-import { toolWebSearch } from './search';
+import { toolWebSearch, toolCrawlUrl } from './search';
 import { editFile, insertLines, deleteLines } from './edit';
 // vision tool requires DehaConfig, handled separately in agent.ts
 
@@ -239,14 +239,28 @@ export const DEHA_TOOLS: ToolDefinition[] = [
   },
   {
     name: 'web_search',
-    description: 'Search the web using DuckDuckGo for up-to-date information.',
+    description: 'Search the web using DuckDuckGo and optionally crawl GitHub or StackOverflow for up-to-date information.',
     input_schema: {
       type: 'object',
       properties: {
         query:       { type: 'string', description: 'Search query' },
-        max_results: { type: 'number', description: 'Max results (default: 8)' },
+        source:      { type: 'string', enum: ['web', 'github', 'stackoverflow', 'all'], description: 'Where to search (default: web)' },
+        max_results: { type: 'number', description: 'Max results per source (default: 8)' },
+        crawl_top:   { type: 'number', description: 'Fetch full page content from top N results (default: 0)' },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'crawl_url',
+    description: 'Fetch and extract readable text content from any URL (GitHub repo, StackOverflow answer, docs page, etc.).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url:       { type: 'string', description: 'URL to crawl' },
+        max_chars: { type: 'number', description: 'Max characters to return (default: 4000)' },
+      },
+      required: ['url'],
     },
   },
   {
@@ -352,6 +366,7 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'browser_action':
       case 'vision_analyze':
       case 'web_search':
+      case 'crawl_url':
       case 'run_shell':
         return `__ASYNC_TOOL__:${name}`;
       default: return `Bilinmeyen tool: ${name}`;
@@ -386,6 +401,8 @@ export async function executeToolAsync(
       }
       case 'web_search':
         return await toolWebSearch(input as Parameters<typeof toolWebSearch>[0]);
+      case 'crawl_url':
+        return await toolCrawlUrl(input as Parameters<typeof toolCrawlUrl>[0]);
       default:
         return executeTool(name, input);
     }
@@ -416,6 +433,7 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     search_in_files: '🔍',
     grep:            '🔍',
     web_search:      '🌍',
+    crawl_url:       '🕷️ ',
   };
   const icon = icons[name] ?? '🔧';
   const preview = Object.entries(input)
@@ -579,7 +597,16 @@ function toolSearchInFiles(inp: ToolInput): string {
   const resolved = path.resolve(inp.directory);
 
   const results: string[] = [];
-  searchDir(resolved, inp.pattern, inp.extension, results, 0, 5);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Yol bulunamadı: ${resolved}`);
+  }
+
+  const stats = fs.statSync(resolved);
+  if (stats.isFile()) {
+    searchFile(resolved, inp.pattern, inp.extension, results);
+  } else {
+    searchDir(resolved, inp.pattern, inp.extension, results, 0, 5);
+  }
 
   if (results.length === 0) return 'Eşleşme bulunamadı.';
   return results.slice(0, 50).join('\n');
@@ -596,7 +623,6 @@ function searchDir(
   if (depth > maxDepth || results.length >= 50) return;
 
   const entries = fs.readdirSync(dir, { withFileTypes: true });
-  const regex = new RegExp(pattern, 'gi');
 
   for (const e of entries) {
     if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist') continue;
@@ -605,16 +631,32 @@ function searchDir(
     if (e.isDirectory()) {
       searchDir(full, pattern, ext, results, depth + 1, maxDepth);
     } else {
-      if (ext && !e.name.endsWith(ext)) continue;
-      try {
-        const content = fs.readFileSync(full, 'utf-8');
-        const lines = content.split('\n');
-        lines.forEach((line, i) => {
-          if (regex.test(line)) {
-            results.push(`${full}:${i + 1}: ${line.trim()}`);
-          }
-        });
-      } catch { /* skip binary */ }
+      searchFile(full, pattern, ext, results);
     }
+  }
+}
+
+function searchFile(
+  filePath: string,
+  pattern: string,
+  ext: string | undefined,
+  results: string[],
+): void {
+  if (results.length >= 50) return;
+  if (ext && !filePath.endsWith(ext)) return;
+
+  const regex = new RegExp(pattern, 'gi');
+
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const lines = content.split('\n');
+    lines.forEach((line, i) => {
+      regex.lastIndex = 0;
+      if (regex.test(line)) {
+        results.push(`${filePath}:${i + 1}: ${line.trim()}`);
+      }
+    });
+  } catch {
+    /* skip binary or unreadable files */
   }
 }
