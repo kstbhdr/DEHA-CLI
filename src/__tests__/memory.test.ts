@@ -75,10 +75,10 @@ describe('memory service', () => {
   });
 
   describe('getMemoryStatus', () => {
-    it('Redis ve ChromaDB kapalıyken false döndürür', async () => {
+    it('Redis kapalıyken false, vector store aktif döndürür', async () => {
       const status = await memory.getMemoryStatus();
       expect(status).toHaveProperty('redis', false);
-      expect(status).toHaveProperty('chromadb', false);
+      expect(status).toHaveProperty('vectorStore');
       expect(typeof status.stored).toBe('number');
     });
   });

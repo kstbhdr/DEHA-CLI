@@ -8,8 +8,8 @@
  *  │  Redis           │ Tüm konuşma + embedding'ler           │
  *  │                  │ Semantic search: alakalı eski mesajlar │
  *  ├─────────────────────────────────────────────────────────┤
- *  │  ChromaDB        │ Cold archive — arka planda, sessizce   │
- *  │                  │ Her mesajda async write (non-blocking)  │
+ *  │  Vector Store    │ Cold archive — ChromaDB veya JSON     │
+ *  │                  │ Her mesajda async write (non-blocking) │
  *  └─────────────────────────────────────────────────────────┘
  *
  * getContext(userMsg) döner:
@@ -19,17 +19,7 @@
 import * as crypto from 'crypto';
 import axios from 'axios';
 import type { Message } from './ai-service';
-
-// ─── Tipler ──────────────────────────────────────────────────────────────────
-
-interface StoredMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  embedding: number[];
-  timestamp: number;
-  sessionId: string;
-}
+import { getVectorStore, StoredMessage } from './vector-store';
 
 // ─── Sabitler ────────────────────────────────────────────────────────────────
 
@@ -63,17 +53,14 @@ async function getRedis(): Promise<RedisClient | null> {
       lazyConnect: true, 
       connectTimeout: 2000, 
       maxRetriesPerRequest: 1,
-      retryStrategy: () => null, // Bağlantı koparsa veya kurulamazsa tekrar deneme (spam engelleme)
+      retryStrategy: () => null,
       showFriendlyErrorStack: false
     });
-    // Hata dinleyicisi ekle (ECONNREFUSED hatalarının terminale dökülmesini engeller)
-    client.on('error', (err) => {
-      // Sessizce yut, Redis yoksa memory fallback çalışacak
-    });
+    client.on('error', () => {});
     await client.connect();
     _redis = client as unknown as RedisClient;
   } catch {
-    _redis = null; // Redis yoksa in-memory'ye düş
+    _redis = null;
   }
   return _redis;
 }
@@ -81,39 +68,6 @@ async function getRedis(): Promise<RedisClient | null> {
 // ─── In-memory fallback (Redis yoksa) ────────────────────────────────────────
 
 const _memStore: StoredMessage[] = [];
-
-// ─── ChromaDB bağlantısı (opsiyonel) ─────────────────────────────────────────
-
-let _chromaCollection: ChromaCollection | null = null;
-let _chromaChecked = false;
-
-interface ChromaCollection {
-  add(params: { ids: string[]; documents: string[]; embeddings: number[][]; metadatas: { role: string; timestamp: number; sessionId: string }[] }): Promise<unknown>;
-}
-
-async function getChromaCollection(): Promise<ChromaCollection | null> {
-  if (_chromaChecked) return _chromaCollection;
-  _chromaChecked = true;
-
-  const url = process.env.CHROMA_URL || 'http://localhost:8000';
-  try {
-    const { ChromaClient } = await import('chromadb');
-    const parsed = new URL(url);
-    const client = new ChromaClient({
-      host: parsed.hostname,
-      port: parseInt(parsed.port || '8000', 10),
-      ssl: parsed.protocol === 'https:',
-    });
-    const col = await client.getOrCreateCollection({
-      name: 'deha_conversations',
-      embeddingFunction: null as unknown as undefined, // kendi embedding'imizi kullanıyoruz
-    });
-    _chromaCollection = col as unknown as ChromaCollection;
-  } catch {
-    _chromaCollection = null;
-  }
-  return _chromaCollection;
-}
 
 // ─── Embedding üretimi ────────────────────────────────────────────────────────
 
@@ -138,7 +92,7 @@ async function generateEmbedding(text: string): Promise<number[]> {
   return _hashEmbedding(text);
 }
 
-/** Basit hash-tabanlı embedding (API yoksa) — yeterince iyi */
+/** Basit hash-tabanlı embedding (API yoksa) */
 function _hashEmbedding(text: string): number[] {
   const dim = 128;
   const vec = new Array<number>(dim).fill(0);
@@ -149,12 +103,11 @@ function _hashEmbedding(text: string): number[] {
       vec[i] += (hash[i % 16] / 255) * 2 - 1;
     }
   }
-  // Normalize
   const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0)) || 1;
   return vec.map(v => v / norm);
 }
 
-/** Cosine similarity iki vektör arasında */
+/** Cosine similarity */
 function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0;
   let dot = 0, na = 0, nb = 0;
@@ -169,17 +122,16 @@ function cosineSimilarity(a: number[], b: number[]): number {
 // ─── Ana fonksiyonlar ─────────────────────────────────────────────────────────
 
 /**
- * Yeni mesajı Redis'e kaydeder + ChromaDB'ye arka planda yazar.
+ * Yeni mesajı Redis'e kaydeder + Vector Store'a arka planda yazar.
  */
 export async function addMessage(message: Message): Promise<void> {
   const embedding = await generateEmbedding(message.content);
   const stored: StoredMessage = {
     id: crypto.randomUUID(),
-    role: message.role,
+    role: message.role as 'user' | 'assistant',
     content: message.content,
     embedding,
     timestamp: Date.now(),
-    sessionId: SESSION_ID,
   };
 
   // Redis'e yaz
@@ -192,15 +144,15 @@ export async function addMessage(message: Message): Promise<void> {
       'content', stored.content,
       'embedding', JSON.stringify(stored.embedding),
       'timestamp', stored.timestamp.toString(),
-      'sessionId', stored.sessionId,
     );
     await redis.sadd(REDIS_SESSION_INDEX, stored.id);
   } else {
     _memStore.push(stored);
   }
 
-  // ChromaDB'ye arka planda yaz — kullanıcı beklemiyor
-  _chromaWriteAsync(stored).catch(() => {});
+  // Vector store'a arka planda yaz (ChromaDB veya JSON)
+  const vs = await getVectorStore();
+  vs.add(stored).catch(() => {});
 }
 
 /**
@@ -212,16 +164,12 @@ export async function getContext(
   currentUserMessage: string,
   allMessages: Message[],
 ): Promise<Message[]> {
-  // 1. Son 5 mesaj — direkt
   const hot = allMessages.slice(-HOT_WINDOW);
-
-  // 2. Semantic arama (hot window'dakileri çıkar)
   const hotIds = new Set(hot.map(m => m.content));
   const relevant = await _semanticSearch(currentUserMessage, SEMANTIC_TOP_K, hotIds);
 
   if (relevant.length === 0) return hot;
 
-  // Alakalı eski mesajları başa "context" olarak ekle
   const contextNote: Message = {
     role: 'user',
     content: `[RELEVANT PAST CONTEXT]\n${relevant.map(m => `${m.role}: ${m.content.slice(0, 300)}`).join('\n---\n')}`,
@@ -259,7 +207,6 @@ async function _semanticSearch(
           content: raw.content,
           embedding: JSON.parse(raw.embedding || '[]') as number[],
           timestamp: parseInt(raw.timestamp, 10),
-          sessionId: raw.sessionId,
         } as StoredMessage;
       }),
     );
@@ -268,39 +215,19 @@ async function _semanticSearch(
     allMessages = [..._memStore];
   }
 
-  // Son HOT_WINDOW mesajı ve exclude listesini çıkar
   const candidates = allMessages
     .slice(0, -HOT_WINDOW)
     .filter(m => !exclude.has(m.content));
 
   if (candidates.length === 0) return [];
 
-  // Cosine similarity hesapla, sırala
   return candidates
     .map(m => ({ msg: m, score: cosineSimilarity(queryEmb, m.embedding) }))
     .sort((a, b) => b.score - a.score)
     .slice(0, topK)
-    .filter(r => r.score > 0.3) // düşük alakalı olanları at
-    .sort((a, b) => a.msg.timestamp - b.msg.timestamp) // kronolojik sıraya al
+    .filter(r => r.score > 0.3)
+    .sort((a, b) => a.msg.timestamp - b.msg.timestamp)
     .map(r => r.msg);
-}
-
-/**
- * ChromaDB'ye arka planda (non-blocking) yazar.
- */
-async function _chromaWriteAsync(msg: StoredMessage): Promise<void> {
-  const col = await getChromaCollection();
-  if (!col) return;
-  await col.add({
-    ids: [msg.id],
-    documents: [msg.content],
-    embeddings: [msg.embedding],
-    metadatas: [{
-      role: msg.role,
-      timestamp: msg.timestamp,
-      sessionId: msg.sessionId,
-    }],
-  });
 }
 
 /**
@@ -311,14 +238,17 @@ export async function closeMemory(): Promise<void> {
     await _redis.quit().catch(() => {});
     _redis = null;
   }
+  const { resetVectorStore } = await import('./vector-store');
+  resetVectorStore();
 }
 
 /** Bağlantı durumunu raporla */
-export async function getMemoryStatus(): Promise<{ redis: boolean; chromadb: boolean; stored: number }> {
+export async function getMemoryStatus(): Promise<{ redis: boolean; vectorStore: string; stored: number }> {
   const redis = await getRedis();
-  const chroma = await getChromaCollection();
+  const vs = await getVectorStore();
+  const vsName = vs.constructor.name === 'ChromaVectorStore' ? 'chromadb' : 'json';
   const count = redis
     ? (await redis.smembers(REDIS_SESSION_INDEX)).length
     : _memStore.length;
-  return { redis: redis !== null, chromadb: chroma !== null, stored: count };
+  return { redis: redis !== null, vectorStore: vsName, stored: count };
 }

@@ -87,6 +87,8 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
     const parts: string[] = [];
     if (s.redis !== 'unavailable') parts.push(`Redis ${s.redis === 'started' ? chalk.green('↑') : chalk.dim('✓')}`);
     if (s.chromadb !== 'unavailable') parts.push(`ChromaDB ${s.chromadb === 'started' ? chalk.green('↑') : chalk.dim('✓')}`);
+    const vsLabel = s.vectorStore || (s.chromadb !== 'unavailable' ? 'ChromaDB' : 'JSON');
+    if (s.chromadb === 'unavailable') parts.push(`VectorStore ${chalk.dim('✓')} [${vsLabel}]`);
     if (parts.length) process.stdout.write(chalk.dim('  ') + parts.join(chalk.dim('  ')) + '\n\n');
   }).catch(() => {});
 

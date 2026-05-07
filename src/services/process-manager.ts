@@ -143,11 +143,16 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
 export interface ServicesStatus {
   redis:   'running' | 'started' | 'unavailable';
   chromadb:'running' | 'started' | 'unavailable';
+  vectorStore: string;
 }
 
 export async function startServices(): Promise<ServicesStatus> {
-  const [redis, chromadb] = await Promise.all([ensureRedis(), ensureChroma()]);
-  return { redis, chromadb };
+  const [redis, chromadb, vs] = await Promise.all([
+    ensureRedis(),
+    ensureChroma(),
+    import('./vector-store').then(m => m.getVectorStore().then(v => v.constructor.name === 'ChromaVectorStore' ? 'ChromaDB' : 'JSON')),
+  ]);
+  return { redis, chromadb, vectorStore: vs };
 }
 
 // ─── Kapat (sadece biz başlattıysak) ─────────────────────────────────────────
