@@ -32,26 +32,26 @@ import { toolWebSearch, toolCrawlUrl } from '../tools/search';
 import * as cheerio from 'cheerio';
 
 describe('toolWebSearch', () => {
+  const cheerioMock = vi.hoisted(() => ({
+    load: vi.fn().mockReturnValue((sel: string) => ({
+      each: vi.fn((cb: Function) => {
+        cb(0, {});
+        return { length: 1 };
+      }),
+      text: vi.fn().mockReturnValue('Test'),
+      attr: vi.fn((name: string) => name === 'href' ? 'https://example.com' : ''),
+      closest: vi.fn().mockReturnThis(),
+      next: vi.fn().mockReturnThis(),
+      find: vi.fn().mockReturnThis(),
+      last: vi.fn().mockReturnThis(),
+    }) as any),
+  }));
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('sonuc formatini dondurur', async () => {
-    // Cheerio mock: DDG Lite HTML parse
-    const cheerioMock = vi.hoisted(() => ({
-      load: vi.fn().mockReturnValue((sel: string) => ({
-        each: vi.fn((cb: Function) => {
-          cb(0, {});
-          return { length: 1 };
-        }),
-        text: vi.fn().mockReturnValue('Test'),
-        attr: vi.fn((name: string) => name === 'href' ? 'https://example.com' : ''),
-        closest: vi.fn().mockReturnThis(),
-        next: vi.fn().mockReturnThis(),
-        find: vi.fn().mockReturnThis(),
-        last: vi.fn().mockReturnThis(),
-      }) as any),
-    }));
     vi.mocked(cheerio.load).mockImplementation(cheerioMock.load as any);
 
     mockRes.statusCode = 200;
