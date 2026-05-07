@@ -4,6 +4,7 @@ import { resolve, join } from 'path';
 import { createInterface } from 'readline';
 import { promisify } from 'util';
 import { execSync } from 'child_process';
+import { logger } from '../services/logger';
 
 const RESET = '\x1b[0m';
 const GREEN = '\x1b[32m';
@@ -23,7 +24,7 @@ function rlQuestion(query: string): Promise<string> {
 
 export async function initCommand(): Promise<void> {
   const cwd = process.cwd();
-  console.log(`\n${BOLD}${CYAN}⚡ DEHA Project Initialization${RESET}\n`);
+  logger.write(`\n${BOLD}${CYAN}⚡ DEHA Project Initialization${RESET}\n`);
 
   // 1. .env dosyası
   const envPath = resolve(cwd, '.env');
@@ -34,7 +35,7 @@ export async function initCommand(): Promise<void> {
     await access(envPath, constants.R_OK);
     const answer = await rlQuestion(`  ${YELLOW}⚠${RESET} .env already exists. Overwrite? (y/N) `);
     if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-      console.log(`  ${YELLOW}→${RESET} Skipped .env`);
+      logger.write(`  ${YELLOW}→${RESET} Skipped .env`);
     } else {
       await copyDotenv(envPath, envExamplePath, packageEnvPath);
     }
@@ -43,7 +44,7 @@ export async function initCommand(): Promise<void> {
   }
 
   // 2. API key'leri interactive sor
-  console.log(`\n${BOLD}API Keys${RESET} (leave blank to skip)`);
+  logger.write(`\n${BOLD}API Keys${RESET} (leave blank to skip)`);
   let envContent = '';
   try {
     envContent = await readFile(envPath, 'utf-8');
@@ -76,13 +77,13 @@ export async function initCommand(): Promise<void> {
   }
 
   await writeFile(envPath, envContent.trim() + '\n', 'utf-8');
-  console.log(`  ${GREEN}✔${RESET} .env updated\n`);
+  logger.write(`  ${GREEN}✔${RESET} .env updated\n`);
 
   // 3. MCP config dosyası
   const mcpPath = resolve(cwd, 'mcp.json');
   try {
     await access(mcpPath, constants.R_OK);
-    console.log(`  ${GREEN}✔${RESET} mcp.json already exists`);
+    logger.write(`  ${GREEN}✔${RESET} mcp.json already exists`);
   } catch {
     const answer = await rlQuestion(`  Create default mcp.json? (Y/n) `);
     if (answer.toLowerCase() !== 'n' && answer.toLowerCase() !== 'no') {
@@ -93,22 +94,22 @@ export async function initCommand(): Promise<void> {
         },
       };
       await writeFile(mcpPath, JSON.stringify(defaultMcp, null, 2) + '\n', 'utf-8');
-      console.log(`  ${GREEN}✔${RESET} mcp.json created`);
+      logger.write(`  ${GREEN}✔${RESET} mcp.json created`);
     }
   }
 
   // 4. Playwright kontrolü
-  console.log(`\n${BOLD}Dependencies${RESET}`);
+  logger.write(`\n${BOLD}Dependencies${RESET}`);
   try {
     execSync('npx playwright --version', { stdio: 'pipe', timeout: 10_000 });
     const answer = await rlQuestion(`  Install Playwright Chromium browser? (Y/n) `);
     if (answer.toLowerCase() !== 'n' && answer.toLowerCase() !== 'no') {
-      console.log(`  ${YELLOW}→${RESET} Installing Chromium...`);
+      logger.write(`  ${YELLOW}→${RESET} Installing Chromium...`);
       execSync('npx playwright install chromium', { stdio: 'inherit', timeout: 120_000 });
-      console.log(`  ${GREEN}✔${RESET} Chromium installed`);
+      logger.write(`  ${GREEN}✔${RESET} Chromium installed`);
     }
   } catch {
-    console.log(`  ${YELLOW}⚠${RESET} Playwright not found. Run: npm install playwright`);
+    logger.write(`  ${YELLOW}⚠${RESET} Playwright not found. Run: npm install playwright`);
   }
 
   // 5. .deha/ dizini
@@ -117,28 +118,28 @@ export async function initCommand(): Promise<void> {
     const { mkdir } = await import('fs/promises');
     await mkdir(dehaDir, { recursive: true });
     await writeFile(join(dehaDir, '.gitkeep'), '', 'utf-8');
-    console.log(`  ${GREEN}✔${RESET} .deha/ directory created`);
+    logger.write(`  ${GREEN}✔${RESET} .deha/ directory created`);
   }
 
-  console.log(`\n${GREEN}${BOLD}✅ DEHA initialization complete!${RESET}`);
-  console.log(`  ${YELLOW}→${RESET} Run ${BOLD}deha doctor${RESET} to verify setup\n`);
+  logger.write(`\n${GREEN}${BOLD}✅ DEHA initialization complete!${RESET}`);
+  logger.write(`  ${YELLOW}→${RESET} Run ${BOLD}deha doctor${RESET} to verify setup\n`);
 }
 
 async function copyDotenv(envPath: string, envExamplePath: string, packageEnvPath: string): Promise<void> {
   try {
     await access(envExamplePath, constants.R_OK);
     await copyFile(envExamplePath, envPath);
-    console.log(`  ${GREEN}✔${RESET} .env created from .env.example`);
+    logger.write(`  ${GREEN}✔${RESET} .env created from .env.example`);
   } catch {
     try {
       await access(packageEnvPath, constants.R_OK);
       await copyFile(packageEnvPath, envPath);
-      console.log(`  ${GREEN}✔${RESET} .env created from package .env.example`);
+      logger.write(`  ${GREEN}✔${RESET} .env created from package .env.example`);
     } catch {
       // Create minimal .env
       const minimal = `# DEHA Configuration\n# Get API keys from your provider's dashboard\n\nOPENAI_API_KEY=\nANTHROPIC_API_KEY=\nGROQ_API_KEY=\nDEEPSEEK_API_KEY=\nXAI_API_KEY=\nOPENROUTER_API_KEY=\n`;
       await writeFile(envPath, minimal, 'utf-8');
-      console.log(`  ${GREEN}✔${RESET} Minimal .env created`);
+      logger.write(`  ${GREEN}✔${RESET} Minimal .env created`);
     }
   }
 }

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import chalk from 'chalk';
 import { runCommand } from './terminal';
+import { logger } from '../services/logger';
 
 // Playwright lazy import — yüklü değilse kullanıcıya sor
 async function getPlaywright() {
@@ -214,7 +215,7 @@ export async function ensurePlaywrightInstalled(): Promise<boolean> {
 }
 
 export async function installPlaywright(): Promise<void> {
-  console.log(chalk.cyan('\nPlaywright kuruluyor...\n'));
+  logger.write(chalk.cyan('\nPlaywright kuruluyor...\n'));
   await runCommand('npm install -g playwright', { stream: true, timeout: 120_000 });
   await runCommand('npx playwright install chromium', { stream: true, timeout: 300_000 });
 }

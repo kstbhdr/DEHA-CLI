@@ -12,6 +12,7 @@ import { callRole } from '../services/ai-service';
 import { runPlanner } from '../pipeline/planner';
 import { runCoder }   from '../pipeline/coder';
 import { runJudge }   from '../pipeline/judge';
+import { logger } from '../services/logger';
 
 // ─── Sabitler ────────────────────────────────────────────────────────────────
 
@@ -25,15 +26,15 @@ const ARROW = chalk.dim('  →  ');
 // ─── Yardımcılar ─────────────────────────────────────────────────────────────
 
 function header(title: string) {
-  console.log('\n' + chalk.bold.cyan('━'.repeat(54)));
-  console.log(chalk.bold.cyan(`  ${title}`));
-  console.log(chalk.bold.cyan('━'.repeat(54)));
+  logger.write('\n' + chalk.bold.cyan('━'.repeat(54)));
+  logger.write(chalk.bold.cyan(`  ${title}`));
+  logger.write(chalk.bold.cyan('━'.repeat(54)));
 }
 
 function result(label: string, ok: boolean | null, detail = '') {
   const badge = ok === null ? SKIP : ok ? PASS : FAIL;
   const text  = detail ? chalk.dim(ARROW + detail) : '';
-  console.log(`  ${badge}  ${label}${text}`);
+  logger.write(`  ${badge}  ${label}${text}`);
 }
 
 function ms(start: number) {
@@ -112,7 +113,7 @@ export async function runSystemTest(config: DehaConfig): Promise<void> {
 
   // ── 2. Pipeline Entegrasyon Testi ─────────────────────────────────────────
   header('2 / 2  —  Pipeline Entegrasyon Testi');
-  console.log(chalk.dim(`  Prompt: "${TEST_PROMPT}"\n`));
+  logger.write(chalk.dim(`  Prompt: "${TEST_PROMPT}"\n`));
 
   // PLANNER
   let plan = '';
@@ -170,8 +171,8 @@ export async function runSystemTest(config: DehaConfig): Promise<void> {
 
       // Judge FAIL dönerse geri bildirimi göster
       if (!verdict.pass) {
-        console.log(chalk.dim('\n  Judge geri bildirimi:'));
-        console.log(chalk.yellow(verdict.feedback.split('\n').map(l => '    ' + l).join('\n')));
+        logger.write(chalk.dim('\n  Judge geri bildirimi:'));
+        logger.write(chalk.yellow(verdict.feedback.split('\n').map(l => '    ' + l).join('\n')));
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message.slice(0, 80) : String(err);
@@ -193,7 +194,7 @@ export async function runSystemTest(config: DehaConfig): Promise<void> {
 
   const total = passed + failed;
   const color = failed === 0 ? chalk.green : chalk.red;
-  console.log('\n' + color(`  ${passed}/${total} test geçti`) + (failed > 0 ? chalk.red(`  (${failed} başarısız)`) : '') + '\n');
+  logger.write('\n' + color(`  ${passed}/${total} test geçti`) + (failed > 0 ? chalk.red(`  (${failed} başarısız)`) : '') + '\n');
 }
 
 // ─── Yardımcı ────────────────────────────────────────────────────────────────

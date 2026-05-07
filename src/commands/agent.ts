@@ -4,6 +4,7 @@ import { Message, OAIMessage, sendWithTools, sendWithToolsOpenAICompat } from '.
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
 import { getWorkDir } from '../services/session-memory';
+import { logger } from '../services/logger';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 function injectWorkDir(config: DehaConfig): DehaConfig {
@@ -27,7 +28,7 @@ export async function runAgent(
   const allTools = [...DEHA_TOOLS, ...mcpTools];
 
   if (mcpTools.length > 0) {
-    console.log(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
+    logger.write(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
   }
 
   // WorkDir'i system prompt'a enjekte et
@@ -108,9 +109,9 @@ async function runAgentClaude(
         continue;
       }
       if (text) {
-        console.log('\n' + chalk.bold.cyan('DEHA:'));
-        process.stdout.write(roundText);
-        process.stdout.write('\n');
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(roundText);
+        logger.raw('\n');
       }
       break;
     }
@@ -122,16 +123,16 @@ async function runAgentClaude(
     forceToolUse = false;
 
     if (text) {
-      console.log('\n' + chalk.bold.cyan('DEHA:'));
-      process.stdout.write(roundText);
-      process.stdout.write('\n');
+      logger.write('\n' + chalk.bold.cyan('DEHA:'));
+      logger.raw(roundText);
+      logger.raw('\n');
     }
 
     for (const tc of toolCalls) {
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
       const preview = result.length > 200 ? result.slice(0, 200) + '…' : result;
-      console.log(chalk.dim('    → ') + chalk.gray(preview));
+      logger.write(chalk.dim('    → ') + chalk.gray(preview));
       toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${result}\n</tool_result>`);
       finalText = text;
     }
@@ -230,9 +231,9 @@ async function runAgentOpenAI(
         continue;
       }
       if (text) {
-        console.log('\n' + chalk.bold.cyan('DEHA:'));
-        process.stdout.write(roundText);
-        process.stdout.write('\n');
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(roundText);
+        logger.raw('\n');
       }
       break;
     }
@@ -245,9 +246,9 @@ async function runAgentOpenAI(
     forceToolUse = false;
 
     if (text) {
-      console.log('\n' + chalk.bold.cyan('DEHA:'));
-      process.stdout.write(roundText);
-      process.stdout.write('\n');
+      logger.write('\n' + chalk.bold.cyan('DEHA:'));
+      logger.raw(roundText);
+      logger.raw('\n');
     }
 
     // Tool'ları çalıştır ve sonuçları ekle
@@ -255,7 +256,7 @@ async function runAgentOpenAI(
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
       const preview = result.length > 200 ? result.slice(0, 200) + '…' : result;
-      console.log(chalk.dim('    → ') + chalk.gray(preview));
+      logger.write(chalk.dim('    → ') + chalk.gray(preview));
 
       // OpenAI tool result format
       messages.push({

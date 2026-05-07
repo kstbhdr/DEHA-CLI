@@ -9,6 +9,7 @@ import { toolSmokeTest } from './smoke';
 import { toolBrowserAction } from './browser';
 import { toolWebSearch, toolCrawlUrl } from './search';
 import { editFile, insertLines, deleteLines } from './edit';
+import { logger } from '../services/logger';
 // vision tool requires DehaConfig, handled separately in agent.ts
 
 // ─── Tool definitions (Claude API schema) ──────────────────────────────────
@@ -440,7 +441,7 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     .slice(0, 2)
     .map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 40)}`)
     .join(', ');
-  console.log(chalk.dim(`\n  ${icon} `) + chalk.yellow(name) + chalk.dim(`(${preview})`));
+  logger.write(chalk.dim(`\n  ${icon} `) + chalk.yellow(name) + chalk.dim(`(${preview})`));
 }
 
 // ─── Araç implementasyonları ───────────────────────────────────────────────

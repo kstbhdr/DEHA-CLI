@@ -9,6 +9,7 @@ import {
   getMcpConfigPath,
 } from './config';
 import { mcpManager } from './manager';
+import { logger } from '../services/logger';
 
 export async function handleMcpCommand(args: string): Promise<void> {
   const parts = args.trim().split(/\s+/);
@@ -22,7 +23,7 @@ export async function handleMcpCommand(args: string): Promise<void> {
     case 'install':return mcpInstall(parts[1]);
     case 'catalog':return mcpCatalog();
     default:
-      console.log(mcpHelp());
+      logger.write(mcpHelp());
   }
 }
 
@@ -32,88 +33,88 @@ function mcpList(): void {
   const config = readMcpConfig();
   const names = Object.keys(config.servers);
 
-  console.log('\n' + chalk.bold.cyan('═══ MCP Sunucuları ═══'));
-  console.log(chalk.dim(`  Config: ${getMcpConfigPath()}\n`));
+  logger.write('\n' + chalk.bold.cyan('═══ MCP Sunucuları ═══'));
+  logger.write(chalk.dim(`  Config: ${getMcpConfigPath()}\n`));
 
   if (names.length === 0) {
-    console.log(chalk.dim('  Henüz kayıtlı sunucu yok.'));
-    console.log(chalk.dim('  /mcp catalog  → kurulabilir sunucuları gör'));
-    console.log(chalk.dim('  /mcp install filesystem  → hazır sunucu kur'));
-    console.log('');
+    logger.write(chalk.dim('  Henüz kayıtlı sunucu yok.'));
+    logger.write(chalk.dim('  /mcp catalog  → kurulabilir sunucuları gör'));
+    logger.write(chalk.dim('  /mcp install filesystem  → hazır sunucu kur'));
+    logger.write('');
     return;
   }
 
   for (const name of names) {
     const cfg = config.servers[name];
-    console.log(chalk.green('  ●') + ' ' + chalk.bold(name));
-    console.log(chalk.dim(`    ${cfg.description ?? ''}`));
-    console.log(chalk.dim(`    cmd: ${cfg.command} ${(cfg.args ?? []).join(' ')}`));
+    logger.write(chalk.green('  ●') + ' ' + chalk.bold(name));
+    logger.write(chalk.dim(`    ${cfg.description ?? ''}`));
+    logger.write(chalk.dim(`    cmd: ${cfg.command} ${(cfg.args ?? []).join(' ')}`));
   }
-  console.log('');
+  logger.write('');
 }
 
 // ─── /mcp status ────────────────────────────────────────────────────────────
 
 function mcpStatus(): void {
   const servers = mcpManager.getServerList();
-  console.log('\n' + chalk.bold.cyan('═══ MCP Bağlantı Durumu ═══\n'));
+  logger.write('\n' + chalk.bold.cyan('═══ MCP Bağlantı Durumu ═══\n'));
 
   if (servers.length === 0) {
-    console.log(chalk.dim('  Aktif MCP bağlantısı yok.\n'));
+    logger.write(chalk.dim('  Aktif MCP bağlantısı yok.\n'));
     return;
   }
 
   for (const s of servers) {
-    console.log(chalk.green('  ✓ ') + chalk.bold(s.name) + chalk.dim(` (${s.toolCount} araç)`));
+    logger.write(chalk.green('  ✓ ') + chalk.bold(s.name) + chalk.dim(` (${s.toolCount} araç)`));
     for (const t of s.tools) {
-      console.log(chalk.dim(`      • ${t}`));
+      logger.write(chalk.dim(`      • ${t}`));
     }
   }
-  console.log('');
+  logger.write('');
 }
 
 // ─── /mcp install <name> ────────────────────────────────────────────────────
 
 function mcpInstall(name: string): void {
   if (!name) {
-    console.log(chalk.red('\n  Kullanım: /mcp install <sunucu-adı>'));
-    console.log(chalk.dim('  /mcp catalog → mevcut sunucuları gör\n'));
+    logger.write(chalk.red('\n  Kullanım: /mcp install <sunucu-adı>'));
+    logger.write(chalk.dim('  /mcp catalog → mevcut sunucuları gör\n'));
     return;
   }
 
   const known = KNOWN_SERVERS[name];
   if (!known) {
-    console.log(chalk.red(`\n  Bilinmeyen sunucu: ${name}`));
-    console.log(chalk.dim('  /mcp catalog → desteklenen sunucuları gör\n'));
+    logger.write(chalk.red(`\n  Bilinmeyen sunucu: ${name}`));
+    logger.write(chalk.dim('  /mcp catalog → desteklenen sunucuları gör\n'));
     return;
   }
 
-  console.log(chalk.cyan(`\n  Kuruluyor: ${name} — ${known.description}`));
+  logger.write(chalk.cyan(`\n  Kuruluyor: ${name} — ${known.description}`));
 
   // npm paketi global yükle
   for (const pkg of known.packages) {
-    process.stdout.write(chalk.dim(`  npm install -g ${pkg}... `));
+    logger.raw(chalk.dim(`  npm install -g ${pkg}... `));
     try {
       execSync(`npm install -g ${pkg}`, { stdio: 'pipe' });
-      console.log(chalk.green('✓'));
+      logger.write(chalk.green('✓'));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.log(chalk.red('✗') + chalk.dim(` (${message.split('\n')[0]})`));
+      logger.write(chalk.red('✗') + chalk.dim(` (${message.split('\n')[0]})`));
     }
   }
 
   // Config'e ekle
   addServer(name, known.config);
-  console.log(chalk.green(`\n  ✓ '${name}' mcp.json'a eklendi.`));
+  logger.write(chalk.green(`\n  ✓ '${name}' mcp.json'a eklendi.`));
 
   if (known.config.env && Object.keys(known.config.env).length > 0) {
-    console.log(chalk.yellow('\n  ⚠ Çevresel değişken gerekiyor:'));
+    logger.write(chalk.yellow('\n  ⚠ Çevresel değişken gerekiyor:'));
     for (const [k, v] of Object.entries(known.config.env)) {
-      console.log(chalk.dim(`    ${k}=${v}`));
+      logger.write(chalk.dim(`    ${k}=${v}`));
     }
-    console.log(chalk.dim(`    Düzenle: ${getMcpConfigPath()}\n`));
+    logger.write(chalk.dim(`    Düzenle: ${getMcpConfigPath()}\n`));
   } else {
-    console.log(chalk.dim('  Yeniden başlat veya /mcp reconnect yap.\n'));
+    logger.write(chalk.dim('  Yeniden başlat veya /mcp reconnect yap.\n'));
   }
 }
 
@@ -121,8 +122,8 @@ function mcpInstall(name: string): void {
 
 function mcpAdd(parts: string[]): void {
   if (parts.length < 2) {
-    console.log(chalk.red('\n  Kullanım: /mcp add <isim> <komut> [argümanlar...]'));
-    console.log(chalk.dim('  Örnek: /mcp add myserver npx -y my-mcp-server\n'));
+    logger.write(chalk.red('\n  Kullanım: /mcp add <isim> <komut> [argümanlar...]'));
+    logger.write(chalk.dim('  Örnek: /mcp add myserver npx -y my-mcp-server\n'));
     return;
   }
 
@@ -132,36 +133,36 @@ function mcpAdd(parts: string[]): void {
 
   const cfg: McpServerConfig = { command, args };
   addServer(name, cfg);
-  console.log(chalk.green(`\n  ✓ '${name}' eklendi → ${getMcpConfigPath()}\n`));
+  logger.write(chalk.green(`\n  ✓ '${name}' eklendi → ${getMcpConfigPath()}\n`));
 }
 
 // ─── /mcp remove <name> ─────────────────────────────────────────────────────
 
 function mcpRemove(name: string): void {
   if (!name) {
-    console.log(chalk.red('\n  Kullanım: /mcp remove <isim>\n'));
+    logger.write(chalk.red('\n  Kullanım: /mcp remove <isim>\n'));
     return;
   }
   const ok = removeServer(name);
   if (ok) {
-    console.log(chalk.green(`\n  ✓ '${name}' kaldırıldı.\n`));
+    logger.write(chalk.green(`\n  ✓ '${name}' kaldırıldı.\n`));
   } else {
-    console.log(chalk.red(`\n  '${name}' bulunamadı.\n`));
+    logger.write(chalk.red(`\n  '${name}' bulunamadı.\n`));
   }
 }
 
 // ─── /mcp catalog ───────────────────────────────────────────────────────────
 
 function mcpCatalog(): void {
-  console.log('\n' + chalk.bold.cyan('═══ Kurulabilir MCP Sunucuları ═══\n'));
+  logger.write('\n' + chalk.bold.cyan('═══ Kurulabilir MCP Sunucuları ═══\n'));
   for (const [name, info] of Object.entries(KNOWN_SERVERS)) {
-    console.log(
+    logger.write(
       chalk.bold(`  ${name.padEnd(16)}`) +
       chalk.white(info.description),
     );
-    console.log(chalk.dim(`  ${''.padEnd(16)}/mcp install ${name}`));
+    logger.write(chalk.dim(`  ${''.padEnd(16)}/mcp install ${name}`));
   }
-  console.log('');
+  logger.write('');
 }
 
 // ─── Yardım ─────────────────────────────────────────────────────────────────

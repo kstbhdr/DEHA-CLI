@@ -4,6 +4,7 @@ import { runPlanner } from './planner';
 import { decideNeedPlan, runCoder } from './coder';
 import { decideNeedJudge, runJudge, JudgeVerdict } from './judge';
 import { parseEditBlocks, applyEditBlocks } from '../tools/edit';
+import { logger } from '../services/logger';
 
 export interface PipelineResult {
   plan: string;
@@ -18,7 +19,7 @@ function roleHeader(role: 'PLANNER' | 'CODER' | 'JUDGE', provider: string, model
   const colors = { PLANNER: chalk.magenta, CODER: chalk.blue, JUDGE: chalk.yellow };
   const icons  = { PLANNER: '🧠', CODER: '💻', JUDGE: '⚖️' };
   const color  = colors[role];
-  console.log(
+  logger.write(
     '\n' + color('─'.repeat(52)) + '\n' +
     color(`${icons[role]}  ${role}`) +
     chalk.dim(`  [${provider} / ${model}]`) + '\n' +
@@ -27,16 +28,16 @@ function roleHeader(role: 'PLANNER' | 'CODER' | 'JUDGE', provider: string, model
 }
 
 function iterBadge(n: number, max: number) {
-  console.log(chalk.dim(`\n  ↻ İterasyon ${n}/${max}`));
+  logger.write(chalk.dim(`\n  ↻ İterasyon ${n}/${max}`));
 }
 
 function verdictLine(verdict: JudgeVerdict) {
   if (verdict.pass) {
-    console.log('\n' + chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • ${verdict.score}`));
+    logger.write('\n' + chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • ${verdict.score}`));
   } else {
-    console.log('\n' + chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • ${verdict.score}`));
-    console.log(chalk.dim('  Judge geri bildirimi:'));
-    console.log(chalk.red(indent(verdict.feedback, 4)));
+    logger.write('\n' + chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • ${verdict.score}`));
+    logger.write(chalk.dim('  Judge geri bildirimi:'));
+    logger.write(chalk.red(indent(verdict.feedback, 4)));
   }
 }
 
@@ -51,13 +52,13 @@ export async function runPipeline(
   config: DehaConfig,
 ): Promise<PipelineResult> {
   const { pipeline } = config;
-  console.log(chalk.bold('\n╔══ DEHA PIPELINE ══════════════════════════════╗'));
-  console.log(chalk.bold(`║  Görev: `) + chalk.white(task.slice(0, 44).padEnd(44)) + chalk.bold('║'));
-  console.log(chalk.bold('╚═══════════════════════════════════════════════╝'));
+  logger.write(chalk.bold('\n╔══ DEHA PIPELINE ══════════════════════════════╗'));
+  logger.write(chalk.bold(`║  Görev: `) + chalk.white(task.slice(0, 44).padEnd(44)) + chalk.bold('║'));
+  logger.write(chalk.bold('╚═══════════════════════════════════════════════╝'));
 
   let plan = `Task: ${task}\n\nImplement directly without a separate planner pass unless the task proves more complex during coding.`;
   const planDecision = await decideNeedPlan(task, config);
-  console.log(chalk.dim(`\n  🧭 Coder routing: ${planDecision.raw}`));
+  logger.write(chalk.dim(`\n  🧭 Coder routing: ${planDecision.raw}`));
 
   if (planDecision.needPlan) {
     roleHeader(
@@ -73,7 +74,7 @@ export async function runPipeline(
     });
     process.stdout.write('\n');
   } else {
-    console.log(chalk.dim('  ↳ Planner atlandı, coder doğrudan çalışacak.'));
+    logger.write(chalk.dim('  ↳ Planner atlandı, coder doğrudan çalışacak.'));
   }
 
   // ── CODER + JUDGE döngüsü ─────────────────────────────────────────────
@@ -104,9 +105,9 @@ export async function runPipeline(
     // EDIT bloklarını uygula (revizyon turlarında token tasarrufu)
     const editBlocks = parseEditBlocks(coderOutput);
     if (editBlocks.length > 0) {
-      console.log(chalk.dim(`\n  🖊️  ${editBlocks.length} EDIT bloğu uygulanıyor...`));
+      logger.write(chalk.dim(`\n  🖊️  ${editBlocks.length} EDIT bloğu uygulanıyor...`));
       const results = applyEditBlocks(editBlocks);
-      results.forEach((r) => console.log(chalk.dim(`     ${r}`)));
+      results.forEach((r) => logger.write(chalk.dim(`     ${r}`)));
       // code değişkenini EDIT'lerle güncellenmiş haliyle güncelle
       // (judge'a tüm kodu değil, diff'i göster)
       code = coderOutput;
@@ -119,7 +120,7 @@ export async function runPipeline(
       ? { needJudge: true, reason: 'Risk heuristic triggered.', raw: 'JUDGE: Risk heuristic triggered.' }
       : await decideNeedJudge(task, plan, code, config);
 
-    console.log(chalk.dim(`\n  ⚖ Routing: ${judgeDecision.raw}`));
+    logger.write(chalk.dim(`\n  ⚖ Routing: ${judgeDecision.raw}`));
 
     if (!judgeDecision.needJudge) {
       verdict = {
@@ -128,7 +129,7 @@ export async function runPipeline(
         feedback: judgeDecision.reason || 'Coder marked the task as complete without formal judge review.',
         raw: judgeDecision.raw,
       };
-      console.log(chalk.bgGreen.black(` ✓ DONE `) + chalk.green(' • Judge atlandı'));
+      logger.write(chalk.bgGreen.black(` ✓ DONE `) + chalk.green(' • Judge atlandı'));
       break;
     }
 
@@ -151,10 +152,10 @@ export async function runPipeline(
   }
 
   // ── Özet ─────────────────────────────────────────────────────────────────
-  console.log('\n' + chalk.bold('╔══ PIPELINE SONUCU ════════════════════════════╗'));
-  console.log(chalk.bold('║  ') + (verdict.pass ? chalk.green('✓ BAŞARILI') : chalk.red('✗ BAŞARISIZ (max iterasyon doldu)')) + chalk.bold(''.padEnd(verdict.pass ? 36 : 19) + '  ║'));
-  console.log(chalk.bold(`║  Skor: ${verdict.score}  •  İterasyon: ${iteration}/${pipeline.maxIterations}`.padEnd(50) + '║'));
-  console.log(chalk.bold('╚═══════════════════════════════════════════════╝\n'));
+  logger.write('\n' + chalk.bold('╔══ PIPELINE SONUCU ════════════════════════════╗'));
+  logger.write(chalk.bold('║  ') + (verdict.pass ? chalk.green('✓ BAŞARILI') : chalk.red('✗ BAŞARISIZ (max iterasyon doldu)')) + chalk.bold(''.padEnd(verdict.pass ? 36 : 19) + '  ║'));
+  logger.write(chalk.bold(`║  Skor: ${verdict.score}  •  İterasyon: ${iteration}/${pipeline.maxIterations}`.padEnd(50) + '║'));
+  logger.write(chalk.bold('╚═══════════════════════════════════════════════╝\n'));
 
   return { plan, finalCode: code, verdict, iterations: iteration };
 }

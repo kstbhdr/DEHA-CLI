@@ -3,6 +3,7 @@ import { constants } from 'fs';
 import { execSync } from 'child_process';
 import { resolve } from 'path';
 import { createInterface } from 'readline';
+import { logger } from '../services/logger';
 
 const RESET = '\x1b[0m';
 const GREEN = '\x1b[32m';
@@ -16,19 +17,19 @@ let warnings = 0;
 
 function ok(label: string, detail = '') {
   passed++;
-  console.log(`  ${GREEN}✔${RESET} ${label}${detail ? ` ${YELLOW}(${detail})${RESET}` : ''}`);
+  logger.write(`  ${GREEN}✔${RESET} ${label}${detail ? ` ${YELLOW}(${detail})${RESET}` : ''}`);
 }
 
 function fail(label: string, hint: string) {
   failed++;
-  console.log(`  ${RED}✘${RESET} ${label}`);
-  console.log(`    ${YELLOW}→${RESET} ${hint}`);
+  logger.write(`  ${RED}✘${RESET} ${label}`);
+  logger.write(`    ${YELLOW}→${RESET} ${hint}`);
 }
 
 function warn(label: string, hint: string) {
   warnings++;
-  console.log(`  ${YELLOW}⚠${RESET} ${label}`);
-  console.log(`    ${YELLOW}→${RESET} ${hint}`);
+  logger.write(`  ${YELLOW}⚠${RESET} ${label}`);
+  logger.write(`    ${YELLOW}→${RESET} ${hint}`);
 }
 
 async function checkPlaywright(): Promise<void> {
@@ -186,27 +187,27 @@ async function checkDiskSpace(): Promise<void> {
 }
 
 export async function doctor() {
-  console.log(`\n${BOLD}🔍 DEHA Diagnostic Report${RESET}\n`);
-  console.log(`${BOLD}System Checks${RESET}`);
+  logger.write(`\n${BOLD}🔍 DEHA Diagnostic Report${RESET}\n`);
+  logger.write(`${BOLD}System Checks${RESET}`);
 
   await checkNode();
   await checkPython();
   await checkPlaywright();
   await checkOllama();
 
-  console.log(`\n${BOLD}Configuration Checks${RESET}`);
+  logger.write(`\n${BOLD}Configuration Checks${RESET}`);
   await checkEnvFile();
   await checkMCPConfig();
 
-  console.log(`\n${BOLD}Environment Checks${RESET}`);
+  logger.write(`\n${BOLD}Environment Checks${RESET}`);
   await checkDiskSpace();
 
   const total = passed + failed + warnings;
   const emoji = failed === 0 ? '✅' : '❌';
-  console.log(`\n${emoji} ${BOLD}Results${RESET}: ${passed} passed, ${failed} failed, ${warnings} warnings (${total} total)`);
+  logger.write(`\n${emoji} ${BOLD}Results${RESET}: ${passed} passed, ${failed} failed, ${warnings} warnings (${total} total)`);
 
   if (failed > 0) {
-    console.log(`\n${YELLOW}Tip:${RESET} Fix the failed checks first, then re-run ${BOLD}deha doctor${RESET}`);
+    logger.write(`\n${YELLOW}Tip:${RESET} Fix the failed checks first, then re-run ${BOLD}deha doctor${RESET}`);
   }
 
   process.exit(failed > 0 ? 1 : 0);

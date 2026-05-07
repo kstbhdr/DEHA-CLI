@@ -7,11 +7,12 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 import chalk from 'chalk';
 import { DehaCLI } from './cli';
+import { logger } from './services/logger';
 
 const cli = new DehaCLI();
 
 cli.run().catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
-  console.error(chalk.red('\n✗ DEHA Hata: ') + message + '\n');
+  logger.error(chalk.red('\n✗ DEHA Hata: ') + message + '\n');
   process.exit(1);
 });

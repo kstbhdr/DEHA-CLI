@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { logger } from '../services/logger';
 import {
   listConversations,
   readConversation,
@@ -24,7 +25,7 @@ export async function handleHistoryCommand(args: string): Promise<void> {
       return showConversation(parts[1]);
 
     case 'dir':
-      console.log(chalk.cyan('\n  Konum: ') + getConvDir() + '\n');
+      logger.write(chalk.cyan('\n  Konum: ') + getConvDir() + '\n');
       return;
 
     default:
@@ -40,12 +41,12 @@ export async function handleHistoryCommand(args: string): Promise<void> {
 function showList(): void {
   const convs = listConversations(30);
 
-  console.log('\n' + chalk.bold.cyan('═══ Sohbet Geçmişi ═══'));
-  console.log(chalk.dim(`  Konum: ${getConvDir()}\n`));
+  logger.write('\n' + chalk.bold.cyan('═══ Sohbet Geçmişi ═══'));
+  logger.write(chalk.dim(`  Konum: ${getConvDir()}\n`));
 
   if (convs.length === 0) {
-    console.log(chalk.dim('  Henüz kayıtlı sohbet yok.\n'));
-    console.log(chalk.dim('  Sohbet bittiğinde otomatik kaydedilir.\n'));
+    logger.write(chalk.dim('  Henüz kayıtlı sohbet yok.\n'));
+    logger.write(chalk.dim('  Sohbet bittiğinde otomatik kaydedilir.\n'));
     return;
   }
 
@@ -56,29 +57,29 @@ function showList(): void {
     const badge  = chalk.dim(`[${conv.provider}/${conv.model.split('-').slice(-2).join('-')}]`);
     const msgs   = chalk.dim(`${conv.messageCount} mesaj`);
 
-    console.log(`  ${num} ${date}  ${chalk.white(title)}`);
-    console.log(`       ${badge}  ${msgs}`);
+    logger.write(`  ${num} ${date}  ${chalk.white(title)}`);
+    logger.write(`       ${badge}  ${msgs}`);
   });
 
-  console.log('');
-  console.log(chalk.dim('  /oldconversations 3       → 3. sohbeti görüntüle'));
-  console.log(chalk.dim('  /oldconversations search <kelime>  → ara'));
-  console.log('');
+  logger.write('');
+  logger.write(chalk.dim('  /oldconversations 3       → 3. sohbeti görüntüle'));
+  logger.write(chalk.dim('  /oldconversations search <kelime>  → ara'));
+  logger.write('');
 }
 
 // ─── Arama ───────────────────────────────────────────────────────────────────
 
 function showSearch(query: string): void {
   if (!query) {
-    console.log(chalk.red('\n  Kullanım: /oldconversations search <kelime>\n'));
+    logger.write(chalk.red('\n  Kullanım: /oldconversations search <kelime>\n'));
     return;
   }
 
   const results = searchConversations(query);
-  console.log(`\n${chalk.bold.cyan('Arama:')} "${query}"  — ${results.length} sonuç\n`);
+  logger.write(`\n${chalk.bold.cyan('Arama:')} "${query}"  — ${results.length} sonuç\n`);
 
   if (results.length === 0) {
-    console.log(chalk.dim('  Eşleşen sohbet bulunamadı.\n'));
+    logger.write(chalk.dim('  Eşleşen sohbet bulunamadı.\n'));
     return;
   }
 
@@ -86,11 +87,11 @@ function showSearch(query: string): void {
     const num   = chalk.dim(`${String(i + 1).padStart(2, ' ')}.`);
     const date  = chalk.dim(formatDisplayDate(conv.date));
     const title = conv.title.length > 45 ? conv.title.slice(0, 45) + '…' : conv.title;
-    console.log(`  ${num} ${date}  ${chalk.white(title)}`);
-    console.log(chalk.dim(`       ID: ${conv.id}`));
+    logger.write(`  ${num} ${date}  ${chalk.white(title)}`);
+    logger.write(chalk.dim(`       ID: ${conv.id}`));
   });
 
-  console.log('');
+  logger.write('');
 }
 
 // ─── Sohbet görüntüle (index ile) ────────────────────────────────────────────
@@ -98,7 +99,7 @@ function showSearch(query: string): void {
 function showByIndex(index: number): void {
   const convs = listConversations(30);
   if (index < 0 || index >= convs.length) {
-    console.log(chalk.red(`\n  Geçersiz numara. 1-${convs.length} arasında gir.\n`));
+    logger.write(chalk.red(`\n  Geçersiz numara. 1-${convs.length} arasında gir.\n`));
     return;
   }
   showConversation(convs[index].id);
@@ -108,22 +109,22 @@ function showByIndex(index: number): void {
 
 function showConversation(id: string): void {
   if (!id) {
-    console.log(chalk.red('\n  Kullanım: /oldconversations <numara|id>\n'));
+    logger.write(chalk.red('\n  Kullanım: /oldconversations <numara|id>\n'));
     return;
   }
 
   const raw = readConversation(id);
   if (!raw) {
-    console.log(chalk.red(`\n  Sohbet bulunamadı: ${id}\n`));
+    logger.write(chalk.red(`\n  Sohbet bulunamadı: ${id}\n`));
     return;
   }
 
   const body = raw.replace(/^---[\s\S]*?---\n/, '');
 
-  console.log('\n' + chalk.dim('─'.repeat(60)));
+  logger.write('\n' + chalk.dim('─'.repeat(60)));
   // Tüm içeriği tek seferde yazdır — ikinci readline çakışmasını önle
-  console.log(renderMarkdown(body));
-  console.log(chalk.dim('─'.repeat(60)) + '\n');
+  logger.write(renderMarkdown(body));
+  logger.write(chalk.dim('─'.repeat(60)) + '\n');
 }
 
 // ─── Markdown → terminal renderer (minimal) ──────────────────────────────────

@@ -15,17 +15,19 @@
 
 import chalk from 'chalk';
 
-export type LogLevel = 'debug' | 'info' | 'success' | 'warn' | 'error';
+export type LogLevel = 'trace' | 'debug' | 'info' | 'success' | 'warn' | 'error';
 
 const LOG_LEVELS: Record<LogLevel, number> = {
-  debug: 0,
-  info: 1,
-  success: 1,
-  warn: 2,
-  error: 3,
+  trace: 0,
+  debug: 1,
+  info: 2,
+  success: 2,
+  warn: 3,
+  error: 4,
 };
 
 const PREFIXES: Record<LogLevel, string> = {
+  trace: chalk.dim('·'),
   debug: chalk.dim('●'),
   info: chalk.blue('ℹ'),
   success: chalk.green('✔'),
@@ -34,6 +36,7 @@ const PREFIXES: Record<LogLevel, string> = {
 };
 
 const COLORS: Record<LogLevel, (s: string) => string> = {
+  trace: chalk.dim,
   debug: chalk.dim,
   info: chalk.white,
   success: chalk.green,
@@ -112,11 +115,23 @@ function log(level: LogLevel, message: string, ...args: unknown[]): void {
 }
 
 export const logger = {
+  trace: (msg: string, ...args: unknown[]) => log('trace', msg, ...args),
   debug: (msg: string, ...args: unknown[]) => log('debug', msg, ...args),
   info: (msg: string, ...args: unknown[]) => log('info', msg, ...args),
   success: (msg: string, ...args: unknown[]) => log('success', msg, ...args),
   warn: (msg: string, ...args: unknown[]) => log('warn', msg, ...args),
   error: (msg: string, ...args: unknown[]) => log('error', msg, ...args),
+
+  /** Kullanıcıya ham metin gösterir (renkli/chalk'lı) — log dosyasına da yazılır */
+  write(msg: string): void {
+    console.log(msg);
+    writeLog('info', msg.replace(/\x1b\[[0-9;]*m/g, ''));
+  },
+
+  /** Ham metin yazdırır (renk çıkarmadan, satır sonu eklemeden) */
+  raw(msg: string): void {
+    process.stdout.write(msg);
+  },
 
   /** Test amaçlı iç durumu sıfırlar */
   _reset(): void {

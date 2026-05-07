@@ -1,5 +1,6 @@
 import axios, { AxiosResponse } from 'axios';
 import chalk from 'chalk';
+import { logger } from '../services/logger';
 
 export interface SmokeCheck {
   name: string;
@@ -123,26 +124,26 @@ export async function runSmokeTests(checks: SmokeCheck[]): Promise<SmokeReport> 
 // ─── Raporu yazdır ───────────────────────────────────────────────────────────
 
 export function printSmokeReport(report: SmokeReport): void {
-  console.log('\n' + chalk.bold('═══ Smoke Test Raporu ═══\n'));
+  logger.write('\n' + chalk.bold('═══ Smoke Test Raporu ═══\n'));
 
   for (const r of report.results) {
     const icon = r.pass ? chalk.green('✓') : chalk.red('✗');
     const name = r.pass ? chalk.white(r.name) : chalk.red(r.name);
     const meta = chalk.dim(`${r.status ?? 'ERR'} • ${r.durationMs}ms`);
-    console.log(`  ${icon}  ${name}  ${meta}`);
+    logger.write(`  ${icon}  ${name}  ${meta}`);
 
     if (!r.pass) {
-      if (r.error) console.log(chalk.red(`     Hata: ${r.error}`));
-      for (const f of r.failures) console.log(chalk.red(`     ✗ ${f}`));
+      if (r.error) logger.write(chalk.red(`     Hata: ${r.error}`));
+      for (const f of r.failures) logger.write(chalk.red(`     ✗ ${f}`));
     }
   }
 
-  console.log('');
+  logger.write('');
   const total   = chalk.dim(`Toplam: ${report.total}`);
   const passed  = chalk.green(`✓ ${report.passed}`);
   const failed  = report.failed > 0 ? chalk.red(`✗ ${report.failed}`) : chalk.dim('✗ 0');
   const elapsed = chalk.dim(`${report.durationMs}ms`);
-  console.log(`  ${total}  ${passed}  ${failed}  ${elapsed}\n`);
+  logger.write(`  ${total}  ${passed}  ${failed}  ${elapsed}\n`);
 }
 
 // ─── URL'den otomatik check listesi oluştur ──────────────────────────────────

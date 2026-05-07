@@ -38,6 +38,7 @@ import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
 import { runSystemTest } from './test-runner';
 import { DEHA_VERSION, DEHA_VERSION_LABEL } from '../version';
+import { logger } from '../services/logger';
 
 const BANNER = `
 ${chalk.bold.cyan('╔══════════════════════════════════════════╗')}
@@ -74,12 +75,12 @@ ${chalk.bold('MCP kısayolları:')}
 `;
 
 export async function interactive(config: DehaConfig, initialHistory: Message[] = []): Promise<void> {
-  console.log(BANNER);
-  console.log(
+  logger.write(BANNER);
+  logger.write(
     chalk.dim('Provider: ') + chalk.green(getProviderLabel(config.provider)) +
     chalk.dim('  |  Model: ') + chalk.yellow(getActiveModel(config)) + '\n',
   );
-  console.log(chalk.dim('Çıkmak için /exit  •  Yardım için /help\n'));
+  logger.write(chalk.dim('Çıkmak için /exit  •  Yardım için /help\n'));
 
   // Redis + ChromaDB'yi otomatik başlat
   startServices().then(s => {
@@ -108,23 +109,23 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
   // Geriye dönük uyumluluk için boş history (session-memory bunu yönetiyor artık)
   const history: Message[] = [...initialHistory];
   if (initialHistory.length > 0) {
-    console.log(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
+    logger.write(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
   } else {
     // Session memory'den gelenleri göster
     const sessionMsgs = getSessionMessages();
     if (sessionMsgs.length > 0) {
-      console.log(chalk.dim(`  ↩ Önceki oturumdan ${sessionMsgs.length} mesaj yüklendi.\n`));
+      logger.write(chalk.dim(`  ↩ Önceki oturumdan ${sessionMsgs.length} mesaj yüklendi.\n`));
       
       const last5 = sessionMsgs.slice(-5);
-      console.log(chalk.dim('─── Son Konuşmalar ─────────────────────────────────'));
+      logger.write(chalk.dim('─── Son Konuşmalar ─────────────────────────────────'));
       for (const msg of last5) {
         const role = msg.role === 'user' ? 'Sen' : 'DEHA';
         const color = msg.role === 'user' ? chalk.green : chalk.cyan;
         let content = msg.content;
         if (content.length > 100) content = content.slice(0, 100).replace(/\n/g, ' ') + '...';
-        console.log(color(role + ': ') + chalk.dim(content));
+        logger.write(color(role + ': ') + chalk.dim(content));
       }
-      console.log(chalk.dim('────────────────────────────────────────────────────\n'));
+      logger.write(chalk.dim('────────────────────────────────────────────────────\n'));
     }
   }
 
@@ -163,13 +164,13 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         rl.close(); process.exit(0);
       }
 
-      if (trimmed === '/help') { console.log(HELP_TEXT); prompt(); return; }
+      if (trimmed === '/help') { logger.write(HELP_TEXT); prompt(); return; }
 
       if (trimmed === '/clear') {
         history.length = 0;
         console.clear();
-        console.log(BANNER);
-        console.log(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));
+        logger.write(BANNER);
+        logger.write(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));
         prompt(); return;
       }
 
@@ -179,7 +180,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
       }
 
       if (trimmed === '/version' || isVersionQuestion(trimmed)) {
-        console.log(chalk.cyan(`${DEHA_VERSION_LABEL}\n`));
+        logger.write(chalk.cyan(`${DEHA_VERSION_LABEL}\n`));
         prompt(); return;
       }
 
@@ -189,7 +190,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           await modelSetup(config);
         } catch (err: unknown) {
           if ((err as NodeJS.ErrnoException).name !== 'ExitPromptError') {
-            console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
+            logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
           }
         }
         rl.resume();
@@ -202,32 +203,32 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         const task = parts.slice(1).join(' ').trim();
 
         if (!filePath || !task) {
-          console.log(chalk.yellow('ℹ Kullanım: /judge <dosya> <görev>\n'));
+          logger.write(chalk.yellow('ℹ Kullanım: /judge <dosya> <görev>\n'));
           prompt(); return;
         }
 
         if (!fs.existsSync(filePath)) {
-          console.log(chalk.red(`✗ Dosya bulunamadı: ${filePath}\n`));
+          logger.write(chalk.red(`✗ Dosya bulunamadı: ${filePath}\n`));
           prompt(); return;
         }
 
         const code = fs.readFileSync(filePath, 'utf-8');
         try {
-          console.log(chalk.bold(`\n⚖️  JUDGE çalışıyor... [Dosya: ${filePath}]`));
+          logger.write(chalk.bold(`\n⚖️  JUDGE çalışıyor... [Dosya: ${filePath}]`));
           const { runJudge } = await import('../pipeline/judge');
           const verdict = await runJudge(task, 'Manuel Değerlendirme (No Plan)', code, config, (chunk) => {
             process.stdout.write(chalk.yellow(chunk));
           });
-          console.log('\n' + chalk.bold('─'.repeat(40)));
+          logger.write('\n' + chalk.bold('─'.repeat(40)));
           if (verdict.pass) {
-            console.log(chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • Skor: ${verdict.score}`));
+            logger.write(chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • Skor: ${verdict.score}`));
           } else {
-            console.log(chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • Skor: ${verdict.score}`));
+            logger.write(chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • Skor: ${verdict.score}`));
           }
-          console.log('\n');
+          logger.write('\n');
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+          logger.error(chalk.red('\n✗ Hata: ') + message + '\n');
         }
         prompt(); return;
       }
@@ -237,7 +238,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         const filePath = trimmed.slice(6).trim();
         const injected = injectFile(filePath);
         if (injected) {
-          console.log(chalk.green(`✓ Bağlama eklendi: ${filePath} (${injected.length} karakter)\n`));
+          logger.write(chalk.green(`✓ Bağlama eklendi: ${filePath} (${injected.length} karakter)\n`));
           history.push({ role: 'user', content: injected });
           history.push({ role: 'assistant', content: `Tamam, ${filePath} dosyasını okudum ve bağlama ekledim.` });
         }
@@ -261,9 +262,9 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         const cmd = trimmed.slice(5).trim();
         try {
           const r = await runCommand(cmd, { stream: true, shell: true, timeout: 60_000 });
-          console.log(chalk.dim(`\nExit: ${r.exitCode}  (${r.duration}ms)\n`));
+          logger.write(chalk.dim(`\nExit: ${r.exitCode}  (${r.duration}ms)\n`));
         } catch (err: unknown) {
-          console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
+          logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
         }
         prompt(); return;
       }
@@ -273,16 +274,16 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         const code = trimmed.slice(8).trim();
         const python = await detectPython();
         if (!python) {
-          console.log(chalk.red('\n✗ Python bulunamadı. python veya python3 yüklü olmalı.\n'));
+          logger.write(chalk.red('\n✗ Python bulunamadı. python veya python3 yüklü olmalı.\n'));
           prompt(); return;
         }
         try {
           const r = await runPythonCode(code, { timeout: 30 });
-          if (r.stdout) console.log('\n' + chalk.cyan(r.stdout.trim()));
-          if (r.stderr) console.log(chalk.red(r.stderr.trim()));
-          console.log(chalk.dim(`\nExit: ${r.exitCode}\n`));
+          if (r.stdout) logger.write('\n' + chalk.cyan(r.stdout.trim()));
+          if (r.stderr) logger.write(chalk.red(r.stderr.trim()));
+          logger.write(chalk.dim(`\nExit: ${r.exitCode}\n`));
         } catch (err: unknown) {
-          console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
+          logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
         }
         prompt(); return;
       }
@@ -295,7 +296,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           const report = await runSmokeTests(checks);
           printSmokeReport(report);
         } catch (err: unknown) {
-          console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
+          logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
         }
         prompt(); return;
       }
@@ -306,11 +307,11 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         try {
           process.stdout.write(chalk.dim('Screenshot alınıyor... '));
           const p = await takeScreenshot(url, { fullPage: false, waitMs: 1500 });
-          console.log(chalk.green('✓'));
-          console.log(chalk.dim(`  Kaydedildi: ${p}\n`));
+          logger.write(chalk.green('✓'));
+          logger.write(chalk.dim(`  Kaydedildi: ${p}\n`));
         } catch (err: unknown) {
-          console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
-          console.log(chalk.dim('  Playwright yüklü değilse: npx playwright install chromium\n'));
+          logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)));
+          logger.write(chalk.dim('  Playwright yüklü değilse: npx playwright install chromium\n'));
         }
         prompt(); return;
       }
@@ -322,18 +323,18 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           if (target.startsWith('http')) {
             process.stdout.write(chalk.dim('Screenshot + Vision analizi yapılıyor...\n\n'));
             const { screenshotPath, analysis } = await screenshotAndAnalyze(target, config);
-            console.log(chalk.dim(`Screenshot: ${screenshotPath}\n`));
-            console.log(chalk.bold.cyan('Vision Analizi:'));
-            console.log(formatResponse(analysis) + '\n');
+            logger.write(chalk.dim(`Screenshot: ${screenshotPath}\n`));
+            logger.write(chalk.bold.cyan('Vision Analizi:'));
+            logger.write(formatResponse(analysis) + '\n');
           } else {
             process.stdout.write(chalk.dim('Görüntü analiz ediliyor...\n\n'));
             const { analyzeExistingImage } = await import('../tools/vision');
             const analysis = await analyzeExistingImage(target, config);
-            console.log(chalk.bold.cyan('Vision Analizi:'));
-            console.log(formatResponse(analysis) + '\n');
+            logger.write(chalk.bold.cyan('Vision Analizi:'));
+            logger.write(formatResponse(analysis) + '\n');
           }
         } catch (err: unknown) {
-          console.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
+          logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err)) + '\n');
         }
         prompt(); return;
       }
@@ -343,7 +344,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         try {
           await runSystemTest(config);
         } catch (err: unknown) {
-          console.error(chalk.red('\n✗ Test hatası: ') + (err instanceof Error ? err.message : String(err)) + '\n');
+          logger.error(chalk.red('\n✗ Test hatası: ') + (err instanceof Error ? err.message : String(err)) + '\n');
         }
         prompt(); return;
       }
@@ -368,13 +369,13 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           // Session memory'ye de ekle
           await appendMessage({ role: 'user', content: agentPrompt });
           await appendMessage({ role: 'assistant', content: response });
-          console.log(chalk.dim('\n' + '─'.repeat(50)) + '\n');
+          logger.write(chalk.dim('\n' + '─'.repeat(50)) + '\n');
         } catch (err: unknown) {
           if (abortController.signal.aborted || (err instanceof Error && err.name === 'AbortError') || (err instanceof Error && err.message.includes('canceled'))) {
             // İptal edildi, hata yazdırma
           } else {
             const message = err instanceof Error ? err.message : String(err);
-            console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+            logger.error(chalk.red('\n✗ Hata: ') + message + '\n');
           }
         } finally {
           process.stdin.removeListener('keypress', onKeypress);
@@ -389,7 +390,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
       const detectedDir = detectWorkDir(trimmed);
       if (detectedDir) {
         setWorkDir(detectedDir);
-        console.log(chalk.dim(`  📁 Çalışma dizini: ${detectedDir}\n`));
+        logger.write(chalk.dim(`  📁 Çalışma dizini: ${detectedDir}\n`));
       }
 
       // ── Chat (araç çağrısı destekli, session-memory ile) ─────────────────
@@ -400,7 +401,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         if (intent.search && intent.keywords) {
           process.stdout.write(chalk.dim(`\n  🌍 Searching: "${intent.keywords}"... `));
           enrichedMessage = await enrichWithSearch(userMessage, intent.keywords);
-          console.log(chalk.green('✓'));
+          logger.write(chalk.green('✓'));
         }
 
         // Bağlamı session-memory'den oluştur. Yeni mesajı runAgent ekleyecek;
@@ -462,20 +463,20 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
         if (compressed) {
           const stats = getContextStats(maxCtxTokens);
-          console.log(
+          logger.write(
             chalk.dim('  📦 Context compressed') +
             chalk.dim(` — ${stats.messages} mesaj korundu, `) +
             chalk.dim(`~${Math.round(stats.usagePercent)}% kullanım\n`),
           );
         }
 
-        console.log(chalk.dim('─'.repeat(50)) + '\n');
+        logger.write(chalk.dim('─'.repeat(50)) + '\n');
       } catch (err: unknown) {
         if ((err instanceof Error && err.name === 'AbortError') || (err instanceof Error && err.message.includes('canceled'))) {
           // İptal edildi sessizce yut (hata catch dışında handle edildi)
         } else {
           const message = err instanceof Error ? err.message : String(err);
-          console.error(chalk.red('\n✗ Hata: ') + message + '\n');
+          logger.error(chalk.red('\n✗ Hata: ') + message + '\n');
         }
       }
 
@@ -513,11 +514,11 @@ async function exitCleanup(history: Message[], config: DehaConfig): Promise<void
   }
 
   await mcpManager.disconnectAll().catch(() => {});
-  console.log(chalk.dim('Görüşürüz! 👋'));
+  logger.write(chalk.dim('Görüşürüz! 👋'));
   if (sessionId) {
-    console.log(chalk.dim('To continue this session, run: ') + chalk.cyan(`deha resume ${sessionId}`) + '\n');
+    logger.write(chalk.dim('To continue this session, run: ') + chalk.cyan(`deha resume ${sessionId}`) + '\n');
   } else {
-    console.log();
+    logger.write('');
   }
 }
 
@@ -540,7 +541,7 @@ function injectFile(filePath: string): string | null {
     const ext = path.extname(filePath).slice(1) || 'text';
     return `Aşağıdaki dosya içeriğini sana gönderiyorum:\n\`\`\`${ext}\n// ${resolved}\n${content}\n\`\`\``;
   } catch {
-    console.error(chalk.red(`✗ Dosya okunamadı: ${filePath}\n`));
+    logger.error(chalk.red(`✗ Dosya okunamadı: ${filePath}\n`));
     return null;
   }
 }

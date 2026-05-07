@@ -1,6 +1,7 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { DehaConfig, Provider } from '../config';
+import { logger } from '../services/logger';
 
 const PROVIDERS: { name: string; value: Provider }[] = [
   { name: 'Claude  (Anthropic)',  value: 'claude'      },
@@ -41,13 +42,13 @@ function defaultKey(provider: Provider, config: DehaConfig): string {
 // ─── Ana fonksiyon ────────────────────────────────────────────────────────────
 
 export async function modelSetup(config: DehaConfig): Promise<void> {
-  console.log('\n' + chalk.bold.cyan('╔══════════════════════════════════════════╗'));
-  console.log(chalk.bold.cyan('║') + chalk.bold.white('   Model & Provider Ayarları') + ' '.repeat(16) + chalk.bold.cyan('║'));
-  console.log(chalk.bold.cyan('╚══════════════════════════════════════════╝') + '\n');
-  console.log(chalk.dim('  Boş bıraktığın alanlar mevcut değeri korur.\n'));
+  logger.write('\n' + chalk.bold.cyan('╔══════════════════════════════════════════╗'));
+  logger.write(chalk.bold.cyan('║') + chalk.bold.white('   Model & Provider Ayarları') + ' '.repeat(16) + chalk.bold.cyan('║'));
+  logger.write(chalk.bold.cyan('╚══════════════════════════════════════════╝') + '\n');
+  logger.write(chalk.dim('  Boş bıraktığın alanlar mevcut değeri korur.\n'));
 
   // ── 1. Ana chat modeli ─────────────────────────────────────────────────────
-  console.log(chalk.bold.yellow('  ── Chat (İnteraktif Mod) ─────────────────'));
+  logger.write(chalk.bold.yellow('  ── Chat (İnteraktif Mod) ─────────────────'));
   const chat = await inquirer.prompt([
     {
       type: 'list',
@@ -79,7 +80,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   ]);
 
   // ── 2. Planner ─────────────────────────────────────────────────────────────
-  console.log('\n' + chalk.bold.blue('  ── Planner (Plan çıkarır) ─────────────────'));
+  logger.write('\n' + chalk.bold.blue('  ── Planner (Plan çıkarır) ─────────────────'));
   const planner = await inquirer.prompt([
     {
       type: 'list',
@@ -124,7 +125,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   ]);
 
   // ── 3. Coder (Draft) ───────────────────────────────────────────────────────
-  console.log('\n' + chalk.bold.green('  ── Coder / Draft (Kodu yazar) ─────────────'));
+  logger.write('\n' + chalk.bold.green('  ── Coder / Draft (Kodu yazar) ─────────────'));
   const coder = await inquirer.prompt([
     {
       type: 'list',
@@ -169,7 +170,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   ]);
 
   // ── 4. Judge ───────────────────────────────────────────────────────────────
-  console.log('\n' + chalk.bold.red('  ── Judge (Kodu inceler) ────────────────────'));
+  logger.write('\n' + chalk.bold.red('  ── Judge (Kodu inceler) ────────────────────'));
   const judge = await inquirer.prompt([
     {
       type: 'list',
@@ -214,7 +215,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   ]);
 
   // ── 5. Vision ──────────────────────────────────────────────────────────────
-  console.log('\n' + chalk.bold.magenta('  ── Vision (Görüntü analizi) ───────────────'));
+  logger.write('\n' + chalk.bold.magenta('  ── Vision (Görüntü analizi) ───────────────'));
   const vision = await inquirer.prompt([
     {
       type: 'list',
@@ -251,7 +252,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   ]);
 
   // ── Pipeline max iterations ────────────────────────────────────────────────
-  console.log('\n' + chalk.bold.white('  ── Pipeline Ayarları ──────────────────────'));
+  logger.write('\n' + chalk.bold.white('  ── Pipeline Ayarları ──────────────────────'));
   const pipeline = await inquirer.prompt([
     {
       type: 'number',
@@ -277,17 +278,17 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   });
 
   // ── Özet göster ────────────────────────────────────────────────────────────
-  console.log('\n' + chalk.bold.cyan('  ✓ Ayarlar bu oturum için güncellendi:\n'));
+  logger.write('\n' + chalk.bold.cyan('  ✓ Ayarlar bu oturum için güncellendi:\n'));
 
   const row = (label: string, color: chalk.Chalk, p: string, m: string) =>
-    console.log(`  ${color(label.padEnd(10))}  ${chalk.dim('provider=')}${chalk.green(p)}  ${chalk.dim('model=')}${chalk.yellow(m)}`);
+    logger.write(`  ${color(label.padEnd(10))}  ${chalk.dim('provider=')}${chalk.green(p)}  ${chalk.dim('model=')}${chalk.yellow(m)}`);
 
   row('Chat',    chalk.bold.yellow,   config.provider,                   getModelFromConfig(config, config.provider));
   row('Planner', chalk.bold.blue,     config.pipeline.planner.provider,  config.pipeline.planner.model);
   row('Coder',   chalk.bold.green,    config.pipeline.coder.provider,    config.pipeline.coder.model);
   row('Judge',   chalk.bold.red,      config.pipeline.judge.provider,    config.pipeline.judge.model);
   row('Vision',  chalk.bold.magenta,  (vision as VisionAns).provider,    (vision as VisionAns).model);
-  console.log('');
+  logger.write('');
 }
 
 // ─── Config'e yansıt ─────────────────────────────────────────────────────────

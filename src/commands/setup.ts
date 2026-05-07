@@ -1,24 +1,25 @@
 import chalk from 'chalk';
 import axios from 'axios';
 import { DehaConfig, Provider, getProviderLabel } from '../config';
+import { logger } from '../services/logger';
 
 export async function setup(config: DehaConfig): Promise<void> {
-  console.log('\n' + chalk.bold.cyan('═══ DEHA Kurulum & Bağlantı Testi ═══') + '\n');
+  logger.write('\n' + chalk.bold.cyan('═══ DEHA Kurulum & Bağlantı Testi ═══') + '\n');
 
   const provider = config.provider;
-  console.log(chalk.dim('Aktif Provider: ') + chalk.green(getProviderLabel(provider)));
+  logger.write(chalk.dim('Aktif Provider: ') + chalk.green(getProviderLabel(provider)));
   if (provider === 'custom') {
-    console.log(chalk.dim('Endpoint: ') + chalk.yellow(config.customApiUrl));
-    console.log(chalk.dim('Model: ') + chalk.yellow(config.customModel));
+    logger.write(chalk.dim('Endpoint: ') + chalk.yellow(config.customApiUrl));
+    logger.write(chalk.dim('Model: ') + chalk.yellow(config.customModel));
   }
 
   const ok = await testProvider(provider, config);
 
   if (ok) {
-    console.log('\n' + chalk.green('✓ Bağlantı başarılı! DEHA kullanıma hazır.'));
-    console.log(chalk.dim('  deha') + chalk.white(' komutuyla interaktif moda geçebilirsin.\n'));
+    logger.write('\n' + chalk.green('✓ Bağlantı başarılı! DEHA kullanıma hazır.'));
+    logger.write(chalk.dim('  deha') + chalk.white(' komutuyla interaktif moda geçebilirsin.\n'));
   } else {
-    console.log('\n' + chalk.red('✗ Bağlantı kurulamadı.'));
+    logger.write('\n' + chalk.red('✗ Bağlantı kurulamadı.'));
     printFixHints(provider, config);
   }
 }
@@ -79,12 +80,12 @@ async function testProvider(provider: Provider, config: DehaConfig): Promise<boo
       }
     }
 
-    console.log(chalk.green('✓'));
+    logger.write(chalk.green('✓'));
     return true;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.log(chalk.red('✗'));
-    console.log(chalk.red('  Hata: ') + message);
+    logger.write(chalk.red('✗'));
+    logger.write(chalk.red('  Hata: ') + message);
     return false;
   }
 }
@@ -101,41 +102,41 @@ async function testOpenAICompat(baseUrl: string, apiKey: string | undefined, mod
 }
 
 function printFixHints(provider: Provider, config: DehaConfig): void {
-  console.log('\n' + chalk.bold('Çözüm önerileri:'));
+  logger.write('\n' + chalk.bold('Çözüm önerileri:'));
 
   switch (provider) {
     case 'claude':
-      console.log(chalk.dim('  1. .env → ANTHROPIC_API_KEY'));
-      console.log(chalk.dim('  2. https://console.anthropic.com'));
+      logger.write(chalk.dim('  1. .env → ANTHROPIC_API_KEY'));
+      logger.write(chalk.dim('  2. https://console.anthropic.com'));
       break;
     case 'openai':
-      console.log(chalk.dim('  1. .env → OPENAI_API_KEY'));
-      console.log(chalk.dim('  2. https://platform.openai.com'));
+      logger.write(chalk.dim('  1. .env → OPENAI_API_KEY'));
+      logger.write(chalk.dim('  2. https://platform.openai.com'));
       break;
     case 'deepseek':
-      console.log(chalk.dim('  1. .env → DEEPSEEK_API_KEY'));
-      console.log(chalk.dim('  2. https://platform.deepseek.com'));
+      logger.write(chalk.dim('  1. .env → DEEPSEEK_API_KEY'));
+      logger.write(chalk.dim('  2. https://platform.deepseek.com'));
       break;
     case 'openrouter':
-      console.log(chalk.dim('  1. .env → OPENROUTER_API_KEY'));
-      console.log(chalk.dim('  2. https://openrouter.ai/keys'));
+      logger.write(chalk.dim('  1. .env → OPENROUTER_API_KEY'));
+      logger.write(chalk.dim('  2. https://openrouter.ai/keys'));
       break;
     case 'xai':
-      console.log(chalk.dim('  1. .env → XAI_API_KEY'));
-      console.log(chalk.dim('  2. https://console.x.ai'));
+      logger.write(chalk.dim('  1. .env → XAI_API_KEY'));
+      logger.write(chalk.dim('  2. https://console.x.ai'));
       break;
     case 'ollama':
-      console.log(chalk.dim('  1. Ollama kurulu mu? → https://ollama.ai'));
-      console.log(chalk.dim('  2. Servis çalışıyor mu? → ollama serve'));
-      console.log(chalk.dim('  3. Model var mı? → ollama pull llama3'));
+      logger.write(chalk.dim('  1. Ollama kurulu mu? → https://ollama.ai'));
+      logger.write(chalk.dim('  2. Servis çalışıyor mu? → ollama serve'));
+      logger.write(chalk.dim('  3. Model var mı? → ollama pull llama3'));
       break;
     case 'custom':
-      console.log(chalk.dim(`  1. Endpoint erişilebilir mi? → ${config.customApiUrl}`));
-      console.log(chalk.dim('  2. .env → CUSTOM_API_URL, CUSTOM_MODEL, CUSTOM_API_KEY'));
-      console.log(chalk.dim('  3. Servisin OpenAI-uyumlu /chat/completions endpoint\'i var mı?'));
-      console.log(chalk.dim('     (LM Studio, vLLM, LocalAI, llama.cpp server, Kobold vb.)'));
+      logger.write(chalk.dim(`  1. Endpoint erişilebilir mi? → ${config.customApiUrl}`));
+      logger.write(chalk.dim('  2. .env → CUSTOM_API_URL, CUSTOM_MODEL, CUSTOM_API_KEY'));
+      logger.write(chalk.dim('  3. Servisin OpenAI-uyumlu /chat/completions endpoint\'i var mı?'));
+      logger.write(chalk.dim('     (LM Studio, vLLM, LocalAI, llama.cpp server, Kobold vb.)'));
       break;
   }
 
-  console.log('');
+  logger.write('');
 }

@@ -108,16 +108,16 @@ export class DehaCLI {
         }
         const code = fs.readFileSync(file, 'utf-8');
         try {
-          console.log(chalk.bold(`\n⚖️  JUDGE çalışıyor... [Dosya: ${file}]`));
+          logger.write(chalk.bold(`\n⚖️  JUDGE çalışıyor... [Dosya: ${file}]`));
           const { runJudge } = await import('./pipeline/judge');
           const verdict = await runJudge(task, 'Manuel Değerlendirme (No Plan)', code, config, (chunk) => {
-            process.stdout.write(chalk.yellow(chunk));
+            logger.raw(chalk.yellow(chunk));
           });
-          console.log('\n' + chalk.bold('─'.repeat(40)));
+          logger.write('\n' + chalk.bold('─'.repeat(40)));
           if (verdict.pass) {
-            console.log(chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • Skor: ${verdict.score}`));
+            logger.write(chalk.bgGreen.black(` ✓ PASS `) + chalk.green(` • Skor: ${verdict.score}`));
           } else {
-            console.log(chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • Skor: ${verdict.score}`));
+            logger.write(chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • Skor: ${verdict.score}`));
           }
         } catch (err: unknown) {
           logger.error('Judge hatası', err);
@@ -223,17 +223,17 @@ export class DehaCLI {
       .option('-w, --wait <ms>', 'Sayfa yükleme bekleme (ms)', '1500')
       .action(async (url: string, opts) => {
         try {
-          process.stdout.write(chalk.dim('Screenshot alınıyor... '));
+          logger.raw(chalk.dim('Screenshot alınıyor... '));
           const p = await takeScreenshot(url, {
             fullPage: opts.fullPage,
             outputPath: opts.output,
             waitMs: parseInt(opts.wait, 10),
           });
-          console.log(chalk.green('✓'));
-          console.log(chalk.dim(`Kaydedildi: ${p}`));
+          logger.write(chalk.green('✓'));
+          logger.write(chalk.dim(`Kaydedildi: ${p}`));
         } catch (err: unknown) {
           logger.error('Screenshot hatası', err);
-          console.log(chalk.dim('Playwright için: npx playwright install chromium'));
+          logger.write(chalk.dim('Playwright için: npx playwright install chromium'));
           process.exit(1);
         }
       });
@@ -248,16 +248,16 @@ export class DehaCLI {
         const config = this.buildConfig();
         try {
           if (target.startsWith('http')) {
-            process.stdout.write(chalk.dim('Screenshot + analiz yapılıyor...\n\n'));
+            logger.raw(chalk.dim('Screenshot + analiz yapılıyor...\n\n'));
             const { screenshotPath, analysis } = await screenshotAndAnalyze(target, config, {
               prompt: opts.prompt, fullPage: opts.fullPage,
             });
-            console.log(chalk.dim(`Screenshot: ${screenshotPath}\n`));
-            console.log(analysis);
+            logger.write(chalk.dim(`Screenshot: ${screenshotPath}\n`));
+            logger.write(analysis);
           } else {
             const { analyzeExistingImage } = await import('./tools/vision');
             const analysis = await analyzeExistingImage(target, config, opts.prompt);
-            console.log(analysis);
+            logger.write(analysis);
           }
         } catch (err: unknown) {
           logger.error('Vision hatası', err);

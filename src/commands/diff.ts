@@ -3,6 +3,7 @@ import * as path from 'path';
 import chalk from 'chalk';
 import { execSync } from 'child_process';
 import { getConfig } from '../config';
+import { logger } from "../services/logger";
 import { sendMessage, Message } from '../services/ai-service';
 
 // ─── deha diff ───────────────────────────────────────────────────────────────
@@ -12,7 +13,7 @@ export function showDiff(): void {
     // Git repo kontrolü
     execSync('git rev-parse --is-inside-work-tree', { stdio: 'ignore', cwd: '.' });
   } catch {
-    console.log(chalk.yellow('Bu bir git reposu değil. LINTEN: Mevcut değişiklikler gösterilemiyor.'));
+    logger.write(chalk.yellow('Bu bir git reposu değil. LINTEN: Mevcut değişiklikler gösterilemiyor.'));
     return;
   }
 
@@ -28,7 +29,7 @@ export function showDiff(): void {
   }
 
   if (!diff) {
-    console.log(chalk.dim('Hiçbir değişiklik yok.'));
+    logger.write(chalk.dim('Hiçbir değişiklik yok.'));
     return;
   }
 
@@ -40,15 +41,15 @@ export function showDiff(): void {
     const line = lines[i];
     const lineNum = String(i + 1).padStart(maxLineNum, ' ');
     if (line.startsWith('+')) {
-      console.log(chalk.green(`${lineNum} ${line}`));
+      logger.write(chalk.green(`${lineNum} ${line}`));
     } else if (line.startsWith('-')) {
-      console.log(chalk.red(`${lineNum} ${line}`));
+      logger.write(chalk.red(`${lineNum} ${line}`));
     } else if (line.startsWith('@@')) {
-      console.log(chalk.cyan(`${lineNum} ${line}`));
+      logger.write(chalk.cyan(`${lineNum} ${line}`));
     } else if (line.startsWith('diff --git') || line.startsWith('index') || line.startsWith('---') || line.startsWith('+++')) {
-      console.log(chalk.bold.white(`${lineNum} ${line}`));
+      logger.write(chalk.bold.white(`${lineNum} ${line}`));
     } else {
-      console.log(chalk.dim(`${lineNum} ${line}`));
+      logger.write(chalk.dim(`${lineNum} ${line}`));
     }
   }
 
@@ -56,7 +57,7 @@ export function showDiff(): void {
   const added = diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length;
   const removed = diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length;
   const files = diff.match(/^diff --git a\/(.+?) b\/(.+?)$/gm)?.length ?? 0;
-  console.log(chalk.dim(`\n${files} dosya, +${added} / -${removed} satır`));
+  logger.write(chalk.dim(`\n${files} dosya, +${added} / -${removed} satır`));
 }
 
 // ─── deha review ─────────────────────────────────────────────────────────────
@@ -72,16 +73,16 @@ export async function reviewDiff(): Promise<void> {
       } catch { /* */ }
     }
   } catch {
-    console.log(chalk.yellow('Git reposu bulunamadı.'));
+    logger.write(chalk.yellow('Git reposu bulunamadı.'));
     return;
   }
 
   if (!diff) {
-    console.log(chalk.dim('Review edilecek değişiklik yok.'));
+    logger.write(chalk.dim('Review edilecek değişiklik yok.'));
     return;
   }
 
-  console.log(chalk.cyan('🔍 Diff AI ile review ediliyor...\n'));
+  logger.write(chalk.cyan('🔍 Diff AI ile review ediliyor...\n'));
 
   const config = getConfig();
   const messages: Message[] = [
@@ -104,8 +105,8 @@ ${diff.slice(0, 15000)}
 
   try {
     const review = await sendMessage(messages, config);
-    console.log(review);
+    logger.write(review);
   } catch (err: unknown) {
-    console.error(chalk.red('Review hatası: '), err instanceof Error ? err.message : String(err));
+    logger.error(chalk.red('Review hatası: '), err instanceof Error ? err.message : String(err));
   }
 }

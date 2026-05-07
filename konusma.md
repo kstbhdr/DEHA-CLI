@@ -911,7 +911,7 @@ npx tsc --noEmit  →  ✅ HATA YOK
 | Alan | Durum | Öneri |
 |------|-------|-------|
 | **CI/CD** | ⚠️ Var ama coverage eksik | Coveralls/Codecov eklenmeli, Windows matrix eklenmeli |
-| **Logging** | ❌ `console.log` tabanlı | Winston/Pino structured logger'a geçilmeli |
+| **Logging** | ✅ `logger.write()` ile tüm console.log'lar değiştirildi | Structured logger aktif, trace seviyesi eklendi |
 | **Error Handling** | ⚠️ Kısmi | Kullanıcı dostu hata mesajları, renklendirme |
 | **CLI UX** | ⚠️ Spinner yok | `ora` kütüphanesi yeniden değerlendirilebilir |
 | **Vector Store** | ⚠️ Sadece Chroma | Pinecone, Qdrant desteği |
@@ -921,3 +921,57 @@ npx tsc --noEmit  →  ✅ HATA YOK
 ---
 
 *Özet: 5 yeni test dosyası (72 test → 83 test), 1 CONTRIBUTING.md, README güncellemesi, 3 güvenlik açığı düzeltmesi. Proje derleniyor, testler geçiyor, dokümante edilmiş durumda.*
+
+---
+
+# DEHA-CLI — Konuşma Özeti #23
+
+**Tarih:** 2026-05-07  
+**Kapsam:** Structured Logging Geçişi — Tüm console.log'lar logger servisine taşındı
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 `src/services/logger.ts` — Geliştirme
+- **`trace`** log seviyesi eklendi (`DEHA_LOG_LEVEL=trace` ile aktif edilir)
+- **`logger.write(msg)`** metodu eklendi: Kullanıcıya renkli/chalk'lı çıktı gösterir, aynı anda log dosyasına da yazar (ANSI kodları temizlenerek)
+- **`logger.raw(msg)`** metodu eklendi: `process.stdout.write()` muadili, satır sonu eklemeden ham yazdırır
+- Log seviyeleri yeniden sıralandı: trace(0) → debug(1) → info(2) → success(2) → warn(3) → error(4)
+
+### 1.2 Tüm Dosyalarda console.log → logger.write() Dönüşümü
+
+| Dosya | console.log |
+|-------|:-----------:|
+| `src/cli.ts` | 10 → 0 |
+| `src/commands/agent.ts` | 6 → 0 |
+| `src/commands/diff.ts` | 13 → 0 |
+| `src/commands/doctor.ts` | 12 → 0 |
+| `src/commands/init.ts` | 17 → 0 |
+| `src/commands/interactive.ts` | 10 → 0 |
+| `src/commands/model-setup.ts` | 12 → 0 |
+| `src/commands/setup.ts` | 27 → 0 |
+| `src/commands/test-runner.ts` | 8 → 0 |
+| `src/commands/update.ts` | 23 → 0 |
+| `src/conversations/commands.ts` | 30 → 0 |
+| `src/index.ts` | 1 → 0 |
+| `src/mcp/commands.ts` | 34 → 0 |
+| `src/pipeline/orchestrator.ts` | 16 → 0 |
+| `src/services/usage-tracker.ts` | 12 → 0 |
+| `src/tools/browser.ts` | 1 → 0 |
+| `src/tools/index.ts` | 1 → 0 |
+| `src/tools/smoke.ts` | 6 → 0 |
+| **Toplam** | **~240 → 0** |
+
+---
+
+## 2. Derleme Durumu
+
+```
+npx tsc --noEmit  →  ✅ HATA YOK
+npx vitest run    →  ✅ 221/221 TEST GEÇTİ (20 dosya)
+```
+
+---
+
+*Özet: 18 dosyada ~240 console.log çağrısı logger servisine taşındı. Logger'a trace, write, raw metodları eklendi. Proje hatasız derleniyor, tüm testler geçiyor.*

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import chalk from 'chalk';
 import { DehaConfig } from '../config';
+import { logger } from './logger';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -159,26 +160,26 @@ export function getStats(): {
 export function printStats(): void {
   const { today, week, month, allTime } = getStats();
 
-  console.log('\n' + chalk.bold.cyan('╔══════════════════════════════════════════════════════╗'));
-  console.log(chalk.bold.cyan('║') + chalk.bold.white('   DEHA — Token & Cost Statistics') + ' '.repeat(21) + chalk.bold.cyan('║'));
-  console.log(chalk.bold.cyan('╚══════════════════════════════════════════════════════╝'));
+  logger.write('\n' + chalk.bold.cyan('╔══════════════════════════════════════════════════════╗'));
+  logger.write(chalk.bold.cyan('║') + chalk.bold.white('   DEHA — Token & Cost Statistics') + ' '.repeat(21) + chalk.bold.cyan('║'));
+  logger.write(chalk.bold.cyan('╚══════════════════════════════════════════════════════╝'));
 
   printPeriod('Today',    today);
   printPeriod('This Week (last 7 days)', week);
   printPeriod('This Month', month);
   printPeriod('All Time',   allTime);
 
-  console.log('');
+  logger.write('');
 }
 
 function printPeriod(label: string, p: PeriodStats): void {
   if (p.calls === 0) {
-    console.log('\n' + chalk.bold(`  ── ${label} ──`) + chalk.dim('  (no data)'));
+    logger.write('\n' + chalk.bold(`  ── ${label} ──`) + chalk.dim('  (no data)'));
     return;
   }
 
-  console.log('\n' + chalk.bold(`  ── ${label} ──`));
-  console.log(
+  logger.write('\n' + chalk.bold(`  ── ${label} ──`));
+  logger.write(
     `  ${chalk.dim('Calls:')}  ${chalk.white(p.calls)}   ` +
     `${chalk.dim('Tokens:')}  ${chalk.yellow(fmt(p.totalTokens))} ` +
     `${chalk.dim('(in:')} ${chalk.dim(fmt(p.inputTokens))} ${chalk.dim('out:')} ${chalk.dim(fmt(p.outputTokens))}${chalk.dim(')')}   ` +
@@ -187,10 +188,10 @@ function printPeriod(label: string, p: PeriodStats): void {
 
   // By model
   if (Object.keys(p.byModel).length > 0) {
-    console.log('\n  ' + chalk.dim('By model:'));
+    logger.write('\n  ' + chalk.dim('By model:'));
     const sorted = Object.entries(p.byModel).sort((a, b) => b[1].cost - a[1].cost);
     for (const [model, s] of sorted) {
-      console.log(
+      logger.write(
         `    ${chalk.cyan(model.padEnd(40))} ` +
         `${chalk.dim('calls:')} ${String(s.calls).padStart(4)}  ` +
         `${chalk.dim('tokens:')} ${fmt(s.input + s.output).padStart(9)}  ` +
@@ -201,7 +202,7 @@ function printPeriod(label: string, p: PeriodStats): void {
 
   // By role
   if (Object.keys(p.byRole).length > 0) {
-    console.log('\n  ' + chalk.dim('By role:'));
+    logger.write('\n  ' + chalk.dim('By role:'));
     const roleOrder = ['chat', 'planner', 'coder', 'judge', 'vision', 'agent'];
     const roles = roleOrder.filter(r => p.byRole[r]);
     for (const role of roles) {
@@ -209,7 +210,7 @@ function printPeriod(label: string, p: PeriodStats): void {
       const icon: Record<string, string> = {
         chat: '💬', planner: '📐', coder: '💻', judge: '⚖️ ', vision: '👁️ ', agent: '🤖',
       };
-      console.log(
+      logger.write(
         `    ${(icon[role] ?? '•') + ' ' + chalk.yellow(role.padEnd(10))} ` +
         `${chalk.dim('calls:')} ${String(s.calls).padStart(4)}  ` +
         `${chalk.dim('tokens:')} ${fmt(s.input + s.output).padStart(9)}  ` +

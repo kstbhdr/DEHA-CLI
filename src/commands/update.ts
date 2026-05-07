@@ -2,6 +2,7 @@ import { execSync } from 'child_process';
 import axios from 'axios';
 import chalk from 'chalk';
 import { DEHA_SEMVER, DEHA_VERSION } from '../version';
+import { logger } from '../services/logger';
 
 const CURRENT_VERSION = DEHA_SEMVER;
 const NPM_PACKAGE     = 'deha-cli';
@@ -19,23 +20,23 @@ export async function checkForUpdates(silent = false): Promise<void> {
     if (!info) return;
 
     if (isNewer(info.latest, CURRENT_VERSION)) {
-      console.log(
+      logger.write(
         '\n' + chalk.bgYellow.black(' GÜNCELLEME MEVCUT ') +
         chalk.yellow(` v${DEHA_VERSION} → v${info.latest}`) +
         chalk.dim(` (${info.source})`),
       );
-      console.log(chalk.dim('  deha update  →  güncellemek için\n'));
+      logger.write(chalk.dim('  deha update  →  güncellemek için\n'));
     } else if (!silent) {
-      console.log(chalk.green(`\n✓ En güncel sürümü kullanıyorsun (v${DEHA_VERSION})\n`));
+      logger.write(chalk.green(`\n✓ En güncel sürümü kullanıyorsun (v${DEHA_VERSION})\n`));
     }
   } catch {
-    if (!silent) console.log(chalk.dim('\nGüncelleme kontrolü başarısız.\n'));
+    if (!silent) logger.write(chalk.dim('\nGüncelleme kontrolü başarısız.\n'));
   }
 }
 
 export async function runUpdate(): Promise<void> {
-  console.log('\n' + chalk.bold.cyan('═══ DEHA Güncelleme ═══'));
-  console.log(chalk.dim(`  Mevcut sürüm: v${DEHA_VERSION}\n`));
+  logger.write('\n' + chalk.bold.cyan('═══ DEHA Güncelleme ═══'));
+  logger.write(chalk.dim(`  Mevcut sürüm: v${DEHA_VERSION}\n`));
 
   process.stdout.write(chalk.dim('  Son sürüm kontrol ediliyor... '));
 
@@ -43,24 +44,24 @@ export async function runUpdate(): Promise<void> {
   try {
     info = await fetchLatestVersion();
   } catch {
-    console.log(chalk.red('✗ Bağlantı hatası'));
+    logger.write(chalk.red('✗ Bağlantı hatası'));
   }
 
   if (!info) {
-    console.log(chalk.red('\n  Sürüm bilgisi alınamadı.\n'));
+    logger.write(chalk.red('\n  Sürüm bilgisi alınamadı.\n'));
     printManualUpdate();
     return;
   }
 
-  console.log(chalk.green(`v${info.latest}`) + chalk.dim(` (${info.source})`));
+  logger.write(chalk.green(`v${info.latest}`) + chalk.dim(` (${info.source})`));
 
   if (!isNewer(info.latest, CURRENT_VERSION)) {
-    console.log(chalk.green('\n  ✓ Zaten en güncel sürümdesin!\n'));
+    logger.write(chalk.green('\n  ✓ Zaten en güncel sürümdesin!\n'));
     return;
   }
 
-  console.log(chalk.yellow(`\n  Yeni sürüm bulundu: v${DEHA_VERSION} → v${info.latest}`));
-  console.log(chalk.dim('  Güncelleniyor...\n'));
+  logger.write(chalk.yellow(`\n  Yeni sürüm bulundu: v${DEHA_VERSION} → v${info.latest}`));
+  logger.write(chalk.dim('  Güncelleniyor...\n'));
 
   // npm ile kurulduysa npm üzerinden güncelle
   if (isGlobalNpmInstall()) {
@@ -109,17 +110,17 @@ function runNpmUpdate(): void {
   process.stdout.write(chalk.dim(`  npm install -g ${NPM_PACKAGE}@latest... `));
   try {
     execSync(`npm install -g ${NPM_PACKAGE}@latest`, { stdio: 'pipe' });
-    console.log(chalk.green('✓'));
-    console.log(chalk.green('\n  ✓ DEHA güncellendi! Terminali yeniden başlat.\n'));
+    logger.write(chalk.green('✓'));
+    logger.write(chalk.green('\n  ✓ DEHA güncellendi! Terminali yeniden başlat.\n'));
   } catch (err: unknown) {
-    console.log(chalk.red('✗'));
-    console.log(chalk.red('  Hata: ') + (err instanceof Error ? err.message : String(err)));
+    logger.write(chalk.red('✗'));
+    logger.write(chalk.red('  Hata: ') + (err instanceof Error ? err.message : String(err)));
     printManualUpdate();
   }
 }
 
 function runGitUpdate(): void {
-  console.log(chalk.dim('  git pull + npm build yöntemi kullanılıyor...\n'));
+  logger.write(chalk.dim('  git pull + npm build yöntemi kullanılıyor...\n'));
   const steps: Array<{ label: string; cmd: string }> = [
     { label: 'git pull',       cmd: 'git pull origin main' },
     { label: 'npm install',    cmd: 'npm install' },
@@ -131,27 +132,27 @@ function runGitUpdate(): void {
     process.stdout.write(chalk.dim(`  ${step.label}... `));
     try {
       execSync(step.cmd, { stdio: 'pipe' });
-      console.log(chalk.green('✓'));
+      logger.write(chalk.green('✓'));
     } catch (err: unknown) {
-      console.log(chalk.red('✗'));
-      console.log(chalk.red('  Hata: ') + (err instanceof Error ? err.message : String(err)));
+      logger.write(chalk.red('✗'));
+      logger.write(chalk.red('  Hata: ') + (err instanceof Error ? err.message : String(err)));
       return;
     }
   }
 
-  console.log(chalk.green('\n  ✓ DEHA güncellendi!\n'));
+  logger.write(chalk.green('\n  ✓ DEHA güncellendi!\n'));
 }
 
 function printManualUpdate(): void {
-  console.log(chalk.bold('\n  Manuel güncelleme:'));
+  logger.write(chalk.bold('\n  Manuel güncelleme:'));
   if (GITHUB_REPO) {
-    console.log(chalk.dim(`  1. cd <deha-cli klasörü>`));
-    console.log(chalk.dim('  2. git pull'));
-    console.log(chalk.dim('  3. npm install && npm run build && npm link'));
+    logger.write(chalk.dim(`  1. cd <deha-cli klasörü>`));
+    logger.write(chalk.dim('  2. git pull'));
+    logger.write(chalk.dim('  3. npm install && npm run build && npm link'));
   } else {
-    console.log(chalk.dim(`  npm install -g ${NPM_PACKAGE}@latest`));
+    logger.write(chalk.dim(`  npm install -g ${NPM_PACKAGE}@latest`));
   }
-  console.log('');
+  logger.write('');
 }
 
 // ─── Yardımcılar ─────────────────────────────────────────────────────────────
