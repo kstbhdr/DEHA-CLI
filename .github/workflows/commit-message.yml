@@ -1,0 +1,26 @@
+name: Commit Message Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  lint-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Lint pull request title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if echo "$TITLE" | grep -qiE '^(feat|fix|docs|style|refactor|test|chore|ci|perf|build|revert)(\(.+\))?: .+'; then
+            echo "✅ PR title format OK"
+          else
+            echo "❌ PR title must match conventional commit format"
+            echo "   Example: feat: add user authentication"
+            echo "   Example: fix(api): resolve timeout issue"
+            exit 1
+          fi

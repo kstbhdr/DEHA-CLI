@@ -512,7 +512,7 @@ function listRecursive(base: string, dir: string, depth: number, maxDepth: numbe
 let autoAllowDangerousCommands = false;
 
 const FORBIDDEN_PATTERNS = [
-  /(\|\s*)?rm\s+(-rf?\s+)?(\/(\s|$)|\/\*|\$HOME|\$PWD|\.\s*$)/i,
+  /(\|\s*)?rm\s+(-rf?\s+)?(\/(\s|$)|\/\*|~(\s|$)|\$HOME|\$PWD|\.\s*$)/i,
   /(\|\s*)?dd\s+if=/i,
   /(\|\s*)?mkfs\b/i,
   /(\|\s*)?fdisk\b/i,
@@ -522,11 +522,15 @@ const FORBIDDEN_PATTERNS = [
   /(\|\s*)?chown\s/i,
   /(\|\s*)?>(\s*\/dev\/(sda|sdb|sdc|nvme|mmc))/i,
   /(\|\s*)?shred/i,
-  /(\|\s*)?:\(\)\s*\{.*:\s*\};/i, // fork bomb
+  /(\|\s*)?:\(\)\s*\{.*(:|;).*\};/i, // fork bomb
   /(\|\s*)?wget\s+-O\s+\/dev\/null/i,
+  /(\|\s*)?shutdown\s/i,
+  /(\|\s*)?reboot\s?$/i,
+  /(\|\s*)?poweroff\s?$/i,
+  /(\|\s*)?halt\s?$/i,
 ];
 
-function isSafeCommand(command: string): { safe: boolean; reason?: string } {
+export function isSafeCommand(command: string): { safe: boolean; reason?: string } {
   // Maksimum komut uzunluğu
   if (command.length > 2000) {
     return { safe: false, reason: `Komut çok uzun (${command.length} karakter, maks. 2000)` };

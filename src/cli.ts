@@ -18,6 +18,7 @@ import { initCommand } from './commands/init';
 import { runSystemTest } from './commands/test-runner';
 import { loadConversationMessages } from './conversations/manager';
 import { DEHA_VERSION_LABEL } from './version';
+import { logger } from './services/logger';
 
 export class DehaCLI {
   private program: Command;
@@ -45,7 +46,7 @@ export class DehaCLI {
         try {
           await chat(prompt, config);
         } catch (err: unknown) {
-          console.error(chalk.red('Hata: ') + (err instanceof Error ? err.message : String(err)));
+          logger.error('Hata', err);
           process.exit(1);
         }
       });
@@ -88,7 +89,7 @@ export class DehaCLI {
         try {
           await runPipeline(task, config);
         } catch (err: unknown) {
-          console.error(chalk.red('\nPipeline hatası: ') + (err instanceof Error ? err.message : String(err)));
+          logger.error('Pipeline hatası', err);
           process.exit(1);
         }
       });
@@ -102,7 +103,7 @@ export class DehaCLI {
         const task = taskParts.join(' ');
         const fs = await import('fs');
         if (!fs.existsSync(file)) {
-          console.error(chalk.red(`✗ Dosya bulunamadı: ${file}`));
+          logger.error(`Dosya bulunamadı: ${file}`);
           process.exit(1);
         }
         const code = fs.readFileSync(file, 'utf-8');
@@ -119,7 +120,7 @@ export class DehaCLI {
             console.log(chalk.bgRed.white(` ✗ FAIL `) + chalk.red(` • Skor: ${verdict.score}`));
           }
         } catch (err: unknown) {
-          console.error(chalk.red('\nJudge hatası: ') + (err instanceof Error ? err.message : String(err)));
+          logger.error('Judge hatası', err);
           process.exit(1);
         }
       });
@@ -171,7 +172,7 @@ export class DehaCLI {
           });
           process.exit(r.exitCode);
         } catch (err: unknown) {
-          console.error(chalk.red('Hata: ') + (err instanceof Error ? err.message : String(err)));
+          logger.error('Hata', err);
           process.exit(1);
         }
       });
@@ -186,9 +187,9 @@ export class DehaCLI {
       .action(async (file: string | undefined, opts) => {
         const { runPythonCode: rpc, detectPython } = await import('./tools/python');
         const python = await detectPython();
-        if (!python) { console.error(chalk.red('Python bulunamadı')); process.exit(1); }
+        if (!python) { logger.error('Python bulunamadı'); process.exit(1); }
         const code = opts.code ?? (file ? require('fs').readFileSync(file, 'utf-8') : '');
-        if (!code) { console.error(chalk.red('Kod veya dosya gerekli')); process.exit(1); }
+        if (!code) { logger.error('Kod veya dosya gerekli'); process.exit(1); }
         const packages = opts.packages ? opts.packages.split(',').map((s: string) => s.trim()) : [];
         const r = await rpc(code, { installPackages: packages });
         if (r.stdout) process.stdout.write(r.stdout);
@@ -231,7 +232,7 @@ export class DehaCLI {
           console.log(chalk.green('✓'));
           console.log(chalk.dim(`Kaydedildi: ${p}`));
         } catch (err: unknown) {
-          console.error(chalk.red('\nHata: ') + (err instanceof Error ? err.message : String(err)));
+          logger.error('Screenshot hatası', err);
           console.log(chalk.dim('Playwright için: npx playwright install chromium'));
           process.exit(1);
         }
@@ -259,7 +260,7 @@ export class DehaCLI {
             console.log(analysis);
           }
         } catch (err: unknown) {
-          console.error(chalk.red('Hata: ') + (err instanceof Error ? err.message : String(err)));
+          logger.error('Vision hatası', err);
           process.exit(1);
         }
       });
@@ -290,7 +291,7 @@ export class DehaCLI {
         const config = this.buildConfig();
         const messages = loadConversationMessages(id);
         if (!messages) {
-          console.error(chalk.red(`✗ Sohbet bulunamadı: ${id}`));
+          logger.error(`Sohbet bulunamadı: ${id}`);
           process.exit(1);
         }
         await interactive(config, messages);
@@ -305,7 +306,7 @@ export class DehaCLI {
         try {
           await runSystemTest(config);
         } catch (err: unknown) {
-          console.error(chalk.red('\nTest hatası: ') + (err instanceof Error ? err.message : String(err)));
+          logger.error('Test hatası', err);
           process.exit(1);
         }
       });

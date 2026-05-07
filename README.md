@@ -1,11 +1,11 @@
 # DEHA CLI
 
-> A powerful, multi-model AI coding assistant for your terminal.
+> Akıllı, çok modelli AI kodlama asistanı | Multi-model AI coding assistant
 
 ```
 ╔══════════════════════════════════════════╗
 ║  DEHA — Intelligent Coding Assistant     ║
-║  v1.0.0  •  github.com/kstbhdr/DEHA-CLI ║
+║  v1.0.0  •  Tests: 83 ✅                 ║
 ╚══════════════════════════════════════════╝
 ```
 
@@ -17,6 +17,10 @@
 | **Streaming** | Real-time token streaming for all providers |
 | **Pipeline** | Plan → Code → Judge loop with token-efficient EDIT blocks |
 | **Agent mode** | Tool calling: read/write/edit files, shell, Python, browser, vision |
+| **Context compression** | Token-based auto-summarization, persistent session memory |
+| **ESC abort** | Press ESC to cancel agent mid-response |
+| **Multi-line paste** | Paste code blocks — type more, send only when ready |
+| **Security filter** | Blocks destructive commands (rm -rf /, fork bomb, shutdown) |
 | **MCP support** | Model Context Protocol servers (filesystem, git, fetch, github…) |
 | **Browser** | Playwright-based web automation, screenshots, form interaction |
 | **Vision** | Screenshot + Claude/GPT-4o UI analysis |
@@ -73,6 +77,9 @@ deha chat "How does async/await work in Python?"
 # Plan → Code → Judge pipeline
 deha build "Write an Express.js REST API with user CRUD"
 
+# Judge existing code (independent review)
+deha judge src/index.ts "Check for security vulnerabilities"
+
 # Override pipeline roles via CLI flags
 deha build "Add Redis cache" \
   --planner-provider openrouter --planner-model anthropic/claude-opus-4 \
@@ -114,6 +121,7 @@ deha update
 | Command | Description |
 |---|---|
 | `/agent <prompt>` | Agentic mode with tool calling |
+| `/judge <file> <task>` | Judge a file interactively |
 | `/file <path>` | Inject file into context |
 | `@./src/index.ts` | Embed file inline in a message |
 | `/run <cmd>` | Run a terminal command |
@@ -124,6 +132,45 @@ deha update
 | `/mcp list` | List MCP servers |
 | `/oldconversations` | Browse past conversations |
 | `/clear` | Clear conversation history |
+
+### ESC ile iptal
+
+Agent uzun düşünüyor veya yanlış yönde ilerliyorsa **ESC** tuşuna basarak işlemi anında durdurabilirsiniz.
+
+### Çoklu satır yapıştırma
+
+Birden fazla satır yapıştırdığınızda DEHA otomatik olarak bekleme moduna geçer. Mesajınızı tamamlayıp **boş satırda Enter** ile gönderebilirsiniz. Tek satırda Enter direkt gönderir.
+
+## Context Management (Bağlam Yönetimi)
+
+DEHA, uzun konuşmalarda bağlam kaybını önlemek için 3 katmanlı bellek kullanır:
+
+```
+Hot (5 mesaj)  ──→ Modele doğrudan eklenir
+Warm (tümü)    ──→ Redis veya session buffer (JSON)
+Cold (arşiv)   ──→ ~/.deha/conversations/*.json (20 mesajda bir flush)
+```
+
+**Auto Compression:** Token sayısı eşiği geçince AI eski mesajları özetler. Özet + son N mesaj korunur, gerisi arşive gider. Bu sayede sonsuz konuşma mümkün olur.
+
+```env
+DEHA_MAX_CONTEXT_TOKENS=0      # 0 = otomatik (provider'a göre)
+DEHA_COMPRESS_THRESHOLD=0.75   # %75 → compress
+DEHA_MIN_HOT_MESSAGES=10       # compress'te korunan mesaj
+```
+
+## Güvenlik Filtresi
+
+`run_shell` tool'u ile çalıştırılan komutlar otomatik olarak taranır. Aşağıdaki kalıplar **engellenir**:
+
+- `rm -rf /`, `rm -rf ~` (kök dizin silme)
+- `dd if=`, `mkfs`, `fdisk`, `format` (disk işlemleri)
+- `shutdown`, `reboot`, `poweroff`, `halt` (sistem kapatma)
+- Fork bomb (`:(){...}`)
+- `chmod 777 /`, `chown`, `shred`
+- Doğrudan disk yazma (`> /dev/sda`)
+
+Engellenen komutlar için kullanıcıya 3 seçenek sunulur: İptal Et / Bir Kere İzin Ver / Oturum Boyunca İzin Ver.
 
 ## Pipeline: Plan → Code → Judge
 
@@ -157,6 +204,17 @@ return false;
 return true;
 <<<END>>>
 ```
+
+## Test
+
+```bash
+npm test              # 83 test, 7 dosya
+npm run test:watch    # geliştirme modu
+npm run test:coverage # coverage raporu
+npx tsc --noEmit      # tip kontrolü
+```
+
+Detaylı bilgi: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Custom API (Self-hosted / Local GPU)
 
@@ -195,6 +253,10 @@ deha mcp add myserver npx -y my-mcp-server
 ```
 
 Once installed, MCP tools are automatically available in `/agent` mode.
+
+## Contributing
+
+Katkıda bulunmak için [CONTRIBUTING.md](CONTRIBUTING.md) dosyasını okuyun.
 
 ## License
 

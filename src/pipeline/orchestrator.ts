@@ -162,22 +162,21 @@ export async function runPipeline(
 function isJudgeRequired(task: string, code: string): boolean {
   const text = `${task}\n${code}`.toLowerCase();
   const riskyPatterns = [
-    /\bauth\b/,
-    /\bauthoriz/,
-    /\btoken\b/,
-    /\bsecret\b/,
-    /\bpassword\b/,
+    /\bauth\b.*\b(token|password|secret|jwt|oauth|session)\b/,
+    /\b(authorization|authentication)\b/,
+    /\b(hardcoded|plaintext)\b.*\b(secret|password|token|key)\b/,
     /\bpayment\b/,
     /\bbilling\b/,
-    /\bmigration\b/,
-    /\bdatabase\b/,
     /\bdrop table\b/,
-    /\bdelete\b/,
-    /\brm\b/,
-    /\bexec\b/,
-    /\bshell\b/,
-    /\bsubprocess\b/,
-    /\bsecurity\b/,
+    /\bdatabase\b.*\b(migration|schema|drop|truncate)\b/,
+    /\brm\s+-rf\b/,
+    /\bsudo\b/,
+    /\beval\s*\(/,
+    /\bexec\s*\(/,
+    /\bchild_process\b/,
+    /\bshell\s*\(/,
+    /\bunsafe\b/,
+    /\bsql\s*=\s*.*\+/,
   ];
 
   return riskyPatterns.some((pattern) => pattern.test(text));

@@ -841,3 +841,83 @@ npx tsc (build)   →  ✅ BUILD BAŞARILI
 ---
 
 *Özet: 4 dosyada düzeltme (1 eksik implementasyon, 1 kritik çıkış bug'ı, 1 Redis tutarsızlığı, 1 shell redirect hatası). Proje derleniyor ve çalışır durumda.*
+
+
+---
+
+# DEHA-CLI — Konuşma Özeti #22
+
+**Tarih:** 2026-05-07  
+**Kapsam:** Test altyapısı kurulumu (7 dosya, 83 test), güvenlik filtresi iyileştirmesi, dokümantasyon
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 Yeni Test Dosyaları
+
+| Dosya | Test sayısı | Kapsam |
+|-------|:-----------:|--------|
+| `src/__tests__/config.test.ts` | 15 | getConfig, env okuma, override, resolveApiKey, resolveApiUrl |
+| `src/__tests__/context.test.ts` | 10 | getUserContext, setUserContext, scanProject, generateAutoContext, buildFullContext |
+| `src/__tests__/error-handler.test.ts` | 6 | formatErrorMessage (Error, string, null, obje, alt sınıflar) |
+| `src/__tests__/memory.test.ts` | 5 | addMessage, getContext, closeMemory, getMemoryStatus |
+| `src/__tests__/security.test.ts` | 16 | isSafeCommand güvenlik filtresi (rm -rf, dd, mkfs, fork bomb, false positive) |
+| `src/__tests__/session-memory.test.ts` | 11 | appendMessage, buildContextMessages, workDir, summarizeOld, stats, flushOnExit |
+
+### 1.2 `src/tools/index.ts` — Güvenlik Filtresi İyileştirmesi
+
+3 regex açığı tespit edildi ve düzeltildi:
+
+| Açık | Etki | Düzeltme |
+|------|------|---------|
+| `rm -rf ~` engellenmiyordu | Kullanıcı home dizini silinebilirdi | Regex'e `~(\s\|$)` eklendi |
+| `shutdown`, `reboot`, `poweroff`, `halt` sadece DANGEROUS_COMMANDS'taydı | FORBIDDEN_PATTERNS'de yoktu, isSafeCommand bypass ediyordu | 4 yeni regex eklendi |
+| Fork bomb regex çalışmıyordu | `:(){ :|:& };:` engellenemiyordu | `.*:.*` → `.*(:|;).*` olarak genişletildi |
+
+### 1.3 `CONTRIBUTING.md` — YENİ DOSYA
+
+- Geliştirme ortamı kurulumu
+- Proje yapısı (dizin şeması)
+- Commit kuralları (Conventional Commits)
+- Test yazma rehberi (vitest, mock, isimlendirme)
+- Pull Request süreci
+- Kod standartları
+- Hata raporlama şablonu
+
+### 1.4 `README.md` — GÜNCELLEME
+
+- Test badge (83 ✅) eklendi
+- Context management bölümü eklendi (hot/warm/cold + auto-compress)
+- ESC ile iptal dokümante edildi
+- Multi-line paste dokümante edildi
+- Güvenlik filtresi dokümante edildi (tüm engellenen komutlar)
+- `/judge` komutu eklendi
+- Test ve CONTRIBUTING linki eklendi
+
+---
+
+## 2. Derleme Durumu
+
+```
+npx vitest run    →  ✅ 83/83 TEST GEÇTİ (7 dosya, 575ms)
+npx tsc --noEmit  →  ✅ HATA YOK
+```
+
+---
+
+## 3. Kalan Eksikler / Sıradaki Adımlar
+
+| Alan | Durum | Öneri |
+|------|-------|-------|
+| **CI/CD** | ⚠️ Var ama coverage eksik | Coveralls/Codecov eklenmeli, Windows matrix eklenmeli |
+| **Logging** | ❌ `console.log` tabanlı | Winston/Pino structured logger'a geçilmeli |
+| **Error Handling** | ⚠️ Kısmi | Kullanıcı dostu hata mesajları, renklendirme |
+| **CLI UX** | ⚠️ Spinner yok | `ora` kütüphanesi yeniden değerlendirilebilir |
+| **Vector Store** | ⚠️ Sadece Chroma | Pinecone, Qdrant desteği |
+| **i18n** | ⚠️ Türkçe/İngilizce karışık | Dil seçeneği CLI argümanı olarak |
+| **CLI Entegrasyon Testi** | ❌ Yok | `deha chat "test"` gibi e2e testler |
+
+---
+
+*Özet: 5 yeni test dosyası (72 test → 83 test), 1 CONTRIBUTING.md, README güncellemesi, 3 güvenlik açığı düzeltmesi. Proje derleniyor, testler geçiyor, dokümante edilmiş durumda.*

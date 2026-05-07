@@ -131,18 +131,18 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     visionApiKey:   process.env.VISION_API_KEY,
     visionApiUrl:   process.env.VISION_API_URL,
 
-    chatInputPrice:     parseFloat(process.env.CHAT_INPUT_PRICE     || '3.00'),
-    chatOutputPrice:    parseFloat(process.env.CHAT_OUTPUT_PRICE    || '15.00'),
-    plannerInputPrice:  parseFloat(process.env.PLANNER_INPUT_PRICE  || '3.00'),
-    plannerOutputPrice: parseFloat(process.env.PLANNER_OUTPUT_PRICE || '15.00'),
-    coderInputPrice:    parseFloat(process.env.CODER_INPUT_PRICE    || '0.27'),
-    coderOutputPrice:   parseFloat(process.env.CODER_OUTPUT_PRICE   || '1.10'),
-    judgeInputPrice:    parseFloat(process.env.JUDGE_INPUT_PRICE    || '5.00'),
-    judgeOutputPrice:   parseFloat(process.env.JUDGE_OUTPUT_PRICE   || '15.00'),
-    visionInputPrice:   parseFloat(process.env.VISION_INPUT_PRICE   || '3.00'),
-    visionOutputPrice:  parseFloat(process.env.VISION_OUTPUT_PRICE  || '15.00'),
-    agentInputPrice:    parseFloat(process.env.AGENT_INPUT_PRICE    || '3.00'),
-    agentOutputPrice:   parseFloat(process.env.AGENT_OUTPUT_PRICE   || '15.00'),
+    chatInputPrice:     safeParseFloat(process.env.CHAT_INPUT_PRICE,     3.00),
+    chatOutputPrice:    safeParseFloat(process.env.CHAT_OUTPUT_PRICE,    15.00),
+    plannerInputPrice:  safeParseFloat(process.env.PLANNER_INPUT_PRICE,  3.00),
+    plannerOutputPrice: safeParseFloat(process.env.PLANNER_OUTPUT_PRICE, 15.00),
+    coderInputPrice:    safeParseFloat(process.env.CODER_INPUT_PRICE,    0.27),
+    coderOutputPrice:   safeParseFloat(process.env.CODER_OUTPUT_PRICE,   1.10),
+    judgeInputPrice:    safeParseFloat(process.env.JUDGE_INPUT_PRICE,    5.00),
+    judgeOutputPrice:   safeParseFloat(process.env.JUDGE_OUTPUT_PRICE,   15.00),
+    visionInputPrice:   safeParseFloat(process.env.VISION_INPUT_PRICE,   3.00),
+    visionOutputPrice:  safeParseFloat(process.env.VISION_OUTPUT_PRICE,  15.00),
+    agentInputPrice:    safeParseFloat(process.env.AGENT_INPUT_PRICE,    3.00),
+    agentOutputPrice:   safeParseFloat(process.env.AGENT_OUTPUT_PRICE,   15.00),
 
     systemPrompt: process.env.DEHA_SYSTEM_PROMPT || (() => {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -150,15 +150,15 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
       return CHAT_PROMPT as string;
     })(),
 
-    maxToolRounds: parseInt(process.env.DEHA_MAX_TOOL_ROUNDS || '200', 10),
-    toolMaxTokens: parseInt(process.env.DEHA_TOOL_MAX_TOKENS || '49152', 10),
+    maxToolRounds: safeParseInt(process.env.DEHA_MAX_TOOL_ROUNDS, 200),
+    toolMaxTokens: safeParseInt(process.env.DEHA_TOOL_MAX_TOKENS, 49152),
 
-    maxTokens:   parseInt(process.env.DEHA_MAX_TOKENS   || '4096', 10),
-    temperature: parseFloat(process.env.DEHA_TEMPERATURE || '0.7'),
+    maxTokens:   safeParseInt(process.env.DEHA_MAX_TOKENS,   4096),
+    temperature: safeParseFloat(process.env.DEHA_TEMPERATURE, 0.7),
 
-    maxContextTokens: parseInt(process.env.DEHA_MAX_CONTEXT_TOKENS || '0', 10),  // 0 = otomatik (provider/model'e göre)
-    compressThreshold: parseFloat(process.env.DEHA_COMPRESS_THRESHOLD || '0.75'),
-    minHotMessages: parseInt(process.env.DEHA_MIN_HOT_MESSAGES || '10', 10),
+    maxContextTokens:  safeParseInt(process.env.DEHA_MAX_CONTEXT_TOKENS, 0),  // 0 = otomatik
+    compressThreshold: safeParseFloat(process.env.DEHA_COMPRESS_THRESHOLD, 0.75),
+    minHotMessages:    safeParseInt(process.env.DEHA_MIN_HOT_MESSAGES, 10),
 
     pipeline: {
       planner: {
@@ -166,8 +166,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         model:              process.env.PLANNER_MODEL   || 'claude-opus-4-6',
         apiKey:             process.env.PLANNER_API_KEY,
         apiUrl:             process.env.PLANNER_API_URL,
-        maxTokens:          parseInt(process.env.PLANNER_MAX_TOKENS   || '2048', 10),
-        temperature:        parseFloat(process.env.PLANNER_TEMPERATURE || '0.3'),
+        maxTokens:          safeParseInt(process.env.PLANNER_MAX_TOKENS,   2048),
+        temperature:        safeParseFloat(process.env.PLANNER_TEMPERATURE, 0.3),
         openrouterProvider: process.env.PLANNER_OPENROUTER_PROVIDER || undefined,
       },
       coder: {
@@ -175,8 +175,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         model:              process.env.CODER_MODEL   || 'deepseek-chat',
         apiKey:             process.env.CODER_API_KEY,
         apiUrl:             process.env.CODER_API_URL,
-        maxTokens:          parseInt(process.env.CODER_MAX_TOKENS   || '8192', 10),
-        temperature:        parseFloat(process.env.CODER_TEMPERATURE || '0.2'),
+        maxTokens:          safeParseInt(process.env.CODER_MAX_TOKENS,   8192),
+        temperature:        safeParseFloat(process.env.CODER_TEMPERATURE, 0.2),
         openrouterProvider: process.env.CODER_OPENROUTER_PROVIDER || undefined,
       },
       judge: {
@@ -184,15 +184,29 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         model:              process.env.JUDGE_MODEL   || 'grok-3',
         apiKey:             process.env.JUDGE_API_KEY,
         apiUrl:             process.env.JUDGE_API_URL,
-        maxTokens:          parseInt(process.env.JUDGE_MAX_TOKENS   || '2048', 10),
-        temperature:        parseFloat(process.env.JUDGE_TEMPERATURE || '0.1'),
+        maxTokens:          safeParseInt(process.env.JUDGE_MAX_TOKENS,   2048),
+        temperature:        safeParseFloat(process.env.JUDGE_TEMPERATURE, 0.1),
         openrouterProvider: process.env.JUDGE_OPENROUTER_PROVIDER || undefined,
       },
-      maxIterations: parseInt(process.env.PIPELINE_MAX_ITERATIONS || '200', 10),
+      maxIterations: safeParseInt(process.env.PIPELINE_MAX_ITERATIONS, 200),
     },
   };
 
   return { ...base, ...overrides };
+}
+
+// ─── Güvenli sayı dönüşümleri (NaN önleme) ─────────────────────────────────
+
+function safeParseInt(value: string | undefined, defaultVal: number): number {
+  if (value === undefined || value === '') return defaultVal;
+  const parsed = parseInt(value, 10);
+  return isNaN(parsed) ? defaultVal : parsed;
+}
+
+function safeParseFloat(value: string | undefined, defaultVal: number): number {
+  if (value === undefined || value === '') return defaultVal;
+  const parsed = parseFloat(value);
+  return isNaN(parsed) ? defaultVal : parsed;
 }
 
 // ─── Yardımcılar ────────────────────────────────────────────────────────────

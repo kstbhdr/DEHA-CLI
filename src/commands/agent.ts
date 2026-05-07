@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { DehaConfig } from '../config';
-import { Message, OAIMessage, sendMessage, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
+import { Message, OAIMessage, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
 import { getWorkDir } from '../services/session-memory';
@@ -136,7 +136,7 @@ async function runAgentClaude(
       finalText = text;
     }
 
-    messages.push({ role: 'assistant', content: text || '(tool çağrısı)' });
+    messages.push({ role: 'assistant', content: text || '[tool calls]' });
     messages.push({
       role: 'user',
       content: toolResultBlocks.join('\n\n') + '\n\nBu sonuçları kullanarak devam et.',
@@ -312,49 +312,52 @@ function shouldAutoContinue(
     return true;
   }
 
-  const interimPatterns = [
-    /\bgörelim\b/,
-    /\bbulup\b/,
-    /\bbakayım\b/,
-    /\binceleyeyim\b/,
-    /\binceleyelim\b/,
-    /\bekleyeceğim\b/,
-    /\bbelirleyelim\b/,
-    /\bson satırları\b/,
-    /\bdurmuyorum\b/,
-    /\byazıyorum\b/,
-    /\bekliyorum\b/,
-    /\bdüzelteceğim\b/,
-    /\bekleyeceğim\b/,
-    /\bilerliyorum\b/,
-    /\bbitireceğim\b/,
-    /\beklemeden\b/,
-    /\bfonksiyonunu\b.*\bgörelim\b/,
-    /\bşimdi\b.*\b(bakayım|görelim|inceleyelim|bulayım)\b/,
-    /\bşimdi\b.*\b(yazıyorum|ekliyorum|düzeltiyorum|okuyorum|bakıyorum)\b/,
-    /\bhemen\b.*\b(yazıyorum|bakıyorum|ekliyorum|okuyorum)\b/,
-    /\bönce\b.*\b(oku|okuyayım|bakayım|görelim|bulayım)\b/,
-    /\b(yapacağım|edeceğim|ekleyeceğim|yazacağım|bakacağım|okuyacağım|bulacağım)\b/,
-    /\blet me\b.*\b(check|inspect|find|look)\b/,
-    /\bi('| a)?ll\b.*\b(check|inspect|look|find)\b/,
-  ];
+  return containsInterimLanguage(normalized);
+}
 
-  const containsInterimLanguage = interimPatterns.some((pattern) => pattern.test(normalized));
-  const looksLikeProgressOnly =
+const INTERIM_PATTERNS: RegExp[] = [
+  /\bgörelim\b/,
+  /\bbulup\b/,
+  /\bbakayım\b/,
+  /\binceleyeyim\b/,
+  /\binceleyelim\b/,
+  /\bekleyeceğim\b/,
+  /\bbelirleyelim\b/,
+  /\bson satırları\b/,
+  /\bdurmuyorum\b/,
+  /\byazıyorum\b/,
+  /\bekliyorum\b/,
+  /\bdüzelteceğim\b/,
+  /\bilerliyorum\b/,
+  /\bbitireceğim\b/,
+  /\beklemeden\b/,
+  /\bfonksiyonunu\b.*\bgörelim\b/,
+  /\bşimdi\b.*\b(bakayım|görelim|inceleyelim|bulayım)\b/,
+  /\bşimdi\b.*\b(yazıyorum|ekliyorum|düzeltiyorum|okuyorum|bakıyorum)\b/,
+  /\bhemen\b.*\b(yazıyorum|bakıyorum|ekliyorum|okuyorum)\b/,
+  /\bönce\b.*\b(oku|okuyayım|bakayım|görelim|bulayım)\b/,
+  /\b(yapacağım|edeceğim|ekleyeceğim|yazacağım|bakacağım|okuyacağım|bulacağım)\b/,
+  /\blet me\b.*\b(check|inspect|find|look)\b/,
+  /\bi('| a)?ll\b.*\b(check|inspect|look|find)\b/,
+];
+
+function containsInterimLanguage(normalized: string): boolean {
+  if (INTERIM_PATTERNS.some((p) => p.test(normalized))) return true;
+
+  return (
     normalized.endsWith(':') ||
     normalized.endsWith('...') ||
     normalized.includes('ekleme yapacağım yeri') ||
     normalized.includes('ona göre') ||
     normalized.includes('then i') ||
-    normalized.includes('next i');
-
-  return containsInterimLanguage || looksLikeProgressOnly;
+    normalized.includes('next i')
+  );
 }
 
 async function shouldContinueAfterNoToolResponse(
   userMessage: string,
   assistantText: string,
-  config: DehaConfig,
+  _config: DehaConfig,
   round: number,
   maxRounds: number,
   autoContinueRounds: number,
@@ -368,17 +371,22 @@ async function shouldContinueAfterNoToolResponse(
     return aggressiveAutoContinue || autoContinueRounds < MAX_AUTO_CONTINUE_ROUNDS;
   }
 
-  if (looksLikeFinalAnswer(assistantText.toLowerCase().trim())) {
-    return false;
-  }
+  const normalized = assistantText.toLowerCase().trim();
 
-  return !(await isTaskComplete(userMessage, assistantText, config));
+  // Net final cevap değilse devam et
+  if (!looksLikeFinalAnswer(normalized)) return true;
+
+  // Final pattern var ama interim dil de varsa → gerçek final değil
+  if (containsInterimLanguage(normalized)) return true;
+
+  // Final pattern var, interim dil yok → dur
+  return false;
 }
 
 async function shouldContinueAfterToolPhase(
   userMessage: string,
   assistantText: string,
-  config: DehaConfig,
+  _config: DehaConfig,
   round: number,
   maxRounds: number,
   postToolCompletionRounds: number,
@@ -388,19 +396,18 @@ async function shouldContinueAfterToolPhase(
 
   const normalized = assistantText.toLowerCase().trim();
 
-  if (!normalized) {
-    return true;
-  }
+  // Boş cevap → devam et
+  if (!normalized) return true;
 
-  if (shouldAutoContinue(assistantText, round, maxRounds, 0, true)) {
-    return true;
-  }
+  // Net final cevap değilse devam et
+  if (!looksLikeFinalAnswer(normalized)) return true;
 
-  if (!looksLikeFinalAnswer(normalized)) {
-    return true;
-  }
+  // Final pattern var. Ama aynı anda interim dil de varsa
+  // (örn: "görev tamamlandı, şimdi raporu yazacağım") → bu gerçek final değil.
+  if (containsInterimLanguage(normalized)) return true;
 
-  return !(await isTaskComplete(userMessage, assistantText, config));
+  // Final pattern var, interim dil yok → gerçek final cevap.
+  return false;
 }
 
 function wantsUninterruptedExecution(userMessage: string): boolean {
@@ -414,64 +421,31 @@ function wantsUninterruptedExecution(userMessage: string): boolean {
 }
 
 function looksLikeFinalAnswer(text: string): boolean {
+  // Sadece net bitiş ifadeleri final sayılır.
+  // "tamamlandı", "sonuç" gibi kelimeler tek başına yeterli değil —
+  // rapor sunarken de kullanılabilirler.
   const finalPatterns = [
-    /\btamamlandı\b/,
-    /\bbitti\b/,
-    /\bçözüldü\b/,
-    /\bhazır\b/,
-    /\byaptım\b/,
-    /\bekledigin\b/,
-    /\bsonuç\b/,
-    /\bözet\b/,
-    /\bdoğrulama\b/,
-    /\btest\b.*\b(geçti|başarılı)\b/,
-    /\bbuild\b.*\b(geçti|başarılı)\b/,
-    /\bfinal\b/,
-    /\bcompleted\b/,
-    /\bdone\b/,
-    /\bfixed\b/,
+    /\bgörev tamamlandı\b/,
+    /\btask completed\b/,
+    /\biş bitti\b/,
+    /\ball done\b/,
+    /\bsorun çözüldü\b/,
+    /\bproblem solved\b/,
+    /\btüm (adımlar|işlemler) (tamamlandı|bitti)\b/,
+    /\bdone here\b/,
+    /\bno further (action|changes) (needed|required)\b/,
   ];
 
-  if (text.includes('```')) return true;
+  // Kod bloğu TEK BAŞINA final cevap sayılmaz — raporlamada kod olabilir.
+  // Sadece metin ÇOK kısaysa ve kod bloğundan ibaretse final say.
+  if (text.includes('```')) {
+    const textWithoutCode = text.replace(/```[\s\S]*?```/g, '').trim();
+    if (textWithoutCode.length < 30) return true;
+  }
+
   return finalPatterns.some((pattern) => pattern.test(text));
 }
 
-async function isTaskComplete(
-  userMessage: string,
-  assistantText: string,
-  config: DehaConfig,
-): Promise<boolean> {
-  const judgeConfig: DehaConfig = {
-    ...config,
-    temperature: 0,
-    maxTokens: 8,
-    systemPrompt: [
-      'You are a completion checker for an autonomous coding agent.',
-      'Decide whether the assistant has fully completed the user request.',
-      'Reply with exactly one word: COMPLETE or CONTINUE.',
-      'Reply COMPLETE only if the task is clearly finished, not if the assistant is describing the next step.',
-    ].join(' '),
-  };
-
-  try {
-    const verdict = await sendMessage([
-      {
-        role: 'user',
-        content: [
-          `USER_REQUEST: ${userMessage}`,
-          '',
-          `ASSISTANT_RESPONSE: ${assistantText}`,
-          '',
-          'Is the task fully complete?',
-        ].join('\n'),
-      },
-    ], judgeConfig);
-
-    return verdict.trim().toUpperCase().startsWith('COMPLETE');
-  } catch {
-    return false;
-  }
-}
 
 // ─── Tool yürütücü (ortak) ───────────────────────────────────────────────────
 

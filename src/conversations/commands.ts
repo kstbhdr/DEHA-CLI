@@ -1,4 +1,3 @@
-import * as readline from 'readline';
 import chalk from 'chalk';
 import {
   listConversations,
@@ -29,11 +28,9 @@ export async function handleHistoryCommand(args: string): Promise<void> {
       return;
 
     default:
-      // Sayı girildiyse o index'teki sohbeti aç
       if (/^\d+$/.test(sub)) {
         return showByIndex(parseInt(sub, 10) - 1);
       }
-      // Direkt ID girilmişse aç
       return showConversation(sub);
   }
 }
@@ -121,49 +118,12 @@ function showConversation(id: string): void {
     return;
   }
 
-  // Frontmatter'ı çıkar, geri kalanı göster
   const body = raw.replace(/^---[\s\S]*?---\n/, '');
-  const lines = body.split('\n');
 
   console.log('\n' + chalk.dim('─'.repeat(60)));
-
-  // Sayfalı göster (uzun sohbetler için)
-  const PAGE = 40;
-  if (lines.length <= PAGE) {
-    console.log(renderMarkdown(body));
-  } else {
-    paginate(lines, PAGE);
-  }
-
+  // Tüm içeriği tek seferde yazdır — ikinci readline çakışmasını önle
+  console.log(renderMarkdown(body));
   console.log(chalk.dim('─'.repeat(60)) + '\n');
-}
-
-// ─── Basit sayfalama ─────────────────────────────────────────────────────────
-
-function paginate(lines: string[], pageSize: number): void {
-  let offset = 0;
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  const showPage = () => {
-    const slice = lines.slice(offset, offset + pageSize);
-    console.log(renderMarkdown(slice.join('\n')));
-    offset += pageSize;
-
-    if (offset >= lines.length) {
-      rl.close();
-      return;
-    }
-
-    rl.question(chalk.dim('  [Enter: devam, q: çık] '), (ans) => {
-      if (ans.trim().toLowerCase() === 'q') {
-        rl.close();
-      } else {
-        showPage();
-      }
-    });
-  };
-
-  showPage();
 }
 
 // ─── Markdown → terminal renderer (minimal) ──────────────────────────────────
