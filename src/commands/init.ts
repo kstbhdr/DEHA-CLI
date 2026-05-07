@@ -100,11 +100,11 @@ export async function initCommand(): Promise<void> {
   // 4. Playwright kontrolü
   console.log(`\n${BOLD}Dependencies${RESET}`);
   try {
-    execSync('npx playwright --version 2>&1', { stdio: 'pipe', timeout: 10_000 });
+    execSync('npx playwright --version', { stdio: 'pipe', timeout: 10_000 });
     const answer = await rlQuestion(`  Install Playwright Chromium browser? (Y/n) `);
     if (answer.toLowerCase() !== 'n' && answer.toLowerCase() !== 'no') {
       console.log(`  ${YELLOW}→${RESET} Installing Chromium...`);
-      execSync('npx playwright install chromium 2>&1', { stdio: 'inherit', timeout: 120_000 });
+      execSync('npx playwright install chromium', { stdio: 'inherit', timeout: 120_000 });
       console.log(`  ${GREEN}✔${RESET} Chromium installed`);
     }
   } catch {

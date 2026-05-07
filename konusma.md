@@ -777,3 +777,67 @@ Bağlam kaybı ve "kafa dağılması" sorunları mimari seviyede minimize edildi
 
 
 
+
+
+---
+
+---
+
+# DEHA-CLI — Konuşma Özeti #21
+
+**Tarih:** 2026-05-07  
+**Kapsam:** Derleme hatası düzeltme, session-memory çıkış flush'ı, crawl_url implementasyonu, Redis URL tutarlılığı, shell redirect düzeltmesi
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 `src/tools/search.ts` — `toolCrawlUrl` Eksik Export'u
+- **Sorun:** `src/tools/index.ts` satır 10'da `toolCrawlUrl` fonksiyonu `./search` modülünden import ediliyordu ama `search.ts`'te bu fonksiyon tanımlı değildi. `tsc --noEmit` hatası alınıyordu.
+- **Çözüm:** `toolCrawlUrl()` fonksiyonu `search.ts`'e tam implementasyonla eklendi:
+  - Native `https` modülü ile HTTP GET isteği
+  - 301/302 redirect takibi
+  - `cheerio` ile HTML'den ana içerik çıkarma (article, main, .content vb. seçiciler)
+  - `max_chars` ile çıktı sınırlama
+  - Script, style, nav, header, footer elementlerini temizleme
+
+### 1.2 `src/commands/interactive.ts` — Session Memory Flush Düzeltmesi
+- **Sorun 1:** `exitCleanup()` fonksiyonu `closeMemory()` (memory.ts) çağırıyordu ama `flushOnExit()` (session-memory.ts) hiç çağrılmıyordu. Session buffer ve cold storage çıkışta diske yazılmıyordu.
+- **Sorun 2:** `SIGTERM` handler'ı sadece `closeMemory()` çağırıyordu, `flushOnExit()` yoktu.
+- **Sorun 3:** `flushOnExit` import edilmemişti.
+- **Çözüm:** 
+  - `flushOnExit` import'a eklendi
+  - `exitCleanup()` içinde `closeMemory()`'den önce `await flushOnExit().catch(() => {})` çağrısı eklendi
+  - `SIGTERM` handler'ına da `flushOnExit()` eklendi
+  - Artık `/exit`, `SIGINT`, `SIGTERM` durumlarında session cold storage'a düzgün yazılıyor
+
+---
+
+## 2. Derleme Durumu
+
+```
+npx tsc --noEmit  →  ✅ HATA YOK
+```
+
+---
+
+### 1.3 `src/services/session-memory.ts` — Redis Fallback URL Tutarsızlığı
+- **Sorun:** `session-memory.ts` Redis fallback URL'i `localhost:6379` kullanıyordu. `memory.ts` ise `127.0.0.1:6379` kullanıyordu. Windows'ta `localhost` IPv6 çözümlemesi yaparak bağlantı sorunlarına yol açabiliyordu (bkz. Konuşma #15).
+- **Çözüm:** `redis://localhost:6379` → `redis://127.0.0.1:6379` olarak değiştirildi. `memory.ts` ile tutarlı hale getirildi.
+
+### 1.4 `src/commands/init.ts` — Shell Redirect Hatası
+- **Sorun:** `execSync('npx playwright --version 2>&1', ...)` ve `execSync('npx playwright install chromium 2>&1', ...)` çağrılarında `2>&1` shell redirect'i kullanılıyordu ama `execSync` `shell: true` olmadan çağrılıyordu. Windows'ta `2>&1` npx'e argüman olarak geçiyor, stderr yönlendirmesi çalışmıyordu.
+- **Çözüm:** `2>&1` ifadeleri komutlardan kaldırıldı.
+
+---
+
+## 2. Derleme Durumu
+
+```
+npx tsc --noEmit  →  ✅ HATA YOK
+npx tsc (build)   →  ✅ BUILD BAŞARILI
+```
+
+---
+
+*Özet: 4 dosyada düzeltme (1 eksik implementasyon, 1 kritik çıkış bug'ı, 1 Redis tutarsızlığı, 1 shell redirect hatası). Proje derleniyor ve çalışır durumda.*

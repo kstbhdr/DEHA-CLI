@@ -34,7 +34,7 @@ function warn(label: string, hint: string) {
 async function checkPlaywright(): Promise<void> {
   try {
     // Check if playwright is installed
-    const browsers = execSync('npx playwright --version 2>&1', {
+    const browsers = execSync('npx playwright --version', {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 10_000,
@@ -43,7 +43,7 @@ async function checkPlaywright(): Promise<void> {
 
     // Check if chromium browser is available
     try {
-      const chromiumPath = execSync('npx playwright install --dry-run chromium 2>&1', {
+      const chromiumPath = execSync('npx playwright install --dry-run chromium', {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 10_000,
@@ -63,7 +63,7 @@ async function checkPlaywright(): Promise<void> {
 
 async function checkPython(): Promise<void> {
   try {
-    const version = execSync('python --version 2>&1', {
+    const version = execSync('python --version', {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5_000,
@@ -71,7 +71,7 @@ async function checkPython(): Promise<void> {
     ok('Python', version.trim());
   } catch {
     try {
-      const version = execSync('python3 --version 2>&1', {
+      const version = execSync('python3 --version', {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 5_000,
@@ -85,7 +85,7 @@ async function checkPython(): Promise<void> {
 
 async function checkNode(): Promise<void> {
   try {
-    const version = execSync('node --version 2>&1', {
+    const version = execSync('node --version', {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5_000,
@@ -103,7 +103,7 @@ async function checkNode(): Promise<void> {
 
 async function checkOllama(): Promise<void> {
   try {
-    const version = execSync('ollama --version 2>&1', {
+    const version = execSync('ollama --version', {
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 5_000,
@@ -112,7 +112,7 @@ async function checkOllama(): Promise<void> {
 
     // Check if ollama server is running
     try {
-      const res = execSync('ollama list 2>&1', {
+      const res = execSync('ollama list', {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 10_000,
@@ -172,7 +172,10 @@ async function checkMCPConfig(): Promise<void> {
 
 async function checkDiskSpace(): Promise<void> {
   try {
-    const result = execSync('fsutil volume diskfree C: 2>&1 || df -h . 2>&1', {
+    const cmd = process.platform === 'win32'
+      ? 'fsutil volume diskfree C:'
+      : 'df -h .';
+    const result = execSync(cmd, {
       encoding: 'utf-8',
       timeout: 5_000,
     });

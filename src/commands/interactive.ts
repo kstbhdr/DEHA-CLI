@@ -32,6 +32,7 @@ import {
   loadSession,
   getContextStats,
   getSessionMessages,
+  flushOnExit,
 } from '../services/session-memory';
 import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
@@ -487,6 +488,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
   });
 
   process.once('SIGTERM', async () => {
+    await flushOnExit().catch(() => {});
     await closeMemory().catch(() => {});
     process.exit(0);
   });
@@ -497,6 +499,8 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 // ─── Yardımcılar ───────────────────────────────────────────────────────────
 
 async function exitCleanup(history: Message[], config: DehaConfig): Promise<void> {
+  // Session memory'yi kalıcı depolamaya yaz (cold storage + warm buffer temizliği)
+  await flushOnExit().catch(() => {});
   await closeMemory().catch(() => {});
   stopServices();
 
@@ -570,4 +574,3 @@ function isVersionQuestion(message: string): boolean {
 
   return patterns.some((pattern) => pattern.test(normalized));
 }
-

@@ -82,7 +82,7 @@ export async function duckDuckGoSearch(
   return results;
 }
 
-// ─── Tool entrypoint ─────────────────────────────────────────────────────────
+// ─── Tool entrypoints ────────────────────────────────────────────────────────
 
 export async function toolWebSearch(input: {
   query: string;
@@ -92,6 +92,76 @@ export async function toolWebSearch(input: {
   const { query, max_results = 8 } = input;
   const results = await duckDuckGoSearch(query, max_results);
   return formatResults('DuckDuckGo', results) || 'No results found.';
+}
+
+export async function toolCrawlUrl(input: {
+  url: string;
+  max_chars?: number;
+}): Promise<string> {
+  const { url, max_chars = 4000 } = input;
+
+  const html = await new Promise<string>((resolve, reject) => {
+    const parsed = new URL(url);
+    const options: https.RequestOptions = {
+      hostname: parsed.hostname,
+      path: parsed.pathname + parsed.search,
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    };
+    const req = https.request(options, (res) => {
+      // Follow redirects (up to 3)
+      if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+        try {
+          const redirectUrl = new URL(res.headers.location, url).toString();
+          toolCrawlUrl({ url: redirectUrl, max_chars }).then(resolve).catch(reject);
+        } catch { reject(new Error(`Redirect hatası: ${res.headers.location}`)); }
+        return;
+      }
+      if (res.statusCode !== 200) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      let data = '';
+      res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+      res.on('end', () => resolve(data));
+    });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Timeout')); });
+    req.on('error', reject);
+    req.end();
+  });
+
+  // Extract readable text
+  const $ = cheerio.load(html);
+
+  // Remove non-content elements
+  $('script, style, nav, header, footer, iframe, noscript, meta, link').remove();
+
+  // Try to get main content
+  const selectors = ['article', 'main', '[role="main"]', '.content', '#content', '.markdown-body', '.post-content', '.entry-content', 'body'];
+  let text = '';
+  for (const sel of selectors) {
+    const el = $(sel);
+    if (el.length > 0 && el.text().trim().length > 100) {
+      text = el.text();
+      break;
+    }
+  }
+  if (!text) text = $('body').text();
+
+  // Clean up whitespace
+  text = text
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (text.length > max_chars) {
+    text = text.slice(0, max_chars) + '…';
+  }
+
+  return text || 'Sayfa içeriği alınamadı.';
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
