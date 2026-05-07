@@ -30,6 +30,8 @@ const FLUSH_THRESHOLD = 20;
 
 let redisClient: RedisLike | null = null;
 
+let _redisChecked = false;
+
 interface RedisLike {
   get(key: string): Promise<string | null>;
   set(key: string, value: string): Promise<unknown>;
@@ -37,8 +39,10 @@ interface RedisLike {
   quit(): Promise<unknown>;
 }
 
+
 async function getRedis(): Promise<RedisLike | null> {
-  if (redisClient !== null) return redisClient;
+  if (_redisChecked) return redisClient;
+  _redisChecked = true;
   // REDIS_URL varsa onu kullan, yoksa localhost:6379'a fallback (memory.ts ile tutarlı)
   const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
   try {
@@ -48,10 +52,9 @@ async function getRedis(): Promise<RedisLike | null> {
     redisClient = client;
     return client;
   } catch {
-    return null; // Redis yoksa sessizce in-memory'ye düş
+    return null; // Redis yoksa sessizce in-memory'ye düş, bir daha dene
   }
 }
-
 // ─── Session state ────────────────────────────────────────────────────────────
 
 interface SessionState {
@@ -331,11 +334,17 @@ export function getContextStats(maxContextTokens: number): {
 // ─── Çıkışta flush ────────────────────────────────────────────────────────────
 
 /** /exit veya SIGINT'te çağırılır — tüm kalan mesajları cold storage'a yazar */
+
 export async function flushOnExit(): Promise<void> {
+  // Önce Redis state'i güncelle (beklenmeyen async yazmaları tamamla)
+  const redis = await getRedis();
+  if (redis) {
+    await redis.set('deha:session:latest', JSON.stringify(_state)).catch(() => {});
+  }
+
   await _flushCold(true);
 
-  // Redis key'i temizle
-  const redis = await getRedis();
+  // Redis key'i temizle ve bağlantıyı kapat
   if (redis) {
     await redis.del('deha:session:latest').catch(() => {});
     await redis.quit().catch(() => {});
@@ -344,7 +353,6 @@ export async function flushOnExit(): Promise<void> {
   // Warm buffer'ı sil
   try { fs.unlinkSync(SESSION_BUFFER_FILE); } catch { /* yok olabilir */ }
 }
-
 /** Aktif session stats (eski uyumluluk) */
 export function getSessionStats(): { messages: number; summary: boolean; workDir: string } {
   return {

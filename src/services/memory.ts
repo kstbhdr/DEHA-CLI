@@ -165,7 +165,7 @@ export async function getContext(
   allMessages: Message[],
 ): Promise<Message[]> {
   const hot = allMessages.slice(-HOT_WINDOW);
-  const hotIds = new Set(hot.map(m => m.content));
+  const hotIds = new Set(hot.map(m => `${m.role}::${m.content}`));
   const relevant = await _semanticSearch(currentUserMessage, SEMANTIC_TOP_K, hotIds);
 
   if (relevant.length === 0) return hot;
@@ -215,9 +215,11 @@ async function _semanticSearch(
     allMessages = [..._memStore];
   }
 
-  const candidates = allMessages
+  // Timestamp'e göre sırala (Redis smembers sıra garantisi vermez)
+  const sorted = [...allMessages].sort((a, b) => a.timestamp - b.timestamp);
+  const candidates = sorted
     .slice(0, -HOT_WINDOW)
-    .filter(m => !exclude.has(m.content));
+    .filter(m => !exclude.has(`${m.role}::${m.content}`));
 
   if (candidates.length === 0) return [];
 
@@ -238,6 +240,7 @@ export async function closeMemory(): Promise<void> {
     await _redis.quit().catch(() => {});
     _redis = null;
   }
+  _redisChecked = false; // yeniden başlatmada Redis tekrar dene
   const { resetVectorStore } = await import('./vector-store');
   resetVectorStore();
 }
