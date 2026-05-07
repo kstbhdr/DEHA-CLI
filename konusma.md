@@ -915,7 +915,7 @@ npx tsc --noEmit  →  ✅ HATA YOK
 | **Error Handling** | ✅ Kategorilendirme + kullanıcı dostu mesaj + çözüm önerisi | Merkezi handleError() aktif, 6 kategori |
 | **CLI UX** | ✅ Spinner aktif (`ora`) | AI API çağrılarında "DEHA düşünüyor... [provider/model]" |
 | **Vector Store** | ⚠️ Sadece Chroma | Pinecone, Qdrant desteği |
-| **i18n** | ⚠️ Türkçe/İngilizce karışık | Dil seçeneği CLI argümanı olarak |
+| **i18n** | ✅ Altyapı hazır (locale.ts, config.language, DEHA_LANG) | TR/EN destekli, t() fonksiyonu ile çeviri |
 | **CLI Entegrasyon Testi** | ❌ Yok | `deha chat "test"` gibi e2e testler |
 
 ---
