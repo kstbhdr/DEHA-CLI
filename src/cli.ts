@@ -344,11 +344,33 @@ export class DehaCLI {
   }
 
   async run(): Promise<void> {
-    if (process.argv.length === 2) {
-      const config = this.buildConfig();
-      await interactive(config);
+    // Sadece opsiyon flag'leri varsa (--help, --version) → commander'a bırak
+    // Hiç argüman yoksa → interactive mod
+    // Bilinmeyen komut varsa → hata + exit (commander'ın process.exit'ine güvenme)
+    const nonOptionArgs = process.argv.slice(2).filter(a => !a.startsWith('-'));
+
+    if (nonOptionArgs.length === 0) {
+      // Sadece flag'ler (--help, --version) veya hiçbir şey
+      if (process.argv.length === 2) {
+        const config = this.buildConfig();
+        await interactive(config);
+        return;
+      }
+      // --help veya --version → commander halletsin
+      await this.program.parseAsync(process.argv);
       return;
     }
+
+    // Bilinmeyen komut kontrolü
+    const knownCommands = this.program.commands.map(c => c.name());
+    const firstArg = nonOptionArgs[0];
+    if (!knownCommands.includes(firstArg)) {
+      logger.write(chalk.red(`\n✗ Bilinmeyen komut: "${firstArg}"\n`));
+      logger.write(chalk.dim(`Mevcut komutlar: ${knownCommands.join(', ')}\n\n`));
+      process.exit(1);
+      return;
+    }
+
     await this.program.parseAsync(process.argv);
   }
 }
