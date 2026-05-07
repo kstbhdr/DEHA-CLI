@@ -95,6 +95,9 @@ export interface DehaConfig {
   compressThreshold: number;   // Context bu orana yaklaşınca compress et (0-1)
   minHotMessages: number;      // Her zaman tam tutulan minimum mesaj sayısı
 
+  // Dil / i18n
+  language: 'tr' | 'en';
+
   // Pipeline
   pipeline: PipelineConfig;
 }
@@ -159,6 +162,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     maxContextTokens:  safeParseInt(process.env.DEHA_MAX_CONTEXT_TOKENS, 0),  // 0 = otomatik
     compressThreshold: safeParseFloat(process.env.DEHA_COMPRESS_THRESHOLD, 0.75),
     minHotMessages:    safeParseInt(process.env.DEHA_MIN_HOT_MESSAGES, 10),
+
+    language: ((process.env.DEHA_LANG || 'tr').toLowerCase() === 'en' ? 'en' : 'tr'),
 
     pipeline: {
       planner: {
