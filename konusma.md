@@ -914,7 +914,7 @@ npx tsc --noEmit  →  ✅ HATA YOK
 | **Logging** | ✅ `logger.write()` ile tüm console.log'lar değiştirildi | Structured logger aktif, trace seviyesi eklendi |
 | **Error Handling** | ✅ Kategorilendirme + kullanıcı dostu mesaj + çözüm önerisi | Merkezi handleError() aktif, 6 kategori |
 | **CLI UX** | ✅ Spinner aktif (`ora`) | AI API çağrılarında "DEHA düşünüyor... [provider/model]" |
-| **Vector Store** | ⚠️ Sadece Chroma | Pinecone, Qdrant desteği |
+| **Vector Store** | ✅ ChromaDB + JSON fallback | Interface arkasında, otomatik seçim |
 | **i18n** | ✅ Altyapı hazır (locale.ts, config.language, DEHA_LANG) | TR/EN destekli, t() fonksiyonu ile çeviri |
 | **CLI Entegrasyon Testi** | ❌ Yok | `deha chat "test"` gibi e2e testler |
 
