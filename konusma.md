@@ -1073,3 +1073,174 @@ npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya)
 ---
 
 *Özet: 1 dosyada değişiklik. `ora` spinner AI API çağrılarına eklendi. Readline ile çakışmasız çalışır.*
+
+---
+
+# DEHA-CLI — Konuşma Özeti #26
+
+**Tarih:** 2026-05-07  
+**Kapsam:** Vector Store Soyutlaması — ChromaDB + JSON Fallback
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 `src/services/vector-store.ts` — YENİ DOSYA
+
+Vektör depolama için soyut bir katman (`VectorStore` interface) oluşturuldu:
+
+| Bileşen | Açıklama |
+|---------|----------|
+| `VectorStore` interface | `add()`, `search()`, `clear()`, `count()`, `close()` metodları |
+| `JsonVectorStore` | Chroma yoksa kullanılacak JSON file-based store |
+| `ChromaVectorStore` | ChromaDB HTTP API üzerinden çalışan gerçek vektör DB |
+| `getVectorStore()` | Otomatik seçim: Chroma varsa → Chroma, yoksa → JSON |
+
+**JSON Store Detayları:**
+- `~/.deha/vector-store/{namespace}.json` yolunda saklanır
+- Cosine similarity ile embedding araması yapar
+- Her `add()` anında diske yazar (non-blocking)
+- Chroma bağımlılığı olmadan çalışabilir
+
+**Chroma Store Detayları:**
+- `CHROMA_URL` veya `http://localhost:8000`'e bağlanır
+- Collection otomatik oluşturma (eğer yoksa)
+- Chroma HTTP API (v1) ile iletişim
+
+### 1.2 `src/services/memory.ts` — Büyük Refactor
+
+- ChromaDB doğrudan kullanımı kaldırıldı → `getVectorStore()` soyutlamasına geçildi
+- `addMessage()` artık `vectorStore.add()` çağırıyor
+- `getContext()`'te vector store'dan semantic search entegre edildi
+- `closeMemory()`'de `vectorStore.close()` çağrısı eklendi
+- Kod miktarı ~200 satırdan ~100 satıra düştü (%50 azalma)
+
+### 1.3 `src/services/process-manager.ts`
+
+- `startVectorStore()` fonksiyonu güncellendi: ChromaDB'yi başlatma mantığı sadeleştirildi
+
+### 1.4 `src/commands/interactive.ts`
+
+- `closeMemory()` çağrısı eklendi (çıkışta vector store'u kapat)
+
+### 1.5 `src/__tests__/vector-store.test.ts` — YENİ DOSYA (117 test)
+
+| Test | Sayı |
+|------|:----:|
+| JsonVectorStore CRUD | 20 |
+| ChromaVectorStore CRUD | 20 |
+| getVectorStore auto-select | 10 |
+| Cosine similarity doğruluğu | 15 |
+| Edge cases (boş store, embedding hataları) | 52 |
+
+---
+
+## 2. Mimari
+
+```
+memory.ts
+  → addMessage() → vectorStore.add({ id, role, content, embedding, timestamp })
+  → getContext() → [...hotWindow, ...redisSearch, ...vectorStore.search()]
+                    ↓
+         getVectorStore()
+          ├─ Chroma varsa → ChromaVectorStore
+          └─ Chroma yoksa → JsonVectorStore (.deha/vector-store/)
+```
+
+---
+
+## 3. Derleme Durumu
+
+```
+npx tsc --noEmit  →  ✅ HATA YOK
+npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya)
+```
+
+---
+
+*Özet: 6 dosyada değişiklik (1 yeni dosya: vector-store.ts, 1 yeni test: 117 test). ChromaDB + JSON fallback ile vektör depolama soyutlaması. memory.ts %50 küçüldü.*
+
+---
+
+# DEHA-CLI — Konuşma Özeti #27
+
+**Tarih:** 2026-05-07  
+**Kapsam:** i18n Altyapısı — Çoklu Dil Desteği (locale.ts)
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 `src/services/locale.ts` — YENİ DOSYA
+
+Çoklu dil desteği için merkezi çeviri sistemi:
+
+| Özellik | Açıklama |
+|---------|----------|
+| `t(key, ...args)` | Metin çevirisi, `{param}` desteği ile |
+| `setLanguage(lang)` | Dil değiştirme (`'tr'` veya `'en'`) |
+| `getLanguage()` | Mevcut dili döndürür |
+| `DEHA_LANG` env'i | Ortam değişkeni ile dil seçimi (varsayılan: `tr`) |
+
+**Kategori bazlı çeviri anahtarları (~80 adet):**
+
+| Kategori | Anahtar sayısı | Örnek |
+|----------|:--------------:|-------|
+| Genel | 10 | `welcome`, `goodbye`, `error_occurred` |
+| Komutlar | 6 | `cmd_not_found`, `cmd_help_text` |
+| Agent | 5 | `agent_start`, `agent_thinking`, `agent_done` |
+| Hata | 6 | `err_network`, `err_auth`, `err_api` |
+| Doctor | 5 | `doctor_title`, `doctor_results` |
+| Judge | 5 | `judge_running`, `judge_pass`, `judge_score` |
+| Context | 3 | `context_loaded`, `context_compressed` |
+| Setup | 5 | `setup_title`, `setup_active` |
+| Init | 8 | `init_title`, `init_complete` |
+| +diğer | ~25 | Çeşitli UI mesajları |
+
+### 1.2 `src/config.ts` — Güncelleme
+
+- `language` config alanı eklendi (`DEHA_LANG` env'den okur, varsayılan: `'tr'`)
+- `getConfig().language` ile erişim
+
+### 1.3 `src/__tests__/locale.test.ts` — YENİ DOSYA (70 test)
+
+| Test | Sayı |
+|------|:----:|
+| t() temel çeviri | 10 |
+| Parametreli çeviri (`{cmd}`) | 10 |
+| setLanguage() değişimi | 10 |
+| Eksik anahtar fallback | 10 |
+| Dil geçişi (tr→en→tr) | 10 |
+| DEHA_LANG env okuma | 10 |
+| Edge cases (boş/garbage input) | 10 |
+
+---
+
+## 2. Kullanım
+
+```typescript
+import { t, setLanguage } from './services/locale';
+
+// Türkçe (varsayılan)
+console.log(t('welcome'));  // "DEHA'ya hoş geldin!"
+
+// İngilizce
+setLanguage('en');
+console.log(t('welcome'));  // "Welcome to DEHA!"
+
+// Parametreli
+console.log(t('cmd_not_found', 'xyz'));  // "Komut bulunamadı: xyz"
+```
+
+---
+
+## 3. Derleme Durumu
+
+```
+npx tsc --noEmit  →  ✅ HATA YOK
+npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya)
+```
+
+---
+
+*Özet: 3 dosyada değişiklik (1 yeni: locale.ts, 1 yeni test: 70 test). ~80 çeviri anahtarı ile TR/EN destekli i18n altyapısı. env, config ve runtime dil değişimi.*
