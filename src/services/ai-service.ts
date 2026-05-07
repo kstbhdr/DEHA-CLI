@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
+import ora from "ora";
 import chalk from 'chalk';
 import { DehaConfig, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
@@ -118,6 +119,40 @@ function toOpenAITools(tools: ToolDefinition[]): Record<string, unknown>[] {
 }
 
 /** Claude native tool calling */
+
+// ─── Spinner Yardımcısı ──────────────────────────────────────────────────────
+
+function getModelLabel(config: DehaConfig): string {
+  if (config.provider === 'claude') return config.claudeModel;
+  if (config.provider === 'openai') return config.openaiModel;
+  if (config.provider === 'deepseek') return config.deepseekModel;
+  if (config.provider === 'ollama') return config.ollamaModel;
+  if (config.provider === 'openrouter') return config.openrouterModel;
+  if (config.provider === 'xai') return config.xaiModel;
+  if (config.provider === 'custom') return config.customModel || 'custom';
+  return 'unknown';
+}
+
+async function withSpinner<T>(
+  config: DehaConfig,
+  label: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const spinner = ora({
+    text: 'DEHA ' + label + '... [' + config.provider + '/' + getModelLabel(config) + ']',
+    color: 'cyan',
+    spinner: 'dots',
+  }).start();
+  try {
+    const result = await fn();
+    spinner.stop();
+    return result;
+  } catch (err) {
+    spinner.stop();
+    throw err;
+  }
+}
+
 export async function sendWithTools(
   messages: Message[],
   config: DehaConfig,
@@ -136,14 +171,14 @@ export async function sendWithTools(
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY eksik');
 
   const client = new Anthropic({ apiKey });
-  const response = await client.messages.create({
+  const response = await withSpinner(config, 'düşünüyor', () => client.messages.create({
     model: config.claudeModel,
     max_tokens: config.maxTokens,
     system: config.systemPrompt,
     tools,
     tool_choice: toolChoice === 'required' ? { type: 'any' } : { type: 'auto' },
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-  }, { signal: abortSignal });
+  }, { signal: abortSignal }));
 
   let text = '';
   const toolCalls: ToolCall[] = [];
@@ -193,11 +228,11 @@ export async function sendWithToolsOpenAICompat(
 
   let response;
   try {
-    response = await axios.post(`${apiUrl}/chat/completions`, body, {
+    response = await withSpinner(config, 'düşünüyor', () => axios.post(`${apiUrl}/chat/completions`, body, {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       timeout: 120000,
       signal: abortSignal,
-    });
+    }));
   } catch (err: unknown) {
     writeOpenAICompatDebugFile('last-openai-tool-error.json', {
       phase: 'initial_request',

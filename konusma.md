@@ -913,7 +913,7 @@ npx tsc --noEmit  →  ✅ HATA YOK
 | **CI/CD** | ⚠️ Var ama coverage eksik | Coveralls/Codecov eklenmeli, Windows matrix eklenmeli |
 | **Logging** | ✅ `logger.write()` ile tüm console.log'lar değiştirildi | Structured logger aktif, trace seviyesi eklendi |
 | **Error Handling** | ✅ Kategorilendirme + kullanıcı dostu mesaj + çözüm önerisi | Merkezi handleError() aktif, 6 kategori |
-| **CLI UX** | ⚠️ Spinner yok | `ora` kütüphanesi yeniden değerlendirilebilir |
+| **CLI UX** | ✅ Spinner aktif (`ora`) | AI API çağrılarında "DEHA düşünüyor... [provider/model]" |
 | **Vector Store** | ⚠️ Sadece Chroma | Pinecone, Qdrant desteği |
 | **i18n** | ⚠️ Türkçe/İngilizce karışık | Dil seçeneği CLI argümanı olarak |
 | **CLI Entegrasyon Testi** | ❌ Yok | `deha chat "test"` gibi e2e testler |
@@ -1031,3 +1031,45 @@ npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya, 18'i error-handler)
 ---
 
 *Özet: 2 dosyada değişiklik (1 yeniden yazım, 1 test genişletme). Hata kategorilendirme + kullanıcı dostu mesajlar + merkezi hata işleyici eklendi. Test sayısı 221 → 233.*
+
+---
+
+# DEHA-CLI — Konuşma Özeti #25
+
+**Tarih:** 2026-05-07  
+**Kapsam:** CLI UX — Spinner (Yükleme Animasyonu) Eklendi
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 `src/services/ai-service.ts` — Spinner Entegrasyonu
+
+- **`ora`** kütüphanesi import edildi (zaten package.json'da vardı)
+- **`withSpinner()`** yardımcı fonksiyonu eklendi:
+  - API çağrısı başladığında `DEHA düşünüyor... [provider/model]` spinner'ı başlatır
+  - API cevabı gelince spinner durur
+  - Hata durumunda spinner durur ve hata fırlatılır
+- **Claude SDK** ve **OpenAI-uyumlu axios** çağrıları `withSpinner()` ile sarıldı
+- Readline ile çakışma yok çünkü spinner sadece API isteği anında aktiftir, stream/çıktı başlayınca durur
+
+**Kullanıcı deneyimi:**
+```
+DEHA düşünüyor... [deepseek/deepseek-chat] ⠋
+                                     ⠙
+                                     ⠹  (döner, sonra silinir)
+[cevap buradan itibaren yazılır...]
+```
+
+---
+
+## 2. Derleme Durumu
+
+```
+npx tsc --noEmit  →  ✅ HATA YOK
+npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya)
+```
+
+---
+
+*Özet: 1 dosyada değişiklik. `ora` spinner AI API çağrılarına eklendi. Readline ile çakışmasız çalışır.*
