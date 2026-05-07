@@ -1244,3 +1244,65 @@ npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya)
 ---
 
 *Özet: 3 dosyada değişiklik (1 yeni: locale.ts, 1 yeni test: 70 test). ~80 çeviri anahtarı ile TR/EN destekli i18n altyapısı. env, config ve runtime dil değişimi.*
+
+---
+
+# DEHA-CLI — Konuşma Özeti #28
+
+**Tarih:** 2026-05-07  
+**Kapsam:** Memory Dedup Fix, Session-Memory Redis Stabilizasyonu, 3 Ortam (PC/GitHub/VPS) Eşitleme
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 `src/services/memory.ts` — Fix
+
+| Sorun | Çözüm |
+|-------|-------|
+| `getContext()`'te `hotIds` set'i sadece `m.content` ile karşılaştırıyordu → aynı içerikli farklı roller (user/assistant) duplicate sanılıp eleniyordu | `hotIds` artık `${m.role}::${m.content}` ile oluşturuluyor |
+| `_semanticSearch()`'te Redis `smembers` sıra garantisi vermediği için mesaj sırası karışabiliyordu | Timestamp'e göre `sort()` eklendi |
+| `closeMemory()` sonrası yeniden başlatmada Redis tekrar denenmiyordu (`_redis` null ama flag resetlenmiyordu) | `_redisChecked = false` eklendi |
+
+### 1.2 `src/services/session-memory.ts` — Fix
+
+| Sorun | Çözüm |
+|-------|-------|
+| Her `getRedis()` çağrısında Redis bağlantısı yeniden deneniyor, hata logları şişiyordu | `_redisChecked` flag'i: bir kere dene, başarısızsa bir daha deneme |
+| `flushOnExit()`'te Redis state kaydedilmiyor, sadece key siliniyordu | Önce son state `deha:session:latest`'e yazılıyor, sonra key siliniyor |
+
+### 1.3 VPS Eşitleme
+
+| Adım | Detay |
+|------|-------|
+| SSH bağlantı | `root@84.46.247.137` |
+| Remote URL | `DEHA-CLI-yerel` → `DEHA-CLI` düzeltildi |
+| Git sync | `git reset --hard origin/main` → `3c7c030` |
+| Build | `npx tsc` ✅ |
+| Test | `npx vitest run` ✅ 250/250 (4.29s) |
+| Proje özeti | v9 push'landı, VPS çekti |
+
+---
+
+## 2. Derleme Durumu
+
+```
+PC:  npx tsc --noEmit  →  ✅ HATA YOK
+PC:  npx vitest run    →  ✅ 250/250 (23 dosya, 2.89s)
+VPS: npx tsc --noEmit  →  ✅ HATA YOK
+VPS: npx vitest run    →  ✅ 250/250 (23 dosya, 4.29s)
+```
+
+---
+
+## 3. Son Durum (3 Ortam)
+
+| Ortam | Commit | Build | Test |
+|-------|--------|-------|------|
+| PC | `9c031d1` | ✅ | ✅ 250/250 |
+| GitHub | `9c031d1` | — | — |
+| VPS `84.46.247.137` | `9c031d1` | ✅ | ✅ 250/250 |
+
+---
+
+*Özet: 2 dosyada fix (memory.ts, session-memory.ts), VPS remote URL düzeltmesi, 3 ortamın tam eşitlemesi. Tüm testler geçiyor (250/250).*
