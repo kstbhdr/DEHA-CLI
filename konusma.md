@@ -912,7 +912,7 @@ npx tsc --noEmit  →  ✅ HATA YOK
 |------|-------|-------|
 | **CI/CD** | ⚠️ Var ama coverage eksik | Coveralls/Codecov eklenmeli, Windows matrix eklenmeli |
 | **Logging** | ✅ `logger.write()` ile tüm console.log'lar değiştirildi | Structured logger aktif, trace seviyesi eklendi |
-| **Error Handling** | ⚠️ Kısmi | Kullanıcı dostu hata mesajları, renklendirme |
+| **Error Handling** | ✅ Kategorilendirme + kullanıcı dostu mesaj + çözüm önerisi | Merkezi handleError() aktif, 6 kategori |
 | **CLI UX** | ⚠️ Spinner yok | `ora` kütüphanesi yeniden değerlendirilebilir |
 | **Vector Store** | ⚠️ Sadece Chroma | Pinecone, Qdrant desteği |
 | **i18n** | ⚠️ Türkçe/İngilizce karışık | Dil seçeneği CLI argümanı olarak |
@@ -975,3 +975,59 @@ npx vitest run    →  ✅ 221/221 TEST GEÇTİ (20 dosya)
 ---
 
 *Özet: 18 dosyada ~240 console.log çağrısı logger servisine taşındı. Logger'a trace, write, raw metodları eklendi. Proje hatasız derleniyor, tüm testler geçiyor.*
+
+---
+
+# DEHA-CLI — Konuşma Özeti #24
+
+**Tarih:** 2026-05-07  
+**Kapsam:** Error Handling İyileştirmesi — Kullanıcı dostu hata mesajları
+
+---
+
+## 1. Yapılan Değişiklikler
+
+### 1.1 `src/services/error-handler.ts` — Tamamen Yeniden Yazıldı
+
+**Yeni özellikler:**
+
+| Özellik | Açıklama |
+|---------|----------|
+| `categorizeError()` | Hata metnini analiz ederek 6 kategoriden birine atar: network, auth, validation, api, system, unknown |
+| `formatUserError()` | Emoji + başlık + hata mesajı + çözüm önerisi içeren kullanıcı dostu format |
+| `handleError()` | Merkezi hata işleyici: kategorilendir → terminale bas → log dosyasına yaz → exit |
+| `setupGlobalErrorHandler()` | uncaughtException + unhandledRejection için global handler |
+
+**Örnek çıktı:**
+```
+🔑 YETKİ HATASI [API çağrısı]
+  401 Unauthorized - invalid API key
+  💡 API anahtarını kontrol et. `.env` dosyanda doğru tanımlandığından emin ol.
+```
+
+**Kategori regex'leri:**
+- **network**: ENOTFOUND, ECONNREFUSED, ECONNRESET, ETIMEDOUT, socket hang up, timeout
+- **auth**: 401, 403, unauthorized, forbidden, invalid API key
+- **validation**: 422, 400, invalid, malformed, parse error
+- **api**: 429, rate limit, 503, 502, 504, quota, overloaded
+- **system**: ENOENT, EACCES, EMFILE, ENOSPC, permission, command failed
+
+### 1.2 `src/__tests__/error-handler.test.ts` — Genişletildi
+
+- 6 test → **18 test** (12 yeni test eklendi)
+- categorizeError için 7 ayrı test (her kategori + unknown)
+- formatUserError için 2 test (context'li/context'siz)
+- handleError için 3 test (exit, no-exit, custom exit code)
+
+---
+
+## 2. Derleme Durumu
+
+```
+npx tsc --noEmit  →  ✅ HATA YOK
+npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya, 18'i error-handler)
+```
+
+---
+
+*Özet: 2 dosyada değişiklik (1 yeniden yazım, 1 test genişletme). Hata kategorilendirme + kullanıcı dostu mesajlar + merkezi hata işleyici eklendi. Test sayısı 221 → 233.*
