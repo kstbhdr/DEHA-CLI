@@ -495,7 +495,7 @@ export async function interactive(
         logger.write(chalk.dim(`  📁 Çalışma dizini: ${detectedDir}\n`));
       }
 
-      // ── Chat (araç çağrısı destekli, session-memory ile) ─────────────────
+      // ── Chat (normal LLM yanıtı, tool loop yok) ───────────────────────────
       try {
         // Intent detection — web search gerekiyor mu?
         let enrichedMessage = userMessage;
@@ -510,15 +510,12 @@ export async function interactive(
         // burada tekrar eklersek model aynı isteği iki kez görür.
         const contextHistory = buildContextMessages();
 
-        const abortController = new AbortController();
-        activeAbortController = abortController;
-
-        let fullResponse = '';
-        try {
-          fullResponse = await runAgent(enrichedMessage, config, contextHistory, abortController.signal);
-        } finally {
-          activeAbortController = null;
-        }
+        process.stdout.write('\n' + chalk.bold.cyan('DEHA:'));
+        const fullResponse = await sendMessage(
+          [...contextHistory, { role: 'user', content: enrichedMessage }],
+          config,
+        );
+        logger.write(formatResponse(fullResponse) + '\n');
 
         // history array'ine ekle (agent ve /file uyumluluğu için)
         history.push({ role: 'user', content: userMessage });
