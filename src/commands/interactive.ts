@@ -355,7 +355,13 @@ export async function interactive(
 
       // ── /oldconversations ─────────────────────────────────────────────────
       if (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history')) {
-        await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
+        const selection = await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
+        if (selection) {
+          history.length = 0;
+          history.push(...selection.messages);
+          conversationId = selection.id;
+          await hydrateSession(selection.messages, { workDir: process.cwd() }).catch(() => {});
+        }
         prompt(); return;
       }
 

@@ -16,6 +16,7 @@ export interface UsageEntry {
   role: RoleLabel;
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens?: number;
   costUsd: number;
 }
 
@@ -26,11 +27,12 @@ interface UsageStore {
 export interface UsageSummary {
   inputTokens: number;
   outputTokens: number;
+  reasoningTokens: number;
   totalTokens: number;
   costUsd: number;
   calls: number;
-  byModel: Record<string, { input: number; output: number; cost: number; calls: number }>;
-  byRole: Record<string, { input: number; output: number; cost: number; calls: number }>;
+  byModel: Record<string, { input: number; output: number; reasoning: number; cost: number; calls: number }>;
+  byRole: Record<string, { input: number; output: number; reasoning: number; cost: number; calls: number }>;
 }
 
 // ─── File path ───────────────────────────────────────────────────────────────
@@ -83,9 +85,11 @@ export function recordUsage(
   inputTokens: number,
   outputTokens: number,
   config: DehaConfig,
+  reasoningTokens = 0,
 ): void {
   if (inputTokens === 0 && outputTokens === 0) return;
   const store = readStore();
+  const normalizedReasoning = Math.max(0, Math.floor(reasoningTokens));
   store.entries.push({
     timestamp: new Date().toISOString(),
     provider,
@@ -93,6 +97,7 @@ export function recordUsage(
     role,
     inputTokens,
     outputTokens,
+    ...(normalizedReasoning > 0 ? { reasoningTokens: normalizedReasoning } : {}),
     costUsd: calcCost(role, inputTokens, outputTokens, config),
   });
   // Keep only last 10 000 entries to prevent unbounded growth
@@ -105,34 +110,39 @@ export function recordUsage(
 interface PeriodStats {
   inputTokens:  number;
   outputTokens: number;
+  reasoningTokens: number;
   totalTokens:  number;
   costUsd:      number;
   calls:        number;
-  byModel:      Record<string, { input: number; output: number; cost: number; calls: number }>;
-  byRole:       Record<string, { input: number; output: number; cost: number; calls: number }>;
+  byModel:      Record<string, { input: number; output: number; reasoning: number; cost: number; calls: number }>;
+  byRole:       Record<string, { input: number; output: number; reasoning: number; cost: number; calls: number }>;
 }
 
 function emptyPeriod(): PeriodStats {
-  return { inputTokens: 0, outputTokens: 0, totalTokens: 0, costUsd: 0, calls: 0, byModel: {}, byRole: {} };
+  return { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0, costUsd: 0, calls: 0, byModel: {}, byRole: {} };
 }
 
 function addEntry(period: PeriodStats, e: UsageEntry): void {
+  const reasoningTokens = e.reasoningTokens ?? 0;
   period.inputTokens  += e.inputTokens;
   period.outputTokens += e.outputTokens;
+  period.reasoningTokens += reasoningTokens;
   period.totalTokens  += e.inputTokens + e.outputTokens;
   period.costUsd      += e.costUsd;
   period.calls        += 1;
 
   const mk = `${e.provider}/${e.model}`;
-  if (!period.byModel[mk]) period.byModel[mk] = { input: 0, output: 0, cost: 0, calls: 0 };
+  if (!period.byModel[mk]) period.byModel[mk] = { input: 0, output: 0, reasoning: 0, cost: 0, calls: 0 };
   period.byModel[mk].input  += e.inputTokens;
   period.byModel[mk].output += e.outputTokens;
+  period.byModel[mk].reasoning += reasoningTokens;
   period.byModel[mk].cost   += e.costUsd;
   period.byModel[mk].calls  += 1;
 
-  if (!period.byRole[e.role]) period.byRole[e.role] = { input: 0, output: 0, cost: 0, calls: 0 };
+  if (!period.byRole[e.role]) period.byRole[e.role] = { input: 0, output: 0, reasoning: 0, cost: 0, calls: 0 };
   period.byRole[e.role].input  += e.inputTokens;
   period.byRole[e.role].output += e.outputTokens;
+  period.byRole[e.role].reasoning += reasoningTokens;
   period.byRole[e.role].cost   += e.costUsd;
   period.byRole[e.role].calls  += 1;
 }
@@ -206,6 +216,7 @@ function printPeriod(label: string, p: PeriodStats): void {
     `  ${chalk.dim('Calls:')}  ${chalk.white(p.calls)}   ` +
     `${chalk.dim('Tokens:')}  ${chalk.yellow(fmt(p.totalTokens))} ` +
     `${chalk.dim('(in:')} ${chalk.dim(fmt(p.inputTokens))} ${chalk.dim('out:')} ${chalk.dim(fmt(p.outputTokens))}${chalk.dim(')')}   ` +
+    `${p.reasoningTokens > 0 ? chalk.dim('thinking: ') + chalk.dim(fmt(p.reasoningTokens)) + '   ' : ''}` +
     `${chalk.dim('Cost:')}  ${chalk.green('$' + p.costUsd.toFixed(4))}`,
   );
 
@@ -218,6 +229,7 @@ function printPeriod(label: string, p: PeriodStats): void {
         `    ${chalk.cyan(model.padEnd(40))} ` +
         `${chalk.dim('calls:')} ${String(s.calls).padStart(4)}  ` +
         `${chalk.dim('tokens:')} ${fmt(s.input + s.output).padStart(9)}  ` +
+        `${s.reasoning > 0 ? chalk.dim('thinking:') + ' ' + fmt(s.reasoning).padStart(7) + '  ' : ''}` +
         `${chalk.green('$' + s.cost.toFixed(4))}`,
       );
     }
@@ -237,6 +249,7 @@ function printPeriod(label: string, p: PeriodStats): void {
         `    ${(icon[role] ?? '•') + ' ' + chalk.yellow(role.padEnd(10))} ` +
         `${chalk.dim('calls:')} ${String(s.calls).padStart(4)}  ` +
         `${chalk.dim('tokens:')} ${fmt(s.input + s.output).padStart(9)}  ` +
+        `${s.reasoning > 0 ? chalk.dim('thinking:') + ' ' + fmt(s.reasoning).padStart(7) + '  ' : ''}` +
         `${chalk.green('$' + s.cost.toFixed(4))}`,
       );
     }
@@ -254,6 +267,7 @@ export function printSessionSummary(summary: UsageSummary): void {
     `  ${chalk.dim('Calls:')} ${chalk.white(summary.calls)}  ` +
     `${chalk.dim('Tokens:')} ${chalk.yellow(fmt(summary.totalTokens))} ` +
     `${chalk.dim('(in:')} ${chalk.dim(fmt(summary.inputTokens))} ${chalk.dim('out:')} ${chalk.dim(fmt(summary.outputTokens))}${chalk.dim(')')}  ` +
+    `${summary.reasoningTokens > 0 ? chalk.dim('thinking: ') + chalk.dim(fmt(summary.reasoningTokens)) + '  ' : ''}` +
     `${chalk.dim('Cost:')} ${chalk.green('$' + summary.costUsd.toFixed(4))}`,
   );
 
@@ -265,6 +279,7 @@ export function printSessionSummary(summary: UsageSummary): void {
         `    ${chalk.cyan(model.padEnd(40))} ` +
         `${chalk.dim('in:')} ${fmt(s.input).padStart(8)}  ` +
         `${chalk.dim('out:')} ${fmt(s.output).padStart(8)}  ` +
+        `${s.reasoning > 0 ? chalk.dim('thinking:') + ' ' + fmt(s.reasoning).padStart(8) + '  ' : ''}` +
         `${chalk.green('$' + s.cost.toFixed(4))}`,
       );
     }

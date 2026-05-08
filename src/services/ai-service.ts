@@ -34,8 +34,8 @@ export async function callRole(
   const openrouterProvider =
     role.openrouterProvider ?? globalConfig.openrouterProvider ?? undefined;
 
-  const track = (inp: number, out: number) =>
-    recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig);
+  const track = (inp: number, out: number, reasoning = 0) =>
+    recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig, reasoning);
 
   switch (role.provider) {
     case 'claude':
@@ -167,6 +167,15 @@ export async function sendWithTools(
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
   }, { signal: abortSignal }));
 
+  recordUsage(
+    'anthropic',
+    config.claudeModel,
+    'agent',
+    response.usage.input_tokens,
+    response.usage.output_tokens,
+    config,
+  );
+
   let text = '';
   const toolCalls: ToolCall[] = [];
 
@@ -241,6 +250,10 @@ export async function sendWithToolsOpenAICompat(
   }
 
   const msg = response.data.choices[0].message as OAIMessage;
+  const agentUsage = extractUsageTokens(response.data.usage, msg);
+  if (agentUsage.input > 0 || agentUsage.output > 0) {
+    recordUsage(role.provider, role.model, 'agent', agentUsage.input, agentUsage.output, config, agentUsage.reasoning);
+  }
   writeOpenAICompatDebugFile('last-openai-tool-message.json', msg);
   const sanitizedAssistantMsg = sanitizeOpenAICompatAssistantMessage(msg);
   writeOpenAICompatDebugFile('last-openai-tool-message-sanitized.json', sanitizedAssistantMsg);
@@ -388,7 +401,56 @@ function writeOpenAICompatDebugFile(fileName: string, payload: unknown): void {
 
 // ─── Claude implementasyonu ─────────────────────────────────────────────────
 
-type TrackFn = (inp: number, out: number) => void;
+type TrackFn = (inp: number, out: number, reasoning?: number) => void;
+
+interface UsageTokens {
+  input: number;
+  output: number;
+  reasoning: number;
+}
+
+function extractUsageTokens(usage: unknown, assistantMessage?: OAIMessage): UsageTokens {
+  const u = (usage && typeof usage === 'object') ? usage as Record<string, unknown> : {};
+  const input = readNumber(u.prompt_tokens) ?? readNumber(u.input_tokens) ?? 0;
+  const baseOutput = readNumber(u.completion_tokens) ?? readNumber(u.output_tokens) ?? 0;
+  const explicitReasoning = extractReasoningTokens(u);
+  const visibleText = typeof assistantMessage?.content === 'string' ? assistantMessage.content : '';
+  const reasoningText = typeof assistantMessage?.reasoning_content === 'string' ? assistantMessage.reasoning_content : '';
+  const visibleEstimate = estimateTextTokens(visibleText);
+  const reasoningEstimate = explicitReasoning > 0 ? explicitReasoning : estimateTextTokens(reasoningText);
+  const fallbackOutput = visibleEstimate + reasoningEstimate;
+
+  return {
+    input,
+    output: Math.max(baseOutput, fallbackOutput),
+    reasoning: reasoningEstimate,
+  };
+}
+
+function extractReasoningTokens(usage: Record<string, unknown>): number {
+  const details =
+    asRecord(usage.completion_tokens_details) ??
+    asRecord(usage.output_tokens_details) ??
+    asRecord(usage.usage_details);
+
+  return readNumber(details?.reasoning_tokens) ??
+    readNumber(details?.reasoning) ??
+    readNumber(usage.reasoning_tokens) ??
+    0;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function estimateTextTokens(text: string): number {
+  if (!text.trim()) return 0;
+  return Math.ceil(text.length / 4);
+}
 
 async function sendClaude(
   messages: Message[],
@@ -466,9 +528,10 @@ async function sendOpenAICompat(
   const response = await axios.post(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
   });
-  const usage = response.data.usage;
-  if (usage) track?.(usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0);
-  return response.data.choices[0].message.content;
+  const msg = response.data.choices[0].message as OAIMessage;
+  const usage = extractUsageTokens(response.data.usage, msg);
+  if (usage.input > 0 || usage.output > 0) track?.(usage.input, usage.output, usage.reasoning);
+  return typeof msg.content === 'string' ? msg.content : '';
 }
 
 async function streamOpenAICompat(
@@ -571,6 +634,7 @@ function parseSSEStream(
   track?: TrackFn,
 ): Promise<string> {
   let full = '';
+  let reasoningContent = '';
   let buf = '';
   return new Promise((resolve, reject) => {
     stream.on('data', (raw: Buffer) => {
@@ -583,10 +647,17 @@ function parseSSEStream(
         try {
           const parsed = JSON.parse(trimmed);
           const delta: string = parsed.choices?.[0]?.delta?.content ?? '';
+          const reasoningDelta: string = parsed.choices?.[0]?.delta?.reasoning_content ?? '';
           if (delta) { onChunk(delta); full += delta; }
+          if (reasoningDelta) reasoningContent += reasoningDelta;
           // Some providers send usage in the final chunk (stream_options: include_usage)
           if (parsed.usage && track) {
-            track(parsed.usage.prompt_tokens ?? 0, parsed.usage.completion_tokens ?? 0);
+            const usage = extractUsageTokens(parsed.usage, {
+              role: 'assistant',
+              content: full,
+              reasoning_content: reasoningContent,
+            });
+            track(usage.input, usage.output, usage.reasoning);
           }
         } catch { /* skip */ }
       }

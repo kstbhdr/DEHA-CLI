@@ -3,22 +3,31 @@ import { logger } from '../services/logger';
 import {
   listConversations,
   readConversation,
+  loadConversationMessages,
   searchConversations,
   getConvDir,
   ConversationMeta,
 } from './manager';
+import type { Message } from '../services/ai-service';
 
-export async function handleHistoryCommand(args: string): Promise<void> {
+export interface HistorySelection {
+  id: string;
+  messages: Message[];
+}
+
+export async function handleHistoryCommand(args: string): Promise<HistorySelection | null> {
   const parts = args.trim().split(/\s+/);
   const sub = parts[0] || 'list';
 
   switch (sub) {
     case 'list':
     case '':
-      return showList();
+      showList();
+      return null;
 
     case 'search':
-      return showSearch(parts.slice(1).join(' '));
+      showSearch(parts.slice(1).join(' '));
+      return null;
 
     case 'open':
     case 'show':
@@ -26,7 +35,7 @@ export async function handleHistoryCommand(args: string): Promise<void> {
 
     case 'dir':
       logger.write(chalk.cyan('\n  Konum: ') + getConvDir() + '\n');
-      return;
+      return null;
 
     default:
       if (/^\d+$/.test(sub)) {
@@ -96,27 +105,27 @@ function showSearch(query: string): void {
 
 // ─── Sohbet görüntüle (index ile) ────────────────────────────────────────────
 
-function showByIndex(index: number): void {
+function showByIndex(index: number): HistorySelection | null {
   const convs = listConversations(100);
   if (index < 0 || index >= convs.length) {
     logger.write(chalk.red(`\n  Geçersiz numara. 1-${convs.length} arasında gir.\n`));
-    return;
+    return null;
   }
-  showConversation(convs[index].id);
+  return showConversation(convs[index].id);
 }
 
 // ─── Sohbet görüntüle (ID ile) ───────────────────────────────────────────────
 
-function showConversation(id: string): void {
+function showConversation(id: string): HistorySelection | null {
   if (!id) {
     logger.write(chalk.red('\n  Kullanım: /oldconversations <numara|id>\n'));
-    return;
+    return null;
   }
 
   const raw = readConversation(id);
   if (!raw) {
     logger.write(chalk.red(`\n  Sohbet bulunamadı: ${id}\n`));
-    return;
+    return null;
   }
 
   const body = raw.replace(/^---[\s\S]*?---\n/, '');
@@ -125,6 +134,15 @@ function showConversation(id: string): void {
   // Tüm içeriği tek seferde yazdır — ikinci readline çakışmasını önle
   logger.write(renderMarkdown(body));
   logger.write(chalk.dim('─'.repeat(60)) + '\n');
+
+  const messages = loadConversationMessages(id);
+  if (!messages) {
+    logger.write(chalk.yellow('  Sohbet görüntülendi ama mesajlar aktif bağlama yüklenemedi.\n'));
+    return null;
+  }
+
+  logger.write(chalk.dim('  Aktif sohbet olarak yüklendi. Devam: ') + chalk.cyan(`deha resume ${id}`) + '\n');
+  return { id, messages };
 }
 
 // ─── Markdown → terminal renderer (minimal) ──────────────────────────────────

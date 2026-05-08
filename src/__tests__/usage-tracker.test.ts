@@ -118,6 +118,14 @@ describe('recordUsage', () => {
     expect(written.entries).toHaveLength(2);
   });
 
+  it('thinking tokenlarini ayri saklar ve output maliyetine dahil eder', () => {
+    recordUsage('deepseek', 'deepseek-reasoner', 'chat', 1000, 700, config, 300);
+    const written = JSON.parse(fs.writeFileSync.mock.calls[0][1] as string);
+    expect(written.entries[0].outputTokens).toBe(700);
+    expect(written.entries[0].reasoningTokens).toBe(300);
+    expect(written.entries[0].costUsd).toBeCloseTo(calcCost('chat', 1000, 700, config), 6);
+  });
+
   it('10000 girdi sinirini korur', () => {
     const oldEntries = Array.from({ length: 10000 }, (_, i) => ({
       timestamp: new Date(2020, 0, 1 + i).toISOString(),
