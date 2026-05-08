@@ -17,7 +17,7 @@ import { runSmokeTests, buildQuickChecks, printSmokeReport } from '../tools/smok
 import { takeScreenshot } from '../tools/browser';
 import { screenshotAndAnalyze } from '../tools/vision';
 import { modelSetup } from './model-setup';
-import { printStats } from '../services/usage-tracker';
+import { getUsageSince, getUsageSnapshot, printSessionSummary, printStats } from '../services/usage-tracker';
 import { detectIntent, enrichWithSearch } from '../services/intent';
 import {
   addMessage,
@@ -76,6 +76,28 @@ ${chalk.bold('MCP kısayolları:')}
   /mcp install filesystem   → dosya sistemi sunucusunu kur
 `;
 
+const COMMAND_SUGGESTIONS = [
+  '/help',
+  '/new',
+  '/clear',
+  '/model',
+  '/thinking',
+  '/agent',
+  '/file',
+  '/mcp',
+  '/history',
+  '/oldconversations',
+  '/run',
+  '/python',
+  '/smoketest',
+  '/screenshot',
+  '/vision',
+  '/stats',
+  '/test',
+  '/judge',
+  '/exit',
+];
+
 export async function interactive(
   config: DehaConfig,
   initialHistory: Message[] = [],
@@ -106,11 +128,40 @@ export async function interactive(
   // Güncelleme kontrolü (sessiz, sadece yeni sürüm varsa bildir)
   checkForUpdates(true).catch(() => {});
 
+  readline.emitKeypressEvents(process.stdin);
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+  }
+
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
     terminal: true,
+    completer: completeCommand,
   });
+  const sessionUsageSnapshot = getUsageSnapshot();
+  let activeAbortController: AbortController | null = null;
+  let lastSuggestion = '';
+
+  const onGlobalKeypress = (_str: string, key: { name?: string } | undefined) => {
+    if (key?.name === 'escape' && activeAbortController) {
+      activeAbortController.abort();
+      process.stdout.write(chalk.red('\n[İptal edildi - ESC]\n'));
+      return;
+    }
+
+    if (!activeAbortController) {
+      const suggestion = getInlineSuggestion(rl.line);
+      if (suggestion !== lastSuggestion) {
+        lastSuggestion = suggestion;
+        if (suggestion) {
+          process.stdout.write('\n' + chalk.dim(`Öneri: ${suggestion}`) + '\n');
+          rl.prompt(true);
+        }
+      }
+    }
+  };
+  process.stdin.on('keypress', onGlobalKeypress);
 
   // Geriye dönük uyumluluk için boş history (session-memory bunu yönetiyor artık)
   const history: Message[] = [...initialHistory];
@@ -129,6 +180,7 @@ export async function interactive(
 
       rl.setPrompt(chalk.bold.cyan('DEHA ❯ '));
       rl.prompt();
+      lastSuggestion = getInlineSuggestion(rl.line);
 
       const onLine = (line: string) => {
         // Satır \ ile bitiyorsa manuel multi-line (alt satıra geç)
@@ -154,7 +206,7 @@ export async function interactive(
 
       // ── Dahili komutlar ───────────────────────────────────────────────────
       if (trimmed === '/exit' || trimmed === 'exit' || trimmed === 'quit') {
-        await exitCleanup(history, config, conversationId);
+        await exitCleanup(history, config, conversationId, sessionUsageSnapshot);
         rl.close(); process.exit(0);
       }
 
@@ -404,13 +456,7 @@ export async function interactive(
         const agentPrompt = trimmed.slice(7).trim();
         
         const abortController = new AbortController();
-        const onKeypress = (str: string, key: any) => {
-          if (key && key.name === 'escape') {
-            abortController.abort();
-            process.stdout.write(chalk.red('\n[İptal edildi - ESC]\n'));
-          }
-        };
-        process.stdin.on('keypress', onKeypress);
+        activeAbortController = abortController;
 
         try {
           const response = await runAgent(agentPrompt, config, history, abortController.signal);
@@ -434,7 +480,7 @@ export async function interactive(
             logger.error(chalk.red('\n✗ Hata: ') + message + '\n');
           }
         } finally {
-          process.stdin.removeListener('keypress', onKeypress);
+          activeAbortController = null;
         }
         prompt(); return;
       }
@@ -465,19 +511,13 @@ export async function interactive(
         const contextHistory = buildContextMessages();
 
         const abortController = new AbortController();
-        const onKeypress = (str: string, key: any) => {
-          if (key && key.name === 'escape') {
-            abortController.abort();
-            process.stdout.write(chalk.red('\n[İptal edildi - ESC]\n'));
-          }
-        };
-        process.stdin.on('keypress', onKeypress);
+        activeAbortController = abortController;
 
         let fullResponse = '';
         try {
           fullResponse = await runAgent(enrichedMessage, config, contextHistory, abortController.signal);
         } finally {
-          process.stdin.removeListener('keypress', onKeypress);
+          activeAbortController = null;
         }
 
         // history array'ine ekle (agent ve /file uyumluluğu için)
@@ -547,7 +587,7 @@ export async function interactive(
   };
 
   rl.on('SIGINT', async () => {
-    await exitCleanup(history, config, conversationId);
+    await exitCleanup(history, config, conversationId, sessionUsageSnapshot);
     process.exit(0);
   });
 
@@ -557,12 +597,24 @@ export async function interactive(
     process.exit(0);
   });
 
+  rl.on('close', () => {
+    process.stdin.removeListener('keypress', onGlobalKeypress);
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(false);
+    }
+  });
+
   prompt();
 }
 
 // ─── Yardımcılar ───────────────────────────────────────────────────────────
 
-async function exitCleanup(history: Message[], config: DehaConfig, conversationId?: string | null): Promise<void> {
+async function exitCleanup(
+  history: Message[],
+  config: DehaConfig,
+  conversationId?: string | null,
+  sessionUsageSnapshot = 0,
+): Promise<void> {
   // Session memory'yi kalıcı depolamaya yaz (cold storage + warm buffer temizliği)
   await flushOnExit().catch(() => {});
   await closeMemory().catch(() => {});
@@ -579,6 +631,7 @@ async function exitCleanup(history: Message[], config: DehaConfig, conversationI
   }
 
   await mcpManager.disconnectAll().catch(() => {});
+  printSessionSummary(getUsageSince(sessionUsageSnapshot));
   logger.write(chalk.dim('Görüşürüz! 👋'));
   if (sessionId) {
     logger.write(chalk.dim('To continue this session, run: ') + chalk.cyan(`deha resume ${sessionId}`) + '\n');
@@ -652,4 +705,17 @@ function normalizeThinkingEffort(value: string): 'high' | 'max' {
   const normalized = value.trim().toLowerCase();
   if (normalized === 'max' || normalized === 'xhigh') return 'max';
   return 'high';
+}
+
+function completeCommand(line: string): [string[], string] {
+  if (!line.startsWith('/')) return [[], line];
+  const hits = COMMAND_SUGGESTIONS.filter((cmd) => cmd.startsWith(line));
+  return [hits.length ? hits : COMMAND_SUGGESTIONS, line];
+}
+
+function getInlineSuggestion(line: string): string {
+  if (!line.startsWith('/')) return '';
+  if (COMMAND_SUGGESTIONS.includes(line)) return '';
+  const match = COMMAND_SUGGESTIONS.find((cmd) => cmd.startsWith(line));
+  return match ?? '';
 }

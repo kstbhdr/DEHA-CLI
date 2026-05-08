@@ -23,6 +23,16 @@ interface UsageStore {
   entries: UsageEntry[];
 }
 
+export interface UsageSummary {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  costUsd: number;
+  calls: number;
+  byModel: Record<string, { input: number; output: number; cost: number; calls: number }>;
+  byRole: Record<string, { input: number; output: number; cost: number; calls: number }>;
+}
+
 // ─── File path ───────────────────────────────────────────────────────────────
 
 const USAGE_DIR  = path.join(os.homedir(), '.deha');
@@ -155,6 +165,19 @@ export function getStats(): {
   return { today, week, month, allTime };
 }
 
+export function getUsageSnapshot(): number {
+  return readStore().entries.length;
+}
+
+export function getUsageSince(snapshot: number): UsageSummary {
+  const store = readStore();
+  const summary = emptyPeriod();
+  for (const entry of store.entries.slice(snapshot)) {
+    addEntry(summary, entry);
+  }
+  return summary;
+}
+
 // ─── Display ──────────────────────────────────────────────────────────────────
 
 export function printStats(): void {
@@ -214,6 +237,34 @@ function printPeriod(label: string, p: PeriodStats): void {
         `    ${(icon[role] ?? '•') + ' ' + chalk.yellow(role.padEnd(10))} ` +
         `${chalk.dim('calls:')} ${String(s.calls).padStart(4)}  ` +
         `${chalk.dim('tokens:')} ${fmt(s.input + s.output).padStart(9)}  ` +
+        `${chalk.green('$' + s.cost.toFixed(4))}`,
+      );
+    }
+  }
+}
+
+export function printSessionSummary(summary: UsageSummary): void {
+  logger.write('\n' + chalk.bold('  ── This Session ──'));
+  if (summary.calls === 0) {
+    logger.write(chalk.dim('  No token usage recorded in this session.'));
+    return;
+  }
+
+  logger.write(
+    `  ${chalk.dim('Calls:')} ${chalk.white(summary.calls)}  ` +
+    `${chalk.dim('Tokens:')} ${chalk.yellow(fmt(summary.totalTokens))} ` +
+    `${chalk.dim('(in:')} ${chalk.dim(fmt(summary.inputTokens))} ${chalk.dim('out:')} ${chalk.dim(fmt(summary.outputTokens))}${chalk.dim(')')}  ` +
+    `${chalk.dim('Cost:')} ${chalk.green('$' + summary.costUsd.toFixed(4))}`,
+  );
+
+  const models = Object.entries(summary.byModel).sort((a, b) => b[1].cost - a[1].cost);
+  if (models.length > 0) {
+    logger.write(chalk.dim('  By model:'));
+    for (const [model, s] of models) {
+      logger.write(
+        `    ${chalk.cyan(model.padEnd(40))} ` +
+        `${chalk.dim('in:')} ${fmt(s.input).padStart(8)}  ` +
+        `${chalk.dim('out:')} ${fmt(s.output).padStart(8)}  ` +
         `${chalk.green('$' + s.cost.toFixed(4))}`,
       );
     }
