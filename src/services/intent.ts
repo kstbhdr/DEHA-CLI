@@ -13,11 +13,17 @@ const SEARCH_KEYWORDS = [
   'haber', 'duyuru', 'çıktı mı', 'piyasaya',
   'indir', 'indirme', 'link', 'url', 'site', 'adres',
   'öneri', 'önerir misin', 'hangi', 'karşılaştır', 'vs',
+  'hava', 'hava durumu', 'yağmur', 'kar', 'sıcaklık', 'derece',
+  'deprem', 'son depremler', 'döviz', 'dolar', 'euro', 'altın', 'kuru',
+  'maç', 'skor', 'sonuç', 'puan durumu', 'lig',
   // English
   'find', 'search', 'look for', 'where', 'buy', 'purchase', 'price',
   'how much', 'cost', 'available', 'in stock', 'shop', 'order',
   'latest', 'current', 'today', 'news', 'recently', 'just released',
   'recommend', 'best', 'compare', 'review',
+  'weather', 'forecast', 'rain', 'snow', 'temperature',
+  'earthquake', 'exchange rate', 'currency', 'stock', 'market',
+  'score', 'match', 'game', 'result', 'standings',
 ];
 
 function hasSearchKeyword(message: string): boolean {
@@ -144,14 +150,14 @@ export async function enrichWithSearch(
       .map((r, i) => `${i + 1}. ${r.title}\n   URL: ${r.url}\n   ${r.snippet}`)
       .join('\n\n');
 
-    return (
-      `${message}\n\n` +
-      `---\n` +
-      `[Real-time web search results for: "${keywords}"]\n` +
-      `${formatted}\n` +
-      `---\n` +
-      `Use the search results above to give an accurate, up-to-date answer. Include relevant URLs.`
-    );
+    const searchBlock =
+      `[WEB ARAMA SONUÇLARI - "${keywords}"]\n` +
+      `${formatted}\n\n` +
+      `YUKARIDAKİ WEB ARAMA SONUÇLARINI KULLANARAK kullanıcının "${message}" sorusunu cevapla.\n` +
+      `Bu veriler gerçek zamanlıdır ve doğrudan cevabın içinde yer alır.\n` +
+      `Kesinlikle "veriye erişimim yok", "canlı verim yok" deme.\n`;
+
+    return searchBlock;
   } catch {
     return message;
   }

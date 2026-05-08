@@ -124,10 +124,10 @@ describe('enrichWithSearch', () => {
     ]);
 
     const result = await enrichWithSearch('Orijinal mesaj', 'test keyword');
-    expect(result).toContain('Orijinal mesaj');
-    expect(result).toContain('Real-time web search');
+    expect(result).toContain('[WEB ARAMA SONUÇLARI - "test keyword"]');
     expect(result).toContain('Test Result');
     expect(result).toContain('https://example.com');
+    expect(result).toContain('KULLANARAK');
   });
 
   it('sonuc yoksa orijinal mesaji doner', async () => {

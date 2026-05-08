@@ -499,12 +499,26 @@ export async function interactive(
       try {
         // Intent detection — web search gerekiyor mu?
         let enrichedMessage = userMessage;
+        let searchSystemAddendum = '';
         const intent = await detectIntent(userMessage, config);
         if (intent.search && intent.keywords) {
           process.stdout.write(chalk.dim(`\n  🌍 Searching: "${intent.keywords}"... `));
           enrichedMessage = await enrichWithSearch(userMessage, intent.keywords);
+          searchSystemAddendum = [
+            '',
+            '=== WEB ARAMA SONUÇLARI MEVCUT ===',
+            'Kullanıcının sorusunu cevaplamak için yukarıdaki [WEB ARAMA SONUÇLARI] bölümündeki verileri KULLAN.',
+            'Bu veriler gerçek zamanlıdır. Bunları kullanarak cevap ver.',
+            'Kesinlikle "veriye erişimim yok", "canlı verim yok", "üzgünüm" gibi ifadeler KULLANMA.',
+            'Verileri oku, özetle ve kaynaklarıyla birlikte sun.',
+          ].join('\n');
           logger.write(chalk.green('✓'));
         }
+
+        // Search yapıldıysa config'in system prompt'una ekle
+        const activeConfig = searchSystemAddendum
+          ? { ...config, systemPrompt: (config.systemPrompt || '') + '\n' + searchSystemAddendum }
+          : config;
 
         // Bağlamı session-memory'den oluştur. Yeni mesajı runAgent ekleyecek;
         // burada tekrar eklersek model aynı isteği iki kez görür.
@@ -513,7 +527,7 @@ export async function interactive(
         process.stdout.write('\n' + chalk.bold.cyan('DEHA:'));
         const fullResponse = await sendMessage(
           [...contextHistory, { role: 'user', content: enrichedMessage }],
-          config,
+          activeConfig,
         );
         logger.write(formatResponse(fullResponse) + '\n');
 

@@ -1,6 +1,7 @@
 import chalk from 'chalk';
 import { DehaConfig } from '../config';
 import { streamMessage, Message } from '../services/ai-service';
+import { detectIntent, enrichWithSearch } from '../services/intent';
 
 export function formatResponse(text: string): string {
   let formatted = text;
@@ -39,12 +40,40 @@ export async function chat(
   history: Message[] = [],
   stream = false,
 ): Promise<string> {
-  const messages: Message[] = [...history, { role: 'user', content: prompt }];
+  // Intent detection — web search gerekiyor mu?
+  let enrichedPrompt = prompt;
+  let searchSystemAddendum = '';
+  try {
+    const intent = await detectIntent(prompt, config);
+    if (intent.search && intent.keywords) {
+      process.stdout.write(chalk.dim(`\n  🌍 Searching: "${intent.keywords}"... `));
+      enrichedPrompt = await enrichWithSearch(prompt, intent.keywords);
+      searchSystemAddendum = [
+        '',
+        '=== WEB ARAMA SONUÇLARI MEVCUT ===',
+        'Kullanıcının sorusunu cevaplamak için yukarıdaki [WEB ARAMA SONUÇLARI] bölümündeki verileri KULLAN.',
+        'Bu veriler gerçek zamanlıdır. Bunları kullanarak cevap ver.',
+        'Kesinlikle "veriye erişimim yok", "canlı verim yok", "üzgünüm" gibi ifadeler KULLANMA.',
+        'Verileri oku, özetle ve kaynaklarıyla birlikte sun.',
+      ].join('\n');
+      process.stdout.write(chalk.green('✓\n'));
+    }
+  } catch {
+    // Intent hatası sessizce geç, normal akışa devam et
+  }
+
+  // Search yapıldıysa system prompt'una addendum ekle
+  const activeConfig = { ...config };
+  if (searchSystemAddendum) {
+    activeConfig.systemPrompt = (config.systemPrompt || '') + '\n' + searchSystemAddendum;
+  }
+
+  const messages: Message[] = [...history, { role: 'user', content: enrichedPrompt }];
 
   try {
     if (stream) {
       let full = '';
-      await streamMessage(messages, config, (chunk) => {
+      await streamMessage(messages, activeConfig, (chunk) => {
         process.stdout.write(chunk);
         full += chunk;
       });
@@ -54,7 +83,7 @@ export async function chat(
     // Non-stream (deha chat "..." için)
     let full = '';
     process.stdout.write(chalk.bold.cyan('DEHA: '));
-    await streamMessage(messages, config, (chunk) => {
+    await streamMessage(messages, activeConfig, (chunk) => {
       process.stdout.write(chunk);
       full += chunk;
     });
