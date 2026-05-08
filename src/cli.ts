@@ -275,7 +275,7 @@ export class DehaCLI {
           logger.error(`Sohbet bulunamadı: ${id}`);
           process.exit(1);
         }
-        await interactive(config, messages);
+        await interactive(config, messages, id);
       });
 
     // ── deha test ─────────────────────────────────────────────────────────

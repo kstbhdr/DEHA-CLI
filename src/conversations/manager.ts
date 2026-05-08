@@ -25,6 +25,14 @@ export function getConvDir(): string {
   return CONV_DIR;
 }
 
+export function createConversationId(title = 'Sohbet'): string {
+  const now = new Date();
+  const dateStr = formatDate(now);
+  const timeStr = formatTime(now);
+  const slug = slugify(title).slice(0, 40) || 'sohbet';
+  return `${dateStr}_${timeStr}_${slug}`;
+}
+
 // ─── Kaydet ─────────────────────────────────────────────────────────────────
 
 export function saveConversation(
@@ -36,11 +44,8 @@ export function saveConversation(
   if (messages.length < 2) return null; // çok kısa, kaydetme
 
   const now = new Date();
-  const dateStr = formatDate(now);            // 2026-04-26
-  const timeStr = formatTime(now);            // 14-30-00
   const title   = options.title || makeTitle(messages[0].content);
-  const slug    = slugify(title).slice(0, 40);
-  const id      = options.conversationId || `${dateStr}_${timeStr}_${slug}`;
+  const id      = options.conversationId || createConversationId(title);
   const filePath = path.join(getConvDir(), `${id}.md`);
 
   const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model });

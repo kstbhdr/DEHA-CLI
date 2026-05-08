@@ -9,7 +9,7 @@ import { runAgent } from './agent';
 import { mcpManager } from '../mcp/manager';
 import { handleMcpCommand } from '../mcp/commands';
 import { checkForUpdates } from './update';
-import { saveConversation } from '../conversations/manager';
+import { createConversationId, saveConversation } from '../conversations/manager';
 import { handleHistoryCommand } from '../conversations/commands';
 import { runCommand } from '../tools/terminal';
 import { runPythonCode, detectPython } from '../tools/python';
@@ -75,7 +75,11 @@ ${chalk.bold('MCP kısayolları:')}
   /mcp install filesystem   → dosya sistemi sunucusunu kur
 `;
 
-export async function interactive(config: DehaConfig, initialHistory: Message[] = []): Promise<void> {
+export async function interactive(
+  config: DehaConfig,
+  initialHistory: Message[] = [],
+  initialConversationId?: string,
+): Promise<void> {
   logger.write(BANNER);
   logger.write(
     chalk.dim('Provider: ') + chalk.green(getProviderLabel(config.provider)) +
@@ -109,11 +113,12 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
   // Geriye dönük uyumluluk için boş history (session-memory bunu yönetiyor artık)
   const history: Message[] = [...initialHistory];
-  let conversationId: string | null = null;
+  let conversationId: string | null = initialConversationId ?? null;
   if (initialHistory.length > 0) {
     await hydrateSession(initialHistory, { workDir: process.cwd() }).catch(() => {});
     logger.write(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
   } else {
+    conversationId = createConversationId();
     await resetSession(process.cwd()).catch(() => {});
   }
 
@@ -148,7 +153,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
       // ── Dahili komutlar ───────────────────────────────────────────────────
       if (trimmed === '/exit' || trimmed === 'exit' || trimmed === 'quit') {
-        await exitCleanup(history, config);
+        await exitCleanup(history, config, conversationId);
         rl.close(); process.exit(0);
       }
 
@@ -164,20 +169,23 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           }
         }
         history.length = 0;
-        conversationId = null;
+        conversationId = createConversationId();
         await resetSession(process.cwd()).catch(() => {});
         setWorkDir(process.cwd());
-        logger.write(chalk.green('✓ Yeni sohbet başlatıldı.\n'));
+        logger.write(chalk.green('✓ Yeni sohbet başlatıldı.'));
+        logger.write(chalk.dim('  ID: ') + chalk.cyan(conversationId));
+        logger.write(chalk.dim('  Devam: ') + chalk.cyan(`deha resume ${conversationId}`) + '\n');
         prompt(); return;
       }
 
       if (trimmed === '/clear') {
         history.length = 0;
-        conversationId = null;
+        conversationId = createConversationId();
         await resetSession(process.cwd()).catch(() => {});
         console.clear();
         logger.write(BANNER);
-        logger.write(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));
+        logger.write(chalk.green('✓ Sohbet geçmişi temizlendi.'));
+        logger.write(chalk.dim('  Yeni ID: ') + chalk.cyan(conversationId) + '\n');
         prompt(); return;
       }
 
