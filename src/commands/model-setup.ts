@@ -39,6 +39,27 @@ function defaultKey(provider: Provider, config: DehaConfig): string {
   }
 }
 
+function defaultVisionModel(provider: string, config: DehaConfig): string {
+  switch (provider) {
+    case 'claude':     return config.claudeModel;
+    case 'openai':     return config.openaiModel;
+    case 'openrouter': return config.visionModel || config.openrouterModel;
+    case 'custom':     return config.visionModel || config.customModel;
+    default:           return config.visionModel;
+  }
+}
+
+function defaultVisionKey(provider: string, config: DehaConfig): string {
+  if (config.visionApiKey) return config.visionApiKey;
+  switch (provider) {
+    case 'claude':     return config.anthropicApiKey ?? '';
+    case 'openai':     return config.openaiApiKey ?? '';
+    case 'openrouter': return config.openrouterApiKey ?? '';
+    case 'custom':     return config.customApiKey ?? '';
+    default:           return '';
+  }
+}
+
 // ─── Ana fonksiyon ────────────────────────────────────────────────────────────
 
 export async function modelSetup(config: DehaConfig): Promise<void> {
@@ -224,29 +245,30 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
       choices: [
         { name: 'Claude  (Anthropic)', value: 'claude' },
         { name: 'OpenAI  (GPT-4o)',    value: 'openai' },
+        { name: 'OpenRouter',          value: 'openrouter' },
         { name: 'Custom  API',         value: 'custom' },
       ],
-      default: config.provider === 'openai' ? 'openai' : 'claude',
+      default: config.visionProvider || 'openrouter',
     },
     {
       type: 'input',
       name: 'model',
       message: 'Model adı:',
       default: (ans: { provider: string }) =>
-        ans.provider === 'openai' ? config.openaiModel : config.claudeModel,
+        defaultVisionModel(ans.provider, config),
     },
     {
       type: 'password',
       name: 'apiKey',
       message: 'API Key (boş = global key):',
       mask: '*',
-      default: '',
+      default: (ans: { provider: string }) => defaultVisionKey(ans.provider, config),
     },
     {
       type: 'input',
       name: 'apiUrl',
       message: 'Custom API URL:',
-      default: config.customApiUrl,
+      default: config.visionApiUrl || config.customApiUrl,
       when: (ans: { provider: string }) => ans.provider === 'custom',
     },
   ]);

@@ -162,7 +162,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
       return CHAT_PROMPT as string;
     })(),
 
-    maxToolRounds: safeParseInt(process.env.DEHA_MAX_TOOL_ROUNDS, 5),
+    maxToolRounds: safeParseInt(process.env.DEHA_MAX_TOOL_ROUNDS, 200),
     toolMaxTokens: safeParseInt(process.env.DEHA_TOOL_MAX_TOKENS, 48 * 1024),
 
     maxTokens:   safeParseInt(process.env.DEHA_MAX_TOKENS,   4096),

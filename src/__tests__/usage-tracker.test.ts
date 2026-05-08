@@ -48,7 +48,7 @@ function makeConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     systemPrompt: '',
     maxTokens: 4096,
     temperature: 0.7,
-    maxToolRounds: 5,
+    maxToolRounds: 200,
     toolMaxTokens: 49152,
     maxContextTokens: 0,
     compressThreshold: 0.75,

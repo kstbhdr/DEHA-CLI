@@ -34,7 +34,7 @@ describe('getConfig', () => {
     expect(cfg.claudeModel).toBe('claude-opus-4-6');
     expect(cfg.maxTokens).toBe(4096);
     expect(cfg.temperature).toBe(0.7);
-    expect(cfg.maxToolRounds).toBe(5);
+    expect(cfg.maxToolRounds).toBe(200);
     expect(cfg.toolMaxTokens).toBe(49152);
     expect(cfg.visionProvider).toBe('openrouter');
     expect(cfg.visionModel).toBe('qwen/qwen3-vl-32b-instruct');
@@ -162,7 +162,7 @@ describe('resolveApiKey', () => {
     systemPrompt: '',
     maxTokens: 4096,
     temperature: 0.7,
-    maxToolRounds: 5,
+    maxToolRounds: 200,
     toolMaxTokens: 49152,
     maxContextTokens: 0,
     compressThreshold: 0.75,
