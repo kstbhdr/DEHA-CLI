@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { DehaConfig } from '../config';
-import { Message, OAIMessage, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
+import { Message, OAIMessage, ToolCall, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
 import { getWorkDir } from '../services/session-memory';
@@ -74,8 +74,11 @@ async function runAgentClaude(
     const { text, toolCalls } = await sendWithTools(messages, config, allTools, (chunk) => {
       roundText += chunk;
     }, abortSignal, forceToolUse ? 'required' : 'auto');
+    const effectiveToolCalls = toolCalls.length > 0
+      ? toolCalls
+      : parseInlineXmlToolCalls(text, allTools);
 
-    if (toolCalls.length === 0) {
+    if (effectiveToolCalls.length === 0) {
       finalText = text;
       const shouldContinue = hadToolActivity
         ? await shouldContinueAfterToolPhase(
@@ -129,7 +132,7 @@ async function runAgentClaude(
       logger.raw('\n');
     }
 
-    for (const tc of toolCalls) {
+    for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
       const compactedResult = compactToolResultForModel(tc.name, result);
@@ -188,8 +191,13 @@ async function runAgentOpenAI(
       abortSignal,
       forceToolUse ? 'required' : 'auto',
     );
+    const inlineToolCalls = toolCalls.length > 0 ? [] : parseInlineXmlToolCalls(text, allTools);
+    const effectiveToolCalls = toolCalls.length > 0 ? toolCalls : inlineToolCalls;
+    const effectiveAssistantMsg = inlineToolCalls.length > 0
+      ? withSyntheticOpenAIToolCalls(rawAssistantMsg, inlineToolCalls)
+      : rawAssistantMsg;
 
-    if (malformedToolCalls > 0 && toolCalls.length === 0) {
+    if (malformedToolCalls > 0 && effectiveToolCalls.length === 0) {
       forceToolUse = true;
       messages.push({
         role: 'user',
@@ -198,7 +206,7 @@ async function runAgentOpenAI(
       continue;
     }
 
-    if (toolCalls.length === 0) {
+    if (effectiveToolCalls.length === 0) {
       finalText = text;
       const shouldContinue = hadToolActivity
         ? await shouldContinueAfterToolPhase(
@@ -222,7 +230,7 @@ async function runAgentOpenAI(
       if (shouldContinue) {
         autoContinueRounds++;
         forceToolUse = true;
-        messages.push(rawAssistantMsg);
+        messages.push(effectiveAssistantMsg);
         messages.push({
           role: 'user',
           content: hadToolActivity ? POST_TOOL_CONTINUE_PROMPT : AUTO_CONTINUE_PROMPT,
@@ -241,7 +249,7 @@ async function runAgentOpenAI(
     }
 
     // Assistant mesajını (tool_calls ile birlikte) geçmişe ekle
-    messages.push(rawAssistantMsg);
+    messages.push(effectiveAssistantMsg);
     hadToolActivity = true;
     postToolCompletionRounds = 0;
     autoContinueRounds = 0;
@@ -254,7 +262,7 @@ async function runAgentOpenAI(
     }
 
     // Tool'ları çalıştır ve sonuçları ekle
-    for (const tc of toolCalls) {
+    for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
       const compactedResult = compactToolResultForModel(tc.name, result);
@@ -290,6 +298,133 @@ function compactToolResultForModel(toolName: string, result: string): string {
     '',
     tailChars > 0 ? result.slice(-tailChars) : '',
   ].join('\n');
+}
+
+function parseInlineXmlToolCalls(text: string, tools: typeof DEHA_TOOLS): ToolCall[] {
+  if (!text || !text.includes('<')) return [];
+
+  const toolNames = new Set(tools.map((tool) => tool.name));
+  const calls: ToolCall[] = [];
+
+  for (const name of toolNames) {
+    const pattern = new RegExp(`<${escapeRegExp(name)}\\b[^>]*>([\\s\\S]*?)<\\/${escapeRegExp(name)}>`, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const input = parseInlineXmlToolInput(name, match[1]);
+      if (input) {
+        calls.push({
+          name,
+          input,
+          id: `inline_${name}_${calls.length}_${Date.now()}`,
+        });
+      }
+    }
+  }
+
+  return calls.slice(0, 8);
+}
+
+function parseInlineXmlToolInput(toolName: string, body: string): Record<string, unknown> | null {
+  const trimmed = body.trim();
+  if (!trimmed) return null;
+
+  const jsonCandidate = extractJsonObject(trimmed);
+  if (jsonCandidate) {
+    try {
+      const parsed = JSON.parse(jsonCandidate) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // XML child tag parsing fallback.
+    }
+  }
+
+  const input: Record<string, unknown> = {};
+  const childPattern = /<([A-Za-z_][\w-]*)\b[^>]*>([\s\S]*?)<\/\1>/g;
+  let child: RegExpExecArray | null;
+  while ((child = childPattern.exec(trimmed)) !== null) {
+    input[child[1]] = coerceInlineXmlValue(decodeXmlEntities(child[2].trim()));
+  }
+
+  if (Object.keys(input).length > 0) return normalizeInlineToolInput(toolName, input);
+
+  if (toolName === 'run_shell' || toolName === 'run_terminal') {
+    return { command: decodeXmlEntities(trimmed) };
+  }
+  if (toolName === 'read_file' || toolName === 'cat' || toolName === 'list_dir' || toolName === 'ls') {
+    return { path: decodeXmlEntities(trimmed) };
+  }
+
+  return null;
+}
+
+function normalizeInlineToolInput(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
+  if ((toolName === 'run_shell' || toolName === 'run_terminal') && input.command === undefined && typeof input.cmd === 'string') {
+    input.command = input.cmd;
+  }
+  if ((toolName === 'read_file' || toolName === 'cat') && input.path === undefined && typeof input.file === 'string') {
+    input.path = input.file;
+  }
+  return input;
+}
+
+function withSyntheticOpenAIToolCalls(message: OAIMessage, toolCalls: ToolCall[]): OAIMessage {
+  return {
+    ...message,
+    role: 'assistant',
+    content: typeof message.content === 'string' ? stripInlineXmlToolCalls(message.content, toolCalls) : '',
+    tool_calls: toolCalls.map((tc) => ({
+      id: tc.id,
+      type: 'function',
+      function: {
+        name: tc.name,
+        arguments: JSON.stringify(tc.input),
+      },
+    })),
+  };
+}
+
+function stripInlineXmlToolCalls(text: string, toolCalls: ToolCall[]): string {
+  let stripped = text;
+  for (const tc of toolCalls) {
+    stripped = stripped.replace(new RegExp(`<${escapeRegExp(tc.name)}\\b[^>]*>[\\s\\S]*?<\\/${escapeRegExp(tc.name)}>`, 'gi'), '').trim();
+  }
+  return stripped;
+}
+
+function extractJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  return start >= 0 && end > start ? text.slice(start, end + 1) : null;
+}
+
+function coerceInlineXmlValue(value: string): unknown {
+  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  const jsonCandidate = extractJsonObject(value) ?? (value.startsWith('[') && value.endsWith(']') ? value : null);
+  if (jsonCandidate) {
+    try {
+      return JSON.parse(jsonCandidate);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function readPositiveInt(value: string | undefined, fallback: number): number {
