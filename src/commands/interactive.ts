@@ -466,7 +466,25 @@ export async function interactive(
         activeAbortController = abortController;
 
         try {
-          const response = await runAgent(agentPrompt, config, history, abortController.signal);
+          const maxCtxTokens = config.maxContextTokens > 0
+            ? config.maxContextTokens
+            : getMaxContextTokens(config.provider, getActiveModel(config));
+          const minHotMessages = Math.max(config.minHotMessages, 5);
+          await autoCompress(
+            (msgs) => summarizeForCompression(msgs, config, maxCtxTokens),
+            maxCtxTokens,
+            Math.min(config.compressThreshold, 0.6),
+            minHotMessages,
+          );
+          const response = await runAgent(
+            agentPrompt,
+            config,
+            buildContextMessages(undefined, {
+              maxTokens: getContextBudgetTokens(config, maxCtxTokens),
+              minHotMessages,
+            }),
+            abortController.signal,
+          );
           history.push({ role: 'user', content: agentPrompt });
           history.push({ role: 'assistant', content: response });
         // Session memory'ye de ekle
