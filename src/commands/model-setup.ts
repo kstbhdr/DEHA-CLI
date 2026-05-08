@@ -1,5 +1,7 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
+import * as fs from 'fs';
+import * as path from 'path';
 import { DehaConfig, Provider } from '../config';
 import { logger } from '../services/logger';
 
@@ -299,8 +301,10 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     pipeline: pipeline as PipeAns,
   });
 
+  persistConfig(config);
+
   // ── Özet göster ────────────────────────────────────────────────────────────
-  logger.write('\n' + chalk.bold.cyan('  ✓ Ayarlar bu oturum için güncellendi:\n'));
+  logger.write('\n' + chalk.bold.cyan('  ✓ Ayarlar kaydedildi ve güncellendi:\n'));
 
   const row = (label: string, color: chalk.Chalk, p: string, m: string) =>
     logger.write(`  ${color(label.padEnd(10))}  ${chalk.dim('provider=')}${chalk.green(p)}  ${chalk.dim('model=')}${chalk.yellow(m)}`);
@@ -402,4 +406,70 @@ function getModelFromConfig(config: DehaConfig, provider: Provider): string {
     case 'ollama':     return config.ollamaModel;
     case 'custom':     return config.customModel;
   }
+}
+
+function persistConfig(config: DehaConfig): void {
+  const envPath = path.resolve(__dirname, '../../.env');
+  const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
+
+  const updates: Record<string, string> = {
+    DEHA_PROVIDER: config.provider,
+    CLAUDE_MODEL: config.claudeModel,
+    OPENAI_MODEL: config.openaiModel,
+    DEEPSEEK_MODEL: config.deepseekModel,
+    OPENROUTER_MODEL: config.openrouterModel,
+    XAI_MODEL: config.xaiModel,
+    CUSTOM_MODEL: config.customModel,
+    CUSTOM_API_URL: config.customApiUrl,
+    OLLAMA_HOST: config.ollamaHost,
+    OLLAMA_MODEL: config.ollamaModel,
+    ANTHROPIC_API_KEY: config.anthropicApiKey ?? '',
+    OPENAI_API_KEY: config.openaiApiKey ?? '',
+    DEEPSEEK_API_KEY: config.deepseekApiKey ?? '',
+    OPENROUTER_API_KEY: config.openrouterApiKey ?? '',
+    XAI_API_KEY: config.xaiApiKey ?? '',
+    CUSTOM_API_KEY: config.customApiKey ?? '',
+    PLANNER_PROVIDER: config.pipeline.planner.provider,
+    PLANNER_MODEL: config.pipeline.planner.model,
+    PLANNER_API_KEY: config.pipeline.planner.apiKey ?? '',
+    PLANNER_API_URL: config.pipeline.planner.apiUrl ?? '',
+    PLANNER_MAX_TOKENS: String(config.pipeline.planner.maxTokens ?? ''),
+    PLANNER_TEMPERATURE: String(config.pipeline.planner.temperature ?? ''),
+    CODER_PROVIDER: config.pipeline.coder.provider,
+    CODER_MODEL: config.pipeline.coder.model,
+    CODER_API_KEY: config.pipeline.coder.apiKey ?? '',
+    CODER_API_URL: config.pipeline.coder.apiUrl ?? '',
+    CODER_MAX_TOKENS: String(config.pipeline.coder.maxTokens ?? ''),
+    CODER_TEMPERATURE: String(config.pipeline.coder.temperature ?? ''),
+    JUDGE_PROVIDER: config.pipeline.judge.provider,
+    JUDGE_MODEL: config.pipeline.judge.model,
+    JUDGE_API_KEY: config.pipeline.judge.apiKey ?? '',
+    JUDGE_API_URL: config.pipeline.judge.apiUrl ?? '',
+    JUDGE_MAX_TOKENS: String(config.pipeline.judge.maxTokens ?? ''),
+    JUDGE_TEMPERATURE: String(config.pipeline.judge.temperature ?? ''),
+    VISION_PROVIDER: config.visionProvider,
+    VISION_MODEL: config.visionModel,
+    VISION_API_KEY: config.visionApiKey ?? '',
+    VISION_API_URL: config.visionApiUrl ?? '',
+    PIPELINE_MAX_ITERATIONS: String(config.pipeline.maxIterations),
+    DEHA_MAX_TOOL_ROUNDS: String(config.maxToolRounds),
+  };
+
+  let content = existing;
+  for (const [key, value] of Object.entries(updates)) {
+    const escaped = value.replace(/\r?\n/g, ' ');
+    const line = `${key}=${escaped}`;
+    const pattern = new RegExp(`^${escapeRegex(key)}=.*$`, 'm');
+    if (pattern.test(content)) {
+      content = content.replace(pattern, line);
+    } else {
+      content += `${content.endsWith('\n') || content.length === 0 ? '' : '\n'}${line}\n`;
+    }
+  }
+
+  fs.writeFileSync(envPath, content, 'utf-8');
+}
+
+function escapeRegex(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
