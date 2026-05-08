@@ -282,9 +282,9 @@ const AUTO_CONTINUE_PROMPT = [
 
 const POST_TOOL_CONTINUE_PROMPT = [
   'Az önce tool sonuçları üretildi ama kullanıcıya dönük final yanıt henüz tamamlanmadı.',
-  'Şimdi durma.',
-  'Ya gerekli sonraki tool çağrısını yap ya da doğrudan kullanıcıya nihai, somut sonucu yaz.',
-  'Sıradaki adımı anlatma, gerçekten uygula.',
+  'Eğer kullanıcının istediği bilgi tool sonucunda geldiyse hemen nihai, somut cevabı yaz ve dur.',
+  'Sadece kullanıcının isteğini cevaplamak için doğrudan gerekli olan bir sonraki tool çağrısını yap.',
+  'Kapsamı genişletme, kod veya yapılandırma dosyalarını incelemeye geçme.',
   'Yeni kullanıcı mesajı bekleme.',
 ].join(' ');
 
@@ -374,13 +374,11 @@ async function shouldContinueAfterNoToolResponse(
 
   const normalized = assistantText.toLowerCase().trim();
 
-  // Net final cevap değilse devam et
-  if (!looksLikeFinalAnswer(normalized)) return true;
-
-  // Final pattern var ama interim dil de varsa → gerçek final değil
+  // Interim dil varsa model sadece niyet bildirmiştir; devam edip işi gerçekten yapsın.
   if (containsInterimLanguage(normalized)) return true;
 
-  // Final pattern var, interim dil yok → dur
+  // Non-empty ve interim olmayan cevap final kabul edilir. Aksi halde basit cevaplar
+  // "görev tamamlandı" demediği için gereksiz tool döngüsüne giriyor.
   return false;
 }
 
@@ -400,14 +398,12 @@ async function shouldContinueAfterToolPhase(
   // Boş cevap → devam et
   if (!normalized) return true;
 
-  // Net final cevap değilse devam et
-  if (!looksLikeFinalAnswer(normalized)) return true;
-
-  // Final pattern var. Ama aynı anda interim dil de varsa
-  // (örn: "görev tamamlandı, şimdi raporu yazacağım") → bu gerçek final değil.
+  // Tool sonrası model "okuyorum/bakayım/test edeceğim" gibi ara durum yazdıysa
+  // gerçekten sonraki tool adımına geçsin.
   if (containsInterimLanguage(normalized)) return true;
 
-  // Final pattern var, interim dil yok → gerçek final cevap.
+  // Tool sonrası non-empty ve interim olmayan her cevap finaldir. Böylece basit
+  // "dosyayı oku" istekleri okuduktan sonra başka dosyalara sapmaz.
   return false;
 }
 
