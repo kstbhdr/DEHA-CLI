@@ -45,7 +45,7 @@ function defaultVisionModel(provider: string, config: DehaConfig): string {
   switch (provider) {
     case 'claude':     return config.claudeModel;
     case 'openai':     return config.openaiModel;
-    case 'openrouter': return config.visionModel || config.openrouterModel;
+    case 'openrouter': return normalizeVisionModel(config.visionModel || config.openrouterModel);
     case 'custom':     return config.visionModel || config.customModel;
     default:           return config.visionModel;
   }
@@ -364,12 +364,12 @@ function applyToConfig(
 
   // Vision — config'deki vision alanlarına yaz
   config.visionProvider = vision.provider;
-  config.visionModel    = vision.model;
+  config.visionModel    = normalizeVisionModel(vision.model);
   if (vision.apiKey) config.visionApiKey = vision.apiKey;
   if (vision.apiUrl) config.visionApiUrl = vision.apiUrl;
 
   // Pipeline
-  config.pipeline.maxIterations = pipeline.maxIterations;
+  config.pipeline.maxIterations = Math.min(Math.max(Number(pipeline.maxIterations) || 5, 1), 5);
 }
 
 function setModel(config: DehaConfig, provider: Provider, model: string): void {
@@ -472,4 +472,8 @@ function persistConfig(config: DehaConfig): void {
 
 function escapeRegex(input: string): string {
   return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function normalizeVisionModel(model: string): string {
+  return model === 'qwen/qwen3-32b' ? 'qwen/qwen3-vl-32b-instruct' : model;
 }

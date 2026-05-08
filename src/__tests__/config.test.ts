@@ -57,6 +57,8 @@ describe('getConfig', () => {
     process.env.DEHA_COMPRESS_THRESHOLD = '0.85';
     process.env.DEEPSEEK_THINKING = 'on';
     process.env.DEEPSEEK_REASONING_EFFORT = 'xhigh';
+    process.env.PIPELINE_MAX_ITERATIONS = '200';
+    process.env.VISION_MODEL = 'qwen/qwen3-32b';
 
     const cfg = getConfig();
     expect(cfg.maxTokens).toBe(8192);
@@ -65,6 +67,8 @@ describe('getConfig', () => {
     expect(cfg.compressThreshold).toBe(0.85);
     expect(cfg.deepseekThinking).toBe('enabled');
     expect(cfg.deepseekReasoningEffort).toBe('max');
+    expect(cfg.pipeline.maxIterations).toBe(5);
+    expect(cfg.visionModel).toBe('qwen/qwen3-vl-32b-instruct');
   });
 
   it('override değerler base değerleri ezer', () => {

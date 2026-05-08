@@ -12,6 +12,12 @@ export type Provider =
 export type DeepSeekThinkingMode = 'enabled' | 'disabled';
 export type DeepSeekReasoningEffort = 'high' | 'max';
 
+const DEFAULT_VISION_PROVIDER = 'openrouter';
+const DEFAULT_VISION_MODEL = 'qwen/qwen3-vl-32b-instruct';
+const LEGACY_WRONG_VISION_MODELS = new Set([
+  'qwen/qwen3-32b',
+]);
+
 // ─── Rol Konfigürasyonu ─────────────────────────────────────────────────────
 
 export interface RoleConfig {
@@ -138,8 +144,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     openrouterProvider: process.env.OPENROUTER_PROVIDER || undefined,
 
-    visionProvider: process.env.VISION_PROVIDER || 'openrouter',
-    visionModel:    process.env.VISION_MODEL    || 'qwen/qwen3-vl-32b-instruct',
+    visionProvider: normalizeVisionProvider(process.env.VISION_PROVIDER),
+    visionModel:    normalizeVisionModel(process.env.VISION_MODEL),
     visionApiKey:   process.env.VISION_API_KEY,
     visionApiUrl:   process.env.VISION_API_URL,
 
@@ -202,7 +208,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         temperature:        safeParseFloat(process.env.JUDGE_TEMPERATURE, 0.1),
         openrouterProvider: process.env.JUDGE_OPENROUTER_PROVIDER || undefined,
       },
-      maxIterations: safeParseInt(process.env.PIPELINE_MAX_ITERATIONS, 5),
+      maxIterations: safeParseMaxIterations(process.env.PIPELINE_MAX_ITERATIONS),
     },
   };
 
@@ -221,6 +227,24 @@ function safeParseFloat(value: string | undefined, defaultVal: number): number {
   if (value === undefined || value === '') return defaultVal;
   const parsed = parseFloat(value);
   return isNaN(parsed) ? defaultVal : parsed;
+}
+
+function safeParseMaxIterations(value: string | undefined): number {
+  const parsed = safeParseInt(value, 5);
+  if (parsed <= 0) return 5;
+  return Math.min(parsed, 5);
+}
+
+function normalizeVisionProvider(value: string | undefined): string {
+  const normalized = (value || '').trim().toLowerCase();
+  return normalized || DEFAULT_VISION_PROVIDER;
+}
+
+function normalizeVisionModel(value: string | undefined): string {
+  const normalized = (value || '').trim();
+  if (!normalized) return DEFAULT_VISION_MODEL;
+  if (LEGACY_WRONG_VISION_MODELS.has(normalized)) return DEFAULT_VISION_MODEL;
+  return normalized;
 }
 
 function parseDeepSeekThinking(value: string | undefined): DeepSeekThinkingMode {
