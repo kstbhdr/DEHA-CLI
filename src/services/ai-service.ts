@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
-import ora from "ora";
 import chalk from 'chalk';
 import { DehaConfig, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
@@ -134,23 +133,11 @@ function getModelLabel(config: DehaConfig): string {
 }
 
 async function withSpinner<T>(
-  config: DehaConfig,
-  label: string,
+  _config: DehaConfig,
+  _label: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const spinner = ora({
-    text: 'DEHA ' + label + '... [' + config.provider + '/' + getModelLabel(config) + ']',
-    color: 'cyan',
-    spinner: 'dots',
-  }).start();
-  try {
-    const result = await fn();
-    spinner.stop();
-    return result;
-  } catch (err) {
-    spinner.stop();
-    throw err;
-  }
+  return fn();
 }
 
 export async function sendWithTools(
