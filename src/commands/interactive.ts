@@ -19,6 +19,7 @@ import { screenshotAndAnalyze } from '../tools/vision';
 import { modelSetup } from './model-setup';
 import { getUsageSince, getUsageSnapshot, printSessionSummary, printStats } from '../services/usage-tracker';
 import { detectIntent, enrichWithSearch } from '../services/intent';
+import { decideToolRoute } from '../services/tool-router';
 import {
   addMessage,
   closeMemory,
@@ -501,8 +502,39 @@ export async function interactive(
         logger.write(chalk.dim(`  📁 Çalışma dizini: ${detectedDir}\n`));
       }
 
-      // ── Chat (normal LLM yanıtı, tool loop yok) ───────────────────────────
+      // ── Chat (LLM router: gerekirse tool, değilse düz yanıt) ──────────────
       try {
+        const contextHistory = buildContextMessages();
+        const toolRoute = await decideToolRoute(userMessage, config);
+        if (toolRoute.useTools) {
+          logger.write(chalk.dim(`\n  🛠 Tool modu: ${toolRoute.reason ?? 'LLM kararı'}\n`));
+          const abortController = new AbortController();
+          activeAbortController = abortController;
+          let response = '';
+          try {
+            response = await runAgent(userMessage, config, contextHistory, abortController.signal);
+          } finally {
+            activeAbortController = null;
+          }
+
+          history.push({ role: 'user', content: userMessage });
+          history.push({ role: 'assistant', content: response });
+          await appendMessage({ role: 'user', content: userMessage });
+          await appendMessage({ role: 'assistant', content: response });
+
+          const autosavedPath = saveConversation(history, config.provider, getActiveModel(config), {
+            conversationId: conversationId ?? undefined,
+          });
+          if (autosavedPath) {
+            conversationId = path.basename(autosavedPath, '.md');
+          }
+
+          addMessage({ role: 'user', content: userMessage }).catch(() => {});
+          addMessage({ role: 'assistant', content: response }).catch(() => {});
+          logger.write(chalk.dim('─'.repeat(50)) + '\n');
+          prompt(); return;
+        }
+
         // Intent detection — web search gerekiyor mu?
         let enrichedMessage = userMessage;
         let searchSystemAddendum = '';
@@ -525,10 +557,6 @@ export async function interactive(
         const activeConfig = searchSystemAddendum
           ? { ...config, systemPrompt: (config.systemPrompt || '') + '\n' + searchSystemAddendum }
           : config;
-
-        // Bağlamı session-memory'den oluştur. Yeni mesajı runAgent ekleyecek;
-        // burada tekrar eklersek model aynı isteği iki kez görür.
-        const contextHistory = buildContextMessages();
 
         process.stdout.write('\n' + chalk.bold.cyan('DEHA:'));
         const fullResponse = await sendMessage(
