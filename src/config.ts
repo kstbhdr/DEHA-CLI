@@ -9,6 +9,9 @@ export type Provider =
   | 'xai'
   | 'custom';
 
+export type DeepSeekThinkingMode = 'enabled' | 'disabled';
+export type DeepSeekReasoningEffort = 'high' | 'max';
+
 // ─── Rol Konfigürasyonu ─────────────────────────────────────────────────────
 
 export interface RoleConfig {
@@ -42,6 +45,9 @@ export interface DehaConfig {
   openrouterApiKey?: string;
   xaiApiKey?: string;
   customApiKey?: string;
+
+  deepseekThinking: DeepSeekThinkingMode;
+  deepseekReasoningEffort: DeepSeekReasoningEffort;
 
   // Model isimleri (global)
   claudeModel: string;
@@ -115,6 +121,9 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     xaiApiKey:        process.env.XAI_API_KEY,
     customApiKey:     process.env.CUSTOM_API_KEY,
 
+    deepseekThinking: parseDeepSeekThinking(process.env.DEEPSEEK_THINKING),
+    deepseekReasoningEffort: parseDeepSeekReasoningEffort(process.env.DEEPSEEK_REASONING_EFFORT),
+
     claudeModel:      process.env.CLAUDE_MODEL      || 'claude-opus-4-6',
     openaiModel:      process.env.OPENAI_MODEL      || 'gpt-4o',
     deepseekModel:    process.env.DEEPSEEK_MODEL    || 'deepseek-chat',
@@ -153,7 +162,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
       return CHAT_PROMPT as string;
     })(),
 
-    maxToolRounds: safeParseInt(process.env.DEHA_MAX_TOOL_ROUNDS, 200),
+    maxToolRounds: safeParseInt(process.env.DEHA_MAX_TOOL_ROUNDS, 5),
     toolMaxTokens: safeParseInt(process.env.DEHA_TOOL_MAX_TOKENS, 48 * 1024),
 
     maxTokens:   safeParseInt(process.env.DEHA_MAX_TOKENS,   4096),
@@ -212,6 +221,19 @@ function safeParseFloat(value: string | undefined, defaultVal: number): number {
   if (value === undefined || value === '') return defaultVal;
   const parsed = parseFloat(value);
   return isNaN(parsed) ? defaultVal : parsed;
+}
+
+function parseDeepSeekThinking(value: string | undefined): DeepSeekThinkingMode {
+  const normalized = (value || '').trim().toLowerCase();
+  if (['enabled', 'enable', 'on', 'true', '1', 'yes'].includes(normalized)) return 'enabled';
+  if (['disabled', 'disable', 'off', 'false', '0', 'no'].includes(normalized)) return 'disabled';
+  return 'disabled';
+}
+
+function parseDeepSeekReasoningEffort(value: string | undefined): DeepSeekReasoningEffort {
+  const normalized = (value || '').trim().toLowerCase();
+  if (normalized === 'max' || normalized === 'xhigh') return 'max';
+  return 'high';
 }
 
 // ─── Yardımcılar ────────────────────────────────────────────────────────────

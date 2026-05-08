@@ -53,6 +53,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/new')}                     Yeni sohbet başlat
   ${chalk.cyan('/clear')}                   Sohbet geçmişini temizle
   ${chalk.cyan('/model')}                   Model & provider ayarlarını düzenle (Chat/Planner/Coder/Judge/Vision)
+  ${chalk.cyan('/thinking [on|off] [effort]')} DeepSeek thinking mode'u aç/kapat
   ${chalk.cyan('/agent <soru>')}            Araç çağırabilen ajan modu (Claude)
   ${chalk.cyan('/file <yol>')}              Dosyayı bağlama ekle
   ${chalk.cyan('/mcp <list|status|...>')}        MCP sunucu yönetimi
@@ -209,6 +210,40 @@ export async function interactive(
           }
         }
         rl.resume();
+        prompt(); return;
+      }
+
+      if (trimmed.startsWith('/thinking')) {
+        const parts = trimmed.split(/\s+/).slice(1);
+        if (parts.length === 0) {
+          logger.write(
+            chalk.cyan('DeepSeek thinking: ') +
+            chalk.yellow(config.deepseekThinking) +
+            chalk.dim('  effort=') +
+            chalk.yellow(config.deepseekReasoningEffort) +
+            '\n',
+          );
+          prompt(); return;
+        }
+
+        const state = normalizeThinkingState(parts[0]);
+        if (!state) {
+          logger.write(chalk.yellow('ℹ Kullanım: /thinking <on|off> [high|max]\n'));
+          prompt(); return;
+        }
+
+        config.deepseekThinking = state;
+        if (state === 'enabled' && parts[1]) {
+          config.deepseekReasoningEffort = normalizeThinkingEffort(parts[1]);
+        }
+
+        logger.write(
+          chalk.green('✓ DeepSeek thinking güncellendi: ') +
+          chalk.cyan(config.deepseekThinking) +
+          chalk.dim('  effort=') +
+          chalk.cyan(config.deepseekReasoningEffort) +
+          '\n',
+        );
         prompt(); return;
       }
 
@@ -604,4 +639,17 @@ function isVersionQuestion(message: string): boolean {
   ];
 
   return patterns.some((pattern) => pattern.test(normalized));
+}
+
+function normalizeThinkingState(value: string): 'enabled' | 'disabled' | null {
+  const normalized = value.trim().toLowerCase();
+  if (['on', 'enable', 'enabled', 'true', '1'].includes(normalized)) return 'enabled';
+  if (['off', 'disable', 'disabled', 'false', '0'].includes(normalized)) return 'disabled';
+  return null;
+}
+
+function normalizeThinkingEffort(value: string): 'high' | 'max' {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'max' || normalized === 'xhigh') return 'max';
+  return 'high';
 }

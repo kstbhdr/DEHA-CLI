@@ -13,6 +13,8 @@ beforeEach(() => {
   delete process.env.DEHA_MIN_HOT_MESSAGES;
   delete process.env.DEHA_MAX_CONTEXT_TOKENS;
   delete process.env.DEHA_TOOL_MAX_TOKENS;
+  delete process.env.DEEPSEEK_THINKING;
+  delete process.env.DEEPSEEK_REASONING_EFFORT;
   delete process.env.PLANNER_PROVIDER;
   delete process.env.CODER_PROVIDER;
   delete process.env.JUDGE_PROVIDER;
@@ -32,10 +34,12 @@ describe('getConfig', () => {
     expect(cfg.claudeModel).toBe('claude-opus-4-6');
     expect(cfg.maxTokens).toBe(4096);
     expect(cfg.temperature).toBe(0.7);
-    expect(cfg.maxToolRounds).toBe(200);
+    expect(cfg.maxToolRounds).toBe(5);
     expect(cfg.toolMaxTokens).toBe(49152);
     expect(cfg.visionProvider).toBe('openrouter');
     expect(cfg.visionModel).toBe('qwen/qwen3-vl-32b-instruct');
+    expect(cfg.deepseekThinking).toBe('disabled');
+    expect(cfg.deepseekReasoningEffort).toBe('high');
     expect(cfg.maxContextTokens).toBe(0);
     expect(cfg.compressThreshold).toBe(0.75);
     expect(cfg.minHotMessages).toBe(10);
@@ -51,12 +55,16 @@ describe('getConfig', () => {
     process.env.DEHA_TEMPERATURE = '0.3';
     process.env.DEHA_MAX_TOOL_ROUNDS = '50';
     process.env.DEHA_COMPRESS_THRESHOLD = '0.85';
+    process.env.DEEPSEEK_THINKING = 'on';
+    process.env.DEEPSEEK_REASONING_EFFORT = 'xhigh';
 
     const cfg = getConfig();
     expect(cfg.maxTokens).toBe(8192);
     expect(cfg.temperature).toBe(0.3);
     expect(cfg.maxToolRounds).toBe(50);
     expect(cfg.compressThreshold).toBe(0.85);
+    expect(cfg.deepseekThinking).toBe('enabled');
+    expect(cfg.deepseekReasoningEffort).toBe('max');
   });
 
   it('override değerler base değerleri ezer', () => {
@@ -126,6 +134,8 @@ describe('resolveApiKey', () => {
     openrouterApiKey: 'sk-or-xxx',
     xaiApiKey: 'sk-xai-xxx',
     customApiKey: 'sk-custom-xxx',
+    deepseekThinking: 'disabled',
+    deepseekReasoningEffort: 'high',
     claudeModel: 'claude-opus-4-6',
     openaiModel: 'gpt-4o',
     deepseekModel: 'deepseek-chat',
@@ -152,7 +162,7 @@ describe('resolveApiKey', () => {
     systemPrompt: '',
     maxTokens: 4096,
     temperature: 0.7,
-    maxToolRounds: 200,
+    maxToolRounds: 5,
     toolMaxTokens: 49152,
     maxContextTokens: 0,
     compressThreshold: 0.75,

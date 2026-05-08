@@ -3,7 +3,7 @@ import * as path from 'path';
 import axios from 'axios';
 import Anthropic from '@anthropic-ai/sdk';
 import chalk from 'chalk';
-import { DehaConfig, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
+import { DehaConfig, Provider, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
 import { getCached, setCache } from './cache';
 
@@ -54,8 +54,8 @@ export async function callRole(
     case 'xai':
     case 'custom':
       return onChunk
-        ? streamOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, onChunk, track, openrouterProvider)
-        : sendOpenAICompat(apiUrl, apiKey, role.model, messages, systemPrompt, maxTokens, temperature, track, openrouterProvider);
+        ? streamOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, onChunk, track, openrouterProvider)
+        : sendOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, track, openrouterProvider);
 
     default:
       throw new Error(`Unknown provider: ${role.provider}`);
@@ -212,6 +212,7 @@ export async function sendWithToolsOpenAICompat(
   if (config.openrouterProvider) {
     body.provider = { only: [config.openrouterProvider], allow_fallbacks: false };
   }
+  applyOpenAICompatProviderOptions(body, role.provider, config);
 
   let response;
   try {
@@ -308,6 +309,22 @@ function sanitizeOpenAICompatAssistantMessage(msg: OAIMessage): OAIMessage {
   }
 
   return sanitized;
+}
+
+function applyOpenAICompatProviderOptions(
+  body: Record<string, unknown>,
+  provider: Provider,
+  config: DehaConfig,
+): void {
+  if (provider !== 'deepseek') return;
+
+  body.thinking = { type: config.deepseekThinking };
+  if (config.deepseekThinking === 'enabled') {
+    body.reasoning_effort = config.deepseekReasoningEffort;
+    delete body.temperature;
+  } else {
+    delete body.reasoning_effort;
+  }
 }
 
 function shouldRetryWithAutoToolChoice(err: unknown, toolChoice: 'auto' | 'required'): boolean {
@@ -425,11 +442,13 @@ async function streamClaude(
 async function sendOpenAICompat(
   baseUrl: string,
   apiKey: string | undefined,
+  provider: Provider,
   model: string,
   messages: Message[],
   systemPrompt: string,
   maxTokens: number,
   temperature: number,
+  config: DehaConfig,
   track?: TrackFn,
   openrouterProvider?: string,
 ): Promise<string> {
@@ -443,6 +462,7 @@ async function sendOpenAICompat(
   if (openrouterProvider) {
     body.provider = { only: [openrouterProvider], allow_fallbacks: false };
   }
+  applyOpenAICompatProviderOptions(body, provider, config);
   const response = await axios.post(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
   });
@@ -454,11 +474,13 @@ async function sendOpenAICompat(
 async function streamOpenAICompat(
   baseUrl: string,
   apiKey: string | undefined,
+  provider: Provider,
   model: string,
   messages: Message[],
   systemPrompt: string,
   maxTokens: number,
   temperature: number,
+  config: DehaConfig,
   onChunk: (chunk: string) => void,
   track?: TrackFn,
   openrouterProvider?: string,
@@ -475,6 +497,7 @@ async function streamOpenAICompat(
   if (openrouterProvider) {
     body.provider = { only: [openrouterProvider], allow_fallbacks: false };
   }
+  applyOpenAICompatProviderOptions(body, provider, config);
   const response = await axios.post(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     responseType: 'stream',
