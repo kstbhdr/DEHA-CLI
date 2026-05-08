@@ -129,8 +129,8 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     openrouterProvider: process.env.OPENROUTER_PROVIDER || undefined,
 
-    visionProvider: process.env.VISION_PROVIDER || 'claude',
-    visionModel:    process.env.VISION_MODEL    || 'claude-opus-4-6',
+    visionProvider: process.env.VISION_PROVIDER || 'openrouter',
+    visionModel:    process.env.VISION_MODEL    || 'qwen/qwen3-vl-32b-instruct',
     visionApiKey:   process.env.VISION_API_KEY,
     visionApiUrl:   process.env.VISION_API_URL,
 
@@ -154,7 +154,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     })(),
 
     maxToolRounds: safeParseInt(process.env.DEHA_MAX_TOOL_ROUNDS, 200),
-    toolMaxTokens: safeParseInt(process.env.DEHA_TOOL_MAX_TOKENS, 49152),
+    toolMaxTokens: safeParseInt(process.env.DEHA_TOOL_MAX_TOKENS, 48 * 1024),
 
     maxTokens:   safeParseInt(process.env.DEHA_MAX_TOKENS,   4096),
     temperature: safeParseFloat(process.env.DEHA_TEMPERATURE, 0.7),
@@ -193,7 +193,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         temperature:        safeParseFloat(process.env.JUDGE_TEMPERATURE, 0.1),
         openrouterProvider: process.env.JUDGE_OPENROUTER_PROVIDER || undefined,
       },
-      maxIterations: safeParseInt(process.env.PIPELINE_MAX_ITERATIONS, 200),
+      maxIterations: safeParseInt(process.env.PIPELINE_MAX_ITERATIONS, 5),
     },
   };
 

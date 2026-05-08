@@ -29,10 +29,10 @@ import {
   appendMessage,
   buildContextMessages,
   autoCompress,
-  loadSession,
   getContextStats,
-  getSessionMessages,
   flushOnExit,
+  hydrateSession,
+  resetSession,
 } from '../services/session-memory';
 import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
@@ -50,6 +50,7 @@ ${chalk.bold.cyan('╚═══════════════════�
 const HELP_TEXT = `
 ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/help')}                    Bu yardım mesajını göster
+  ${chalk.cyan('/new')}                     Yeni sohbet başlat
   ${chalk.cyan('/clear')}                   Sohbet geçmişini temizle
   ${chalk.cyan('/model')}                   Model & provider ayarlarını düzenle (Chat/Planner/Coder/Judge/Vision)
   ${chalk.cyan('/agent <soru>')}            Araç çağırabilen ajan modu (Claude)
@@ -92,8 +93,6 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
     if (parts.length) process.stdout.write(chalk.dim('  ') + parts.join(chalk.dim('  ')) + '\n\n');
   }).catch(() => {});
 
-  // Session memory'yi yükle (önceki session'dan devam edebilmek için)
-  await loadSession().catch(() => {});
   setWorkDir(process.cwd());
 
   // MCP sunucularına bağlan (arka planda, hata sessiz geç)
@@ -110,25 +109,12 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
   // Geriye dönük uyumluluk için boş history (session-memory bunu yönetiyor artık)
   const history: Message[] = [...initialHistory];
+  let conversationId: string | null = null;
   if (initialHistory.length > 0) {
+    await hydrateSession(initialHistory, { workDir: process.cwd() }).catch(() => {});
     logger.write(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
   } else {
-    // Session memory'den gelenleri göster
-    const sessionMsgs = getSessionMessages();
-    if (sessionMsgs.length > 0) {
-      logger.write(chalk.dim(`  ↩ Önceki oturumdan ${sessionMsgs.length} mesaj yüklendi.\n`));
-      
-      const last5 = sessionMsgs.slice(-5);
-      logger.write(chalk.dim('─── Son Konuşmalar ─────────────────────────────────'));
-      for (const msg of last5) {
-        const role = msg.role === 'user' ? 'Sen' : 'DEHA';
-        const color = msg.role === 'user' ? chalk.green : chalk.cyan;
-        let content = msg.content;
-        if (content.length > 100) content = content.slice(0, 100).replace(/\n/g, ' ') + '...';
-        logger.write(color(role + ': ') + chalk.dim(content));
-      }
-      logger.write(chalk.dim('────────────────────────────────────────────────────\n'));
-    }
+    await resetSession(process.cwd()).catch(() => {});
   }
 
   const prompt = async () => {
@@ -168,8 +154,27 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
       if (trimmed === '/help') { logger.write(HELP_TEXT); prompt(); return; }
 
+      if (trimmed === '/new') {
+        if (history.length >= 2) {
+          const filePath = saveConversation(history, config.provider, getActiveModel(config), {
+            conversationId: conversationId ?? undefined,
+          });
+          if (filePath) {
+            conversationId = path.basename(filePath, '.md');
+          }
+        }
+        history.length = 0;
+        conversationId = null;
+        await resetSession(process.cwd()).catch(() => {});
+        setWorkDir(process.cwd());
+        logger.write(chalk.green('✓ Yeni sohbet başlatıldı.\n'));
+        prompt(); return;
+      }
+
       if (trimmed === '/clear') {
         history.length = 0;
+        conversationId = null;
+        await resetSession(process.cwd()).catch(() => {});
         console.clear();
         logger.write(BANNER);
         logger.write(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));
@@ -254,7 +259,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
       }
 
       // ── /oldconversations ─────────────────────────────────────────────────
-      if (trimmed.startsWith('/oldconversations') || trimmed === '/history') {
+      if (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history')) {
         await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
         prompt(); return;
       }
@@ -368,10 +373,16 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
           const response = await runAgent(agentPrompt, config, history, abortController.signal);
           history.push({ role: 'user', content: agentPrompt });
           history.push({ role: 'assistant', content: response });
-          // Session memory'ye de ekle
-          await appendMessage({ role: 'user', content: agentPrompt });
-          await appendMessage({ role: 'assistant', content: response });
-          logger.write(chalk.dim('\n' + '─'.repeat(50)) + '\n');
+        // Session memory'ye de ekle
+        await appendMessage({ role: 'user', content: agentPrompt });
+        await appendMessage({ role: 'assistant', content: response });
+        const autosavedPath = saveConversation(history, config.provider, getActiveModel(config), {
+          conversationId: conversationId ?? undefined,
+        });
+        if (autosavedPath) {
+          conversationId = path.basename(autosavedPath, '.md');
+        }
+        logger.write(chalk.dim('\n' + '─'.repeat(50)) + '\n');
         } catch (err: unknown) {
           if (abortController.signal.aborted || (err instanceof Error && err.name === 'AbortError') || (err instanceof Error && err.message.includes('canceled'))) {
             // İptal edildi, hata yazdırma
@@ -434,6 +445,13 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
         await appendMessage({ role: 'user', content: userMessage });
         await appendMessage({ role: 'assistant', content: fullResponse });
 
+        const autosavedPath = saveConversation(history, config.provider, getActiveModel(config), {
+          conversationId: conversationId ?? undefined,
+        });
+        if (autosavedPath) {
+          conversationId = path.basename(autosavedPath, '.md');
+        }
+
         // Redis/ChromaDB'ye de yaz (long-term memory, semantic search)
         addMessage({ role: 'user', content: userMessage }).catch(() => {});
         addMessage({ role: 'assistant', content: fullResponse }).catch(() => {});
@@ -486,7 +504,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
   };
 
   rl.on('SIGINT', async () => {
-    await exitCleanup(history, config);
+    await exitCleanup(history, config, conversationId);
     process.exit(0);
   });
 
@@ -501,7 +519,7 @@ export async function interactive(config: DehaConfig, initialHistory: Message[] 
 
 // ─── Yardımcılar ───────────────────────────────────────────────────────────
 
-async function exitCleanup(history: Message[], config: DehaConfig): Promise<void> {
+async function exitCleanup(history: Message[], config: DehaConfig, conversationId?: string | null): Promise<void> {
   // Session memory'yi kalıcı depolamaya yaz (cold storage + warm buffer temizliği)
   await flushOnExit().catch(() => {});
   await closeMemory().catch(() => {});
@@ -509,7 +527,9 @@ async function exitCleanup(history: Message[], config: DehaConfig): Promise<void
 
   let sessionId: string | null = null;
   if (history.length >= 2) {
-    const filePath = saveConversation(history, config.provider, getActiveModel(config));
+    const filePath = saveConversation(history, config.provider, getActiveModel(config), {
+      conversationId: conversationId ?? undefined,
+    });
     if (filePath) {
       sessionId = path.basename(filePath, '.md');
     }

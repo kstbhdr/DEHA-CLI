@@ -15,6 +15,11 @@ export interface ConversationMeta {
 
 const CONV_DIR = path.join(os.homedir(), '.deha', 'conversations');
 
+export interface SaveConversationOptions {
+  conversationId?: string;
+  title?: string;
+}
+
 export function getConvDir(): string {
   if (!fs.existsSync(CONV_DIR)) fs.mkdirSync(CONV_DIR, { recursive: true });
   return CONV_DIR;
@@ -26,15 +31,16 @@ export function saveConversation(
   messages: Message[],
   provider: string,
   model: string,
+  options: SaveConversationOptions = {},
 ): string | null {
   if (messages.length < 2) return null; // çok kısa, kaydetme
 
   const now = new Date();
   const dateStr = formatDate(now);            // 2026-04-26
   const timeStr = formatTime(now);            // 14-30-00
-  const title   = makeTitle(messages[0].content);
+  const title   = options.title || makeTitle(messages[0].content);
   const slug    = slugify(title).slice(0, 40);
-  const id      = `${dateStr}_${timeStr}_${slug}`;
+  const id      = options.conversationId || `${dateStr}_${timeStr}_${slug}`;
   const filePath = path.join(getConvDir(), `${id}.md`);
 
   const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model });
@@ -45,7 +51,7 @@ export function saveConversation(
 
 // ─── Listele ────────────────────────────────────────────────────────────────
 
-export function listConversations(limit = 50): ConversationMeta[] {
+export function listConversations(limit = 200): ConversationMeta[] {
   const dir = getConvDir();
   const files = fs.readdirSync(dir)
     .filter((f) => f.endsWith('.md'))

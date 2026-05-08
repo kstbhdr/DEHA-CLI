@@ -95,6 +95,22 @@ describe('detectIntent', () => {
       expect(result.search).toBe(true);
     }
   });
+
+  it('oturum hafizasi sorularini searche gondermez', async () => {
+    const testCases = [
+      'En son ne yaptik?',
+      'Az once ne demistim?',
+      'Gecen sohbette ne konustuk?',
+      'What did we do last conversation?',
+    ];
+
+    for (const msg of testCases) {
+      const result = await detectIntent(msg, mockConfig);
+      expect(result).toEqual({ search: false });
+    }
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe('enrichWithSearch', () => {

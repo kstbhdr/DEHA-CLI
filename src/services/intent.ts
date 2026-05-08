@@ -25,6 +25,33 @@ function hasSearchKeyword(message: string): boolean {
   return SEARCH_KEYWORDS.some(kw => lower.includes(kw));
 }
 
+const MEMORY_RECALL_PATTERNS = [
+  /\ben son ne yapt(ı|ik|ık)\b/,
+  /\baz once\b/,
+  /\baz önce\b/,
+  /\bde(mis|miş|dik|diğim|mistim|miştim)\b/,
+  /\bgecen sefer\b/,
+  /\bgeçen sefer\b/,
+  /\bgecen sohbet\b/,
+  /\bgeçen sohbet\b/,
+  /\bsohbet gecmisi\b/,
+  /\bsohbet geçmişi\b/,
+  /\bne konus(tuk|tuk)\b/,
+  /\bne konuş(tuk|tuk)\b/,
+  /\bwhat did we do\b/,
+  /\bwhat were we doing\b/,
+  /\bwhat did i say\b/,
+  /\bour last chat\b/,
+  /\blast conversation\b/,
+  /\brecap\b/,
+  /\bsummary of our chat\b/,
+];
+
+function isMemoryRecallMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return MEMORY_RECALL_PATTERNS.some((pattern) => pattern.test(lower));
+}
+
 // ─── Model-based intent (only called when keyword match is found) ─────────────
 
 const INTENT_SYSTEM = `You are an intent classifier. Does this user message require real-time web search?
@@ -87,6 +114,8 @@ export async function detectIntent(
   message: string,
   config: DehaConfig,
 ): Promise<IntentResult> {
+  if (isMemoryRecallMessage(message)) return { search: false };
+
   // 1. Keyword check — hızlı ve ücretsiz
   if (!hasSearchKeyword(message)) return { search: false };
 

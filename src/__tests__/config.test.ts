@@ -34,6 +34,8 @@ describe('getConfig', () => {
     expect(cfg.temperature).toBe(0.7);
     expect(cfg.maxToolRounds).toBe(200);
     expect(cfg.toolMaxTokens).toBe(49152);
+    expect(cfg.visionProvider).toBe('openrouter');
+    expect(cfg.visionModel).toBe('qwen/qwen3-vl-32b-instruct');
     expect(cfg.maxContextTokens).toBe(0);
     expect(cfg.compressThreshold).toBe(0.75);
     expect(cfg.minHotMessages).toBe(10);
@@ -70,7 +72,7 @@ describe('getConfig', () => {
     expect(cfg.pipeline.planner.provider).toBe('claude');
     expect(cfg.pipeline.coder.provider).toBe('deepseek');
     expect(cfg.pipeline.judge.provider).toBe('xai');
-    expect(cfg.pipeline.maxIterations).toBe(200);
+    expect(cfg.pipeline.maxIterations).toBe(5);
   });
 
   it('pipeline override çalışır', () => {
@@ -133,8 +135,8 @@ describe('resolveApiKey', () => {
     ollamaHost: 'http://localhost:11434',
     ollamaModel: 'llama3',
     customApiUrl: 'http://localhost:8080/v1',
-    visionProvider: 'claude',
-    visionModel: 'claude-opus-4-6',
+    visionProvider: 'openrouter',
+    visionModel: 'qwen/qwen3-vl-32b-instruct',
     chatInputPrice: 3,
     chatOutputPrice: 15,
     plannerInputPrice: 3,

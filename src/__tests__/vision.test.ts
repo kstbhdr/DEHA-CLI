@@ -30,18 +30,18 @@ vi.mock('@anthropic-ai/sdk', () => ({
 
 import axios from 'axios';
 import * as fs from 'fs';
-import { analyzeImage, screenshotAndAnalyze, analyzeExistingImage, toolVisionAnalyze } from '../tools/vision';
+import { analyzeImage, screenshotAndAnalyze, toolVisionAnalyze } from '../tools/vision';
 import type { DehaConfig } from '../config';
 
 const mockConfig: DehaConfig = {
   provider: 'claude',
   anthropicApiKey: 'sk-ant-test',
   openaiApiKey: 'sk-openai-test',
+  openrouterApiKey: 'sk-or-test',
   claudeModel: 'claude-opus-4-6',
   openaiModel: 'gpt-4o',
   deepseekModel: 'deepseek-chat',
   deepseekApiKey: '',
-  openrouterApiKey: '',
   openrouterModel: '',
   xaiApiKey: '',
   xaiModel: '',
@@ -50,8 +50,8 @@ const mockConfig: DehaConfig = {
   customApiUrl: '',
   ollamaHost: '',
   ollamaModel: '',
-  visionProvider: 'claude',
-  visionModel: 'claude-opus-4-6',
+  visionProvider: 'openrouter',
+  visionModel: 'qwen/qwen3-vl-32b-instruct',
   chatInputPrice: 3,
   chatOutputPrice: 15,
   plannerInputPrice: 3,
@@ -106,6 +106,31 @@ describe('analyzeImage', () => {
     expect(axios.post).toHaveBeenCalled();
   });
 
+  it('vision config ile OpenRouter kullanir', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(Buffer.from('fake-image-data'));
+    vi.mocked(axios.post).mockResolvedValue({
+      data: {
+        choices: [{ message: { content: 'The image contains a dashboard.' } }],
+        usage: { prompt_tokens: 80, completion_tokens: 40 },
+      },
+    });
+
+    const result = await analyzeImage('/tmp/test.png', mockConfig);
+    expect(result).toContain('dashboard');
+    expect(axios.post).toHaveBeenCalledWith(
+      expect.stringContaining('https://openrouter.ai/api/v1/chat/completions'),
+      expect.objectContaining({
+        model: 'qwen/qwen3-vl-32b-instruct',
+      }),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'X-Title': 'DEHA CLI',
+        }),
+      }),
+    );
+  });
+
   it('dosya yoksa hata firlatir', async () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     await expect(analyzeImage('/tmp/yok.png', mockConfig)).rejects.toThrow('bulunamadı');
@@ -148,7 +173,7 @@ describe('screenshotAndAnalyze', () => {
       content: [{ type: 'text', text: 'Analysis result' }],
     });
 
-    const result = await screenshotAndAnalyze('https://example.com', mockConfig);
+    const result = await screenshotAndAnalyze('https://example.com', mockConfig, { provider: 'claude' });
     expect(result.screenshotPath).toBe('/tmp/screenshot.png');
     expect(result.analysis).toContain('Analysis result');
   });
@@ -164,7 +189,7 @@ describe('analyzeExistingImage', () => {
       content: [{ type: 'text', text: 'Analysis' }],
     });
 
-    const result = await analyzeExistingImage('/tmp/test.png', mockConfig, 'What is this?');
+    const result = await analyzeImage('/tmp/test.png', mockConfig, { provider: 'claude', prompt: 'What is this?' });
     expect(result).toBe('Analysis');
   });
 });
@@ -179,7 +204,7 @@ describe('toolVisionAnalyze', () => {
       content: [{ type: 'text', text: 'Analysis' }],
     });
 
-    const result = await toolVisionAnalyze({ url: 'https://example.com' }, mockConfig);
+    const result = await toolVisionAnalyze({ url: 'https://example.com', provider: 'claude' }, mockConfig);
     expect(result).toContain('Screenshot');
     expect(result).toContain('Analysis');
   });
@@ -191,7 +216,7 @@ describe('toolVisionAnalyze', () => {
       content: [{ type: 'text', text: 'Direct analysis' }],
     });
 
-    const result = await toolVisionAnalyze({ image_path: '/tmp/test.png' }, mockConfig);
+    const result = await toolVisionAnalyze({ image_path: '/tmp/test.png', provider: 'claude' }, mockConfig);
     expect(result).toBe('Direct analysis');
   });
 

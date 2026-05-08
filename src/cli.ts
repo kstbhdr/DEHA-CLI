@@ -54,37 +54,18 @@ export class DehaCLI {
     // ── deha build "görev" ────────────────────────────────────────────────
     this.program
       .command('build <task>')
-      .description('Plan → Code → Judge pipeline\'ını çalıştır')
-      .option('--planner-provider <p>', 'Planner provider')
-      .option('--planner-model <m>',    'Planner model')
-      .option('--planner-key <k>',      'Planner API key')
+      .description('Coder-only build akışını çalıştır')
       .option('--coder-provider <p>',   'Coder provider')
       .option('--coder-model <m>',      'Coder model')
       .option('--coder-key <k>',        'Coder API key')
-      .option('--judge-provider <p>',   'Judge provider')
-      .option('--judge-model <m>',      'Judge model')
-      .option('--judge-key <k>',        'Judge API key')
-      .option('--judge-url <u>',        'Judge custom API URL')
-      .option('--planner-url <u>',      'Planner custom API URL')
       .option('--coder-url <u>',        'Coder custom API URL')
-      .option('--iterations <n>',       'Max iterasyon sayısı', '200')
       .action(async (task: string, opts) => {
         const config = this.buildConfig();
 
-        // CLI flag'leri pipeline config'ini override eder
-        if (opts.plannerProvider) config.pipeline.planner.provider = opts.plannerProvider as Provider;
-        if (opts.plannerModel)    config.pipeline.planner.model    = opts.plannerModel;
-        if (opts.plannerKey)      config.pipeline.planner.apiKey   = opts.plannerKey;
         if (opts.coderProvider)   config.pipeline.coder.provider   = opts.coderProvider as Provider;
         if (opts.coderModel)      config.pipeline.coder.model      = opts.coderModel;
         if (opts.coderKey)        config.pipeline.coder.apiKey     = opts.coderKey;
-        if (opts.judgeProvider)   config.pipeline.judge.provider   = opts.judgeProvider as Provider;
-        if (opts.judgeModel)      config.pipeline.judge.model      = opts.judgeModel;
-        if (opts.judgeKey)        config.pipeline.judge.apiKey     = opts.judgeKey;
-        if (opts.judgeUrl)        config.pipeline.judge.apiUrl     = opts.judgeUrl;
-        if (opts.plannerUrl)      config.pipeline.planner.apiUrl   = opts.plannerUrl;
         if (opts.coderUrl)        config.pipeline.coder.apiUrl     = opts.coderUrl;
-        if (opts.iterations)      config.pipeline.maxIterations    = parseInt(opts.iterations, 10);
 
         try {
           await runPipeline(task, config);

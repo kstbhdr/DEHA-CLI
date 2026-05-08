@@ -171,6 +171,36 @@ export function getSessionMessages(): Message[] {
   return _state.messages;
 }
 
+export async function hydrateSession(
+  messages: Message[],
+  options: { workDir?: string; preserveSummary?: boolean } = {},
+): Promise<void> {
+  _state.messages = [...messages];
+  _state.flushedCount = 0;
+  _state.compressCount = 0;
+  if (!options.preserveSummary) {
+    _state.summary = '';
+  }
+  if (options.workDir) {
+    _state.workDir = options.workDir;
+  }
+  _writeWarmBuffer();
+  await _writeRedis().catch(() => {});
+}
+
+export async function resetSession(workDir = process.cwd()): Promise<void> {
+  _state = {
+    sessionId: Date.now().toString(36),
+    messages: [],
+    summary: '',
+    workDir,
+    flushedCount: 0,
+    compressCount: 0,
+  };
+  _writeWarmBuffer();
+  await _writeRedis().catch(() => {});
+}
+
 // ─── WorkDir yönetimi ─────────────────────────────────────────────────────────
 
 export function setWorkDir(dir: string): void {

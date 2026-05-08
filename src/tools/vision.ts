@@ -7,7 +7,7 @@ import { DehaConfig } from '../config';
 import { VISION_PROMPT } from '../prompts.config';
 import { recordUsage } from '../services/usage-tracker';
 
-export type VisionProvider = 'claude' | 'openai';
+export type VisionProvider = 'claude' | 'openai' | 'openrouter' | 'custom';
 
 export interface VisionOptions {
   provider?: VisionProvider;
@@ -32,10 +32,13 @@ export async function analyzeImage(
   const mimeType = getMimeType(imagePath);
   const prompt = opts.prompt ?? VISION_PROMPT;
 
-  const provider = opts.provider ?? (config.provider === 'openai' ? 'openai' : 'claude');
+  const provider = opts.provider ?? ((config.visionProvider || 'openrouter') as VisionProvider);
 
-  if (provider === 'openai') {
-    return analyzeWithOpenAI(base64, mimeType, prompt, config, opts);
+  if (provider === 'openai' || provider === 'openrouter' || provider === 'custom') {
+    return analyzeWithOpenAICompat(base64, mimeType, prompt, config, {
+      ...opts,
+      provider,
+    });
   }
   return analyzeWithClaude(base64, mimeType, prompt, config, opts);
 }
@@ -121,19 +124,30 @@ async function analyzeWithClaude(
 
 // ─── OpenAI vision ───────────────────────────────────────────────────────────
 
-async function analyzeWithOpenAI(
+async function analyzeWithOpenAICompat(
   base64: string,
   mimeType: string,
   prompt: string,
   config: DehaConfig,
   opts: VisionOptions,
 ): Promise<string> {
-  const apiKey = opts.apiKey ?? config.openaiApiKey;
-  if (!apiKey) throw new Error('OPENAI_API_KEY missing (or pass apiKey in options)');
+  const provider = opts.provider ?? 'openai';
+  const apiKey =
+    opts.apiKey ??
+    config.visionApiKey ??
+    (provider === 'openrouter' ? config.openrouterApiKey : undefined) ??
+    (provider === 'custom' ? config.customApiKey : undefined) ??
+    config.openaiApiKey;
+  if (!apiKey) throw new Error(`${provider.toUpperCase()} API key missing (or pass apiKey in options)`);
 
-  const model  = opts.model  ?? 'gpt-4o';
+  const model  = opts.model ?? config.visionModel ?? 'gpt-4o';
   const detail = opts.detail ?? 'auto';
-  const baseUrl = opts.apiUrl ?? 'https://api.openai.com/v1';
+  const baseUrl =
+    opts.apiUrl ??
+    config.visionApiUrl ??
+    (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : undefined) ??
+    (provider === 'custom' ? config.customApiUrl : undefined) ??
+    'https://api.openai.com/v1';
 
   const response = await axios.post(
     `${baseUrl.replace(/\/$/, '')}/chat/completions`,
@@ -153,13 +167,21 @@ async function analyzeWithOpenAI(
         },
       ],
     },
-    { headers: { Authorization: `Bearer ${apiKey}` } },
+    {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        ...(provider === 'openrouter' ? {
+          'HTTP-Referer': 'https://github.com/kstbhdr/DEHA-CLI',
+          'X-Title': 'DEHA CLI',
+        } : {}),
+      },
+    },
   );
 
   // Track usage
   const usage = response.data.usage;
   if (usage) {
-    recordUsage('openai', model, 'vision', usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0, config);
+    recordUsage(provider, model, 'vision', usage.prompt_tokens ?? 0, usage.completion_tokens ?? 0, config);
   }
 
   return response.data.choices[0].message.content;

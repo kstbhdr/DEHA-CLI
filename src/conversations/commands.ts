@@ -39,7 +39,7 @@ export async function handleHistoryCommand(args: string): Promise<void> {
 // ─── Liste ───────────────────────────────────────────────────────────────────
 
 function showList(): void {
-  const convs = listConversations(30);
+  const convs = listConversations(100);
 
   logger.write('\n' + chalk.bold.cyan('═══ Sohbet Geçmişi ═══'));
   logger.write(chalk.dim(`  Konum: ${getConvDir()}\n`));
@@ -97,7 +97,7 @@ function showSearch(query: string): void {
 // ─── Sohbet görüntüle (index ile) ────────────────────────────────────────────
 
 function showByIndex(index: number): void {
-  const convs = listConversations(30);
+  const convs = listConversations(100);
   if (index < 0 || index >= convs.length) {
     logger.write(chalk.red(`\n  Geçersiz numara. 1-${convs.length} arasında gir.\n`));
     return;
