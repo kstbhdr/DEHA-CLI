@@ -46,6 +46,7 @@ export async function runAgent(
 const MAX_TOOL_ROUNDS = 200;
 const MAX_AUTO_CONTINUE_ROUNDS = 6;
 const MAX_POST_TOOL_COMPLETION_ROUNDS = 8;
+const MAX_TOOL_RESULT_CHARS = 32_000;
 
 // ─── Claude agent döngüsü ────────────────────────────────────────────────────
 
@@ -131,9 +132,10 @@ async function runAgentClaude(
     for (const tc of toolCalls) {
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
-      const preview = result.length > 200 ? result.slice(0, 200) + '…' : result;
+      const compactedResult = compactToolResultForModel(tc.name, result);
+      const preview = compactedResult.length > 200 ? compactedResult.slice(0, 200) + '…' : compactedResult;
       logger.write(chalk.dim('    → ') + chalk.gray(preview));
-      toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${result}\n</tool_result>`);
+      toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${compactedResult}\n</tool_result>`);
       finalText = text;
     }
 
@@ -255,14 +257,15 @@ async function runAgentOpenAI(
     for (const tc of toolCalls) {
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
-      const preview = result.length > 200 ? result.slice(0, 200) + '…' : result;
+      const compactedResult = compactToolResultForModel(tc.name, result);
+      const preview = compactedResult.length > 200 ? compactedResult.slice(0, 200) + '…' : compactedResult;
       logger.write(chalk.dim('    → ') + chalk.gray(preview));
 
       // OpenAI tool result format
       messages.push({
         role: 'tool',
         tool_call_id: tc.id,
-        content: result,
+        content: compactedResult,
       });
 
       finalText = text;
@@ -270,6 +273,28 @@ async function runAgentOpenAI(
   }
 
   return finalText;
+}
+
+function compactToolResultForModel(toolName: string, result: string): string {
+  const maxChars = readPositiveInt(process.env.DEHA_MAX_TOOL_RESULT_CHARS, MAX_TOOL_RESULT_CHARS);
+  if (!result || result.length <= maxChars) return result;
+
+  const headChars = Math.floor(maxChars * 0.7);
+  const tailChars = Math.max(0, maxChars - headChars - 260);
+  const omitted = result.length - headChars - tailChars;
+
+  return [
+    result.slice(0, headChars),
+    '',
+    `[DEHA TOOL OUTPUT TRUNCATED: ${toolName} sonucu ${result.length} karakterdi; ${omitted} karakter modele gönderilmedi. Daha spesifik path/pattern ile tekrar çağır.]`,
+    '',
+    tailChars > 0 ? result.slice(-tailChars) : '',
+  ].join('\n');
+}
+
+function readPositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 1000 ? parsed : fallback;
 }
 
 const AUTO_CONTINUE_PROMPT = [

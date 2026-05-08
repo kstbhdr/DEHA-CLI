@@ -504,7 +504,23 @@ export async function interactive(
 
       // ── Chat (LLM router: gerekirse tool, değilse düz yanıt) ──────────────
       try {
-        const contextHistory = buildContextMessages();
+        const maxCtxTokens = config.maxContextTokens > 0
+          ? config.maxContextTokens
+          : getMaxContextTokens(config.provider, getActiveModel(config));
+        const contextBudget = getContextBudgetTokens(config, maxCtxTokens);
+        const minHotMessages = Math.max(config.minHotMessages, 5);
+
+        await autoCompress(
+          (msgs) => summarizeForCompression(msgs, config, maxCtxTokens),
+          maxCtxTokens,
+          Math.min(config.compressThreshold, 0.6),
+          minHotMessages,
+        );
+
+        const contextHistory = buildContextMessages(undefined, {
+          maxTokens: contextBudget,
+          minHotMessages,
+        });
         const toolRoute = await decideToolRoute(userMessage, config);
         if (toolRoute.useTools) {
           logger.write(chalk.dim(`\n  🛠 Tool modu: ${toolRoute.reason ?? 'LLM kararı'}\n`));
@@ -585,28 +601,11 @@ export async function interactive(
         addMessage({ role: 'assistant', content: fullResponse }).catch(() => {});
 
         // Context sınıra yaklaştıysa compress et
-        const maxCtxTokens = config.maxContextTokens > 0
-          ? config.maxContextTokens
-          : getMaxContextTokens(config.provider, getActiveModel(config));
-
         const compressed = await autoCompress(
-          async (msgs) => {
-            const summaryPrompt = [
-              'Aşağıdaki teknik konuşmayı bir "Mühendislik Özeti" (Engineering Summary) olarak özetle.',
-              'ÖNEMLİ: Aşağıdaki bilgileri ASLA KAYBETME:',
-              `- Aktif Çalışma Dizini (WorkDir: ${getContextStats(maxCtxTokens).workDir})`,
-              '- Üzerinde çalışılan kritik dosya yolları ve bağımlılıklar.',
-              '- Mimari kararlar ve "Neden?" sorusunun cevapları.',
-              '- Henüz çözülmemiş teknik borçlar veya bekleyen alt görevler.',
-              'Gereksiz nezaket cümlelerini ve tekrarlanan hata mesajlarını çıkar.',
-              'Özet teknik, yoğun ve Türkçe olsun.\n\n---\n',
-              ...msgs.map(m => `${m.role === 'user' ? 'Kullanıcı' : 'DEHA'}: ${m.content.slice(0, 1500)}`),
-            ].join('\n');
-            return sendMessage([{ role: 'user', content: summaryPrompt }], config);
-          },
+          (msgs) => summarizeForCompression(msgs, config, maxCtxTokens),
           maxCtxTokens,
           config.compressThreshold,
-          config.minHotMessages,
+          minHotMessages,
         );
 
         if (compressed) {
@@ -683,6 +682,48 @@ async function exitCleanup(
   } else {
     logger.write('');
   }
+}
+
+function getContextBudgetTokens(config: DehaConfig, maxContextTokens: number): number {
+  const outputReserve = Math.max(config.maxTokens || 0, 8_192);
+  const safetyReserve = 8_192;
+  const hardCap = safePositiveInt(process.env.DEHA_CONTEXT_BUDGET_TOKENS, 80_000);
+  return Math.max(8_000, Math.min(hardCap, maxContextTokens - outputReserve - safetyReserve));
+}
+
+async function summarizeForCompression(
+  msgs: Message[],
+  config: DehaConfig,
+  maxCtxTokens: number,
+): Promise<string> {
+  const stats = getContextStats(maxCtxTokens);
+  const lastFive = msgs.slice(-5);
+  const summaryPrompt = [
+    'Aşağıdaki teknik konuşmayı yoğun bir "Mühendislik Özeti" olarak sıkıştır.',
+    'Bu bilgiler mutlaka korunsun:',
+    `- Aktif çalışma dizini: ${stats.workDir}`,
+    '- Proje mimarisi, ana dosyalar, servisler, model/tool akışı.',
+    '- Alınan kararlar ve nedenleri.',
+    '- Çözülen sorunlar, kalan hatalar, bekleyen görevler.',
+    '- Kullanıcının açık tercihleri ve yasakları.',
+    '',
+    'Son 5 mesaj ayrıca aşağıda verildi; bunları bağlam kopmayacak şekilde özete işle.',
+    'Gereksiz nezaket, tekrar eden loglar, devasa tool çıktıları ve stack trace gürültüsünü at.',
+    'Türkçe, kısa ama bilgi yoğun yaz.',
+    '',
+    '--- KONUŞMA PARÇASI ---',
+    ...msgs.map(m => `${m.role === 'user' ? 'Kullanıcı' : 'DEHA'}: ${m.content.slice(0, 1200)}`),
+    '',
+    '--- SON 5 MESAJ (ÖZELLİKLE KORU) ---',
+    ...lastFive.map(m => `${m.role === 'user' ? 'Kullanıcı' : 'DEHA'}: ${m.content.slice(0, 1600)}`),
+  ].join('\n');
+
+  return sendMessage([{ role: 'user', content: summaryPrompt }], config);
+}
+
+function safePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function getActiveModel(config: DehaConfig): string {

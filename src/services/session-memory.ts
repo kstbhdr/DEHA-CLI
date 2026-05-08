@@ -25,6 +25,10 @@ const SESSION_BUFFER_DIR = path.join(process.cwd(), '.deha');
 const SESSION_BUFFER_FILE = path.join(SESSION_BUFFER_DIR, 'session-buffer.json');
 const COLD_STORAGE_DIR = path.join(os.homedir(), '.deha', 'conversations');
 const FLUSH_THRESHOLD = 20;
+const MIN_ALWAYS_HOT_MESSAGES = 5;
+const DEFAULT_MODEL_CONTEXT_BUDGET_TOKENS = 80_000;
+const MAX_SUMMARY_CHARS = 24_000;
+const MAX_CONTEXT_MESSAGE_CHARS = 16_000;
 
 // ─── Redis (opsiyonel) ────────────────────────────────────────────────────────
 
@@ -141,27 +145,54 @@ export async function appendMessage(message: Message): Promise<void> {
  * - Tüm mevcut mesajlar eklenir (compress sonrası sadece hot window kalır)
  * - Bekleyen kullanıcı mesajı varsa sona eklenir
  */
-export function buildContextMessages(pendingUserMessage?: string): Message[] {
+export function buildContextMessages(
+  pendingUserMessage?: string,
+  options: { maxTokens?: number; minHotMessages?: number } = {},
+): Message[] {
   const msgs = _state.messages;
   const result: Message[] = [];
+  const budget = options.maxTokens ?? DEFAULT_MODEL_CONTEXT_BUDGET_TOKENS;
+  const minHot = Math.max(options.minHotMessages ?? MIN_ALWAYS_HOT_MESSAGES, MIN_ALWAYS_HOT_MESSAGES);
+  const pushIfFits = (message: Message, force = false): boolean => {
+    const compacted = compactContextMessage(message);
+    if (!force && estimateMessagesTokens([...result, compacted]) > budget) return false;
+    result.push(compacted);
+    return true;
+  };
 
   // Özet varsa başa "system recap" olarak ekle
   if (_state.summary) {
-    result.push({
+    pushIfFits({
       role: 'user',
-      content: `[CONTEXT RECAP — önceki konuşma özeti]\n${_state.summary}`,
-    });
-    result.push({
+      content: `[CONTEXT RECAP — önceki konuşma özeti]\n${truncateText(_state.summary, MAX_SUMMARY_CHARS)}`,
+    }, true);
+    pushIfFits({
       role: 'assistant',
       content: 'Tamam, önceki konuşmamızın bağlamını aldım. Devam edelim.',
-    });
+    }, true);
   }
 
-  // Tüm mevcut mesajları ekle (compress yapıldıysa zaten sadece hot window kalmıştır)
-  result.push(...msgs);
+  // En az son 5 mesaj her zaman korunur. Daha eski mesajlar bütçeye sığdığı kadar eklenir.
+  const hotStart = Math.max(0, msgs.length - minHot);
+  const older = msgs.slice(0, hotStart);
+  const hot = msgs.slice(hotStart);
+
+  for (let i = older.length - 1; i >= 0; i--) {
+    const candidate = [compactContextMessage(older[i]), ...result.slice(_state.summary ? 2 : 0), ...hot.map(compactContextMessage)];
+    const withRecap = _state.summary ? result.slice(0, 2).concat(candidate) : candidate;
+    if (estimateMessagesTokens(withRecap) <= budget) {
+      result.splice(_state.summary ? 2 : 0, 0, compactContextMessage(older[i]));
+    } else {
+      break;
+    }
+  }
+
+  for (const msg of hot) {
+    pushIfFits(msg, true);
+  }
 
   if (pendingUserMessage) {
-    result.push({ role: 'user', content: pendingUserMessage });
+    pushIfFits({ role: 'user', content: pendingUserMessage }, true);
   }
 
   return result;
@@ -295,7 +326,7 @@ export async function summarizeOld(
   summarizeFn: (messages: Message[]) => Promise<string>,
   hotCount?: number,
 ): Promise<boolean> {
-  const minHot = hotCount ?? 10;
+  const minHot = Math.max(hotCount ?? 10, MIN_ALWAYS_HOT_MESSAGES);
   const msgs = _state.messages;
   if (msgs.length <= minHot) return false;
 
@@ -310,9 +341,9 @@ export async function summarizeOld(
 
     // Birikimli özet: eski özet + yeni özet
     if (_state.summary) {
-      _state.summary = `${stickyContext}${_state.summary}\n\n---\n\n[Sonraki Bölüm Özeti]\n${newSummary}`;
+      _state.summary = truncateText(`${stickyContext}${_state.summary}\n\n---\n\n[Sonraki Bölüm Özeti]\n${newSummary}`, MAX_SUMMARY_CHARS);
     } else {
-      _state.summary = `${stickyContext}${newSummary}`;
+      _state.summary = truncateText(`${stickyContext}${newSummary}`, MAX_SUMMARY_CHARS);
     }
 
     // Özeti projenin içine de kaydet (Persistence)
@@ -431,4 +462,22 @@ async function _flushCold(isFinal: boolean): Promise<void> {
     fs.writeFileSync(file, JSON.stringify(record, null, 2), 'utf-8');
     _state.flushedCount = msgs.length;
   } catch { /* disk hatası */ }
+}
+
+function compactContextMessage(message: Message): Message {
+  return {
+    ...message,
+    content: truncateText(message.content, MAX_CONTEXT_MESSAGE_CHARS),
+  };
+}
+
+function truncateText(text: string, maxChars: number): string {
+  if (!text || text.length <= maxChars) return text;
+  const head = Math.floor(maxChars * 0.65);
+  const tail = Math.max(0, maxChars - head - 180);
+  return [
+    text.slice(0, head),
+    `\n\n[... DEHA context compression: ${text.length - head - tail} karakter kırpıldı ...]\n\n`,
+    tail > 0 ? text.slice(-tail) : '',
+  ].join('');
 }
