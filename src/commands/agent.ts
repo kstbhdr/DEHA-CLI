@@ -10,7 +10,7 @@ import { logger } from '../services/logger';
 function injectWorkDir(config: DehaConfig): DehaConfig {
   const workDir = getWorkDir();
   const workDirNote = workDir
-    ? `\n\n[PROJECT CONTEXT]\n- ACTIVE WORKING DIRECTORY: ${workDir}\n- CRITICAL RULE: You are currently working in this project. All file operations (read, write, list, search) and shell commands MUST be performed within this directory. Do NOT look at C:\\Users\\BAHADIR or other parent directories unless the user explicitly asks for a different project.\n- FOCUS: Stay within the project context. If you need to list files, list the ones in ${workDir} first.`
+    ? `\n\n[PROJECT CONTEXT]\n- ACTIVE WORKING DIRECTORY: ${workDir}\n- CRITICAL RULE: You are currently working in this project. All file operations (read, write, list, search) and shell commands MUST be performed within this directory by default.\n- If the user explicitly asks for another absolute path or says "root dizini", "/root", "VPS root", or similar, use that requested path exactly. In that case, "/root" means the server root user's home directory, NOT the project root.\n- Do NOT look at C:\\Users\\BAHADIR or other parent directories unless the user explicitly asks for a different project/path.\n- FOCUS: Stay within the project context unless the user explicitly names another path. If you need to list files without a specific path, list ${workDir} first.`
     : '';
   return {
     ...config,
