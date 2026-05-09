@@ -1,6 +1,7 @@
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Transform } from 'stream';
 import chalk from 'chalk';
 import { DehaConfig, getProviderLabel } from '../config';
 import { Message, sendMessage } from '../services/ai-service';
@@ -99,6 +100,10 @@ const COMMAND_SUGGESTIONS = [
   '/exit',
 ];
 
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+const PASTE_PLACEHOLDER_PATTERN = /\[Pasted Content (\d+) chars #(\d+)\]/g;
+
 export async function interactive(
   config: DehaConfig,
   initialHistory: Message[] = [],
@@ -129,13 +134,16 @@ export async function interactive(
   // Güncelleme kontrolü (sessiz, sadece yeni sürüm varsa bildir)
   checkForUpdates(true).catch(() => {});
 
-  readline.emitKeypressEvents(process.stdin);
+  const pasteInput = createPasteInput();
+  readline.emitKeypressEvents(pasteInput.stream);
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
+    process.stdout.write('\x1b[?2004h');
   }
+  process.stdin.pipe(pasteInput.stream);
 
   const rl = readline.createInterface({
-    input: process.stdin,
+    input: pasteInput.stream,
     output: process.stdout,
     terminal: true,
     completer: completeCommand,
@@ -162,7 +170,7 @@ export async function interactive(
       }
     }
   };
-  process.stdin.on('keypress', onGlobalKeypress);
+  pasteInput.stream.on('keypress', onGlobalKeypress);
 
   // Geriye dönük uyumluluk için boş history (session-memory bunu yönetiyor artık)
   const history: Message[] = [...initialHistory];
@@ -201,19 +209,21 @@ export async function interactive(
       rl.on('line', onLine);
     });
 
+    const modelInput = pasteInput.expand(input);
     const trimmed = input.trim();
+    const modelTrimmed = modelInput.trim();
 
     if (!trimmed) { prompt(); return; }
 
       // ── Dahili komutlar ───────────────────────────────────────────────────
-      if (trimmed === '/exit' || trimmed === 'exit' || trimmed === 'quit') {
+      if (!containsPastedPlaceholder(trimmed) && (trimmed === '/exit' || trimmed === 'exit' || trimmed === 'quit')) {
         await exitCleanup(history, config, conversationId, sessionUsageSnapshot);
         rl.close(); process.exit(0);
       }
 
-      if (trimmed === '/help') { logger.write(HELP_TEXT); prompt(); return; }
+      if (!containsPastedPlaceholder(trimmed) && trimmed === '/help') { logger.write(HELP_TEXT); prompt(); return; }
 
-      if (trimmed === '/new') {
+      if (!containsPastedPlaceholder(trimmed) && trimmed === '/new') {
         if (history.length >= 2) {
           const filePath = saveConversation(history, config.provider, getActiveModel(config), {
             conversationId: conversationId ?? undefined,
@@ -232,7 +242,7 @@ export async function interactive(
         prompt(); return;
       }
 
-      if (trimmed === '/clear') {
+      if (!containsPastedPlaceholder(trimmed) && trimmed === '/clear') {
         history.length = 0;
         conversationId = createConversationId();
         await resetSession(process.cwd()).catch(() => {});
@@ -243,17 +253,17 @@ export async function interactive(
         prompt(); return;
       }
 
-      if (trimmed === '/stats') {
+      if (!containsPastedPlaceholder(trimmed) && trimmed === '/stats') {
         printStats();
         prompt(); return;
       }
 
-      if (trimmed === '/version' || isVersionQuestion(trimmed)) {
+      if (!containsPastedPlaceholder(trimmed) && (trimmed === '/version' || isVersionQuestion(trimmed))) {
         logger.write(chalk.cyan(`${DEHA_VERSION_LABEL}\n`));
         prompt(); return;
       }
 
-      if (trimmed === '/model') {
+      if (!containsPastedPlaceholder(trimmed) && trimmed === '/model') {
         rl.pause();
         try {
           await modelSetup(config);
@@ -266,7 +276,7 @@ export async function interactive(
         prompt(); return;
       }
 
-      if (trimmed.startsWith('/thinking')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/thinking')) {
         const parts = trimmed.split(/\s+/).slice(1);
         if (parts.length === 0) {
           logger.write(
@@ -300,7 +310,7 @@ export async function interactive(
         prompt(); return;
       }
 
-      if (trimmed.startsWith('/judge ')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/judge ')) {
         const parts = trimmed.slice(7).trim().split(/\s+/);
         const filePath = parts[0];
         const task = parts.slice(1).join(' ').trim();
@@ -337,7 +347,7 @@ export async function interactive(
       }
 
       // ── /file <yol> ───────────────────────────────────────────────────────
-      if (trimmed.startsWith('/file ')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/file ')) {
         const filePath = trimmed.slice(6).trim();
         const injected = injectFile(filePath);
         if (injected) {
@@ -349,13 +359,13 @@ export async function interactive(
       }
 
       // ── /mcp <...> ────────────────────────────────────────────────────────
-      if (trimmed.startsWith('/mcp')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/mcp')) {
         await handleMcpCommand(trimmed.slice(4).trim());
         prompt(); return;
       }
 
       // ── /oldconversations ─────────────────────────────────────────────────
-      if (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history')) {
+      if (!containsPastedPlaceholder(trimmed) && (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history'))) {
         const selection = await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
         if (selection) {
           history.length = 0;
@@ -367,7 +377,7 @@ export async function interactive(
       }
 
       // ── /run <komut> ──────────────────────────────────────────────────────
-      if (trimmed.startsWith('/run ')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/run ')) {
         const cmd = trimmed.slice(5).trim();
         try {
           const r = await runCommand(cmd, { stream: true, shell: true, timeout: 60_000 });
@@ -379,7 +389,7 @@ export async function interactive(
       }
 
       // ── /python <kod> ─────────────────────────────────────────────────────
-      if (trimmed.startsWith('/python ')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/python ')) {
         const code = trimmed.slice(8).trim();
         const python = await detectPython();
         if (!python) {
@@ -398,7 +408,7 @@ export async function interactive(
       }
 
       // ── /smoketest <url> ──────────────────────────────────────────────────
-      if (trimmed.startsWith('/smoketest ')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/smoketest ')) {
         const url = trimmed.slice(11).trim();
         try {
           const checks = buildQuickChecks(url, ['/', '/health', '/api', '/api/health']);
@@ -411,7 +421,7 @@ export async function interactive(
       }
 
       // ── /screenshot <url> ─────────────────────────────────────────────────
-      if (trimmed.startsWith('/screenshot ')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/screenshot ')) {
         const url = trimmed.slice(12).trim();
         try {
           process.stdout.write(chalk.dim('Screenshot alınıyor... '));
@@ -426,7 +436,7 @@ export async function interactive(
       }
 
       // ── /vision <url veya dosya yolu> ─────────────────────────────────────
-      if (trimmed.startsWith('/vision ')) {
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/vision ')) {
         const target = trimmed.slice(8).trim();
         try {
           if (target.startsWith('http')) {
@@ -449,7 +459,7 @@ export async function interactive(
       }
 
       // ── /test ─────────────────────────────────────────────────────────────
-      if (trimmed === '/test') {
+      if (!containsPastedPlaceholder(trimmed) && trimmed === '/test') {
         try {
           await runSystemTest(config);
         } catch (err: unknown) {
@@ -459,8 +469,8 @@ export async function interactive(
       }
 
       // ── /agent <soru> ─────────────────────────────────────────────────────
-      if (trimmed.startsWith('/agent ')) {
-        const agentPrompt = trimmed.slice(7).trim();
+      if (!containsPastedPlaceholder(trimmed) && trimmed.startsWith('/agent ')) {
+        const agentPrompt = modelTrimmed.slice(7).trim();
         
         const abortController = new AbortController();
         activeAbortController = abortController;
@@ -511,10 +521,10 @@ export async function interactive(
       }
 
       // ── @dosya.ts sözdizimi ───────────────────────────────────────────────
-      const userMessage = resolveAtFiles(trimmed);
+      const userMessage = resolveAtFiles(modelTrimmed);
 
       // ── WorkDir tespiti — kullanıcı dizin verdi mi? ───────────────────────
-      const detectedDir = detectWorkDir(trimmed);
+      const detectedDir = detectWorkDir(userMessage);
       if (detectedDir) {
         setWorkDir(detectedDir);
         logger.write(chalk.dim(`  📁 Çalışma dizini: ${detectedDir}\n`));
@@ -660,8 +670,11 @@ export async function interactive(
   });
 
   rl.on('close', () => {
-    process.stdin.removeListener('keypress', onGlobalKeypress);
+    pasteInput.stream.removeListener('keypress', onGlobalKeypress);
+    process.stdin.unpipe(pasteInput.stream);
+    pasteInput.cleanup();
     if (process.stdin.isTTY) {
+      process.stdout.write('\x1b[?2004l');
       process.stdin.setRawMode(false);
     }
   });
@@ -742,6 +755,80 @@ async function summarizeForCompression(
 function safePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function containsPastedPlaceholder(input: string): boolean {
+  PASTE_PLACEHOLDER_PATTERN.lastIndex = 0;
+  return PASTE_PLACEHOLDER_PATTERN.test(input);
+}
+
+function createPasteInput(): {
+  stream: Transform;
+  expand: (line: string) => string;
+  cleanup: () => void;
+} {
+  const pasted = new Map<string, string>();
+  let nextId = 1;
+  let buffer = '';
+  let collectingPaste = false;
+
+  const stream = new Transform({
+    transform(chunk, _encoding, callback) {
+      buffer += chunk.toString('utf8');
+      let output = '';
+
+      while (buffer.length > 0) {
+        if (!collectingPaste) {
+          const start = buffer.indexOf(PASTE_START);
+          if (start < 0) {
+            const keep = pasteStartSuffixLength(buffer);
+            if (buffer.length <= keep) break;
+            output += buffer.slice(0, buffer.length - keep);
+            buffer = buffer.slice(buffer.length - keep);
+            break;
+          }
+
+          output += buffer.slice(0, start);
+          buffer = buffer.slice(start + PASTE_START.length);
+          collectingPaste = true;
+        }
+
+        const end = buffer.indexOf(PASTE_END);
+        if (end < 0) break;
+
+        const content = buffer.slice(0, end);
+        const id = String(nextId++);
+        pasted.set(id, content);
+        output += `[Pasted Content ${content.length} chars #${id}]`;
+        buffer = buffer.slice(end + PASTE_END.length);
+        collectingPaste = false;
+      }
+
+      if (output) this.push(output);
+      callback();
+    },
+    flush(callback) {
+      if (buffer) {
+        this.push(buffer);
+        buffer = '';
+      }
+      callback();
+    },
+  });
+
+  return {
+    stream,
+    expand: (line: string) => line.replace(PASTE_PLACEHOLDER_PATTERN, (_match, _chars, id) => pasted.get(id) ?? _match),
+    cleanup: () => pasted.clear(),
+  };
+}
+
+function pasteStartSuffixLength(value: string): number {
+  const max = Math.min(value.length, PASTE_START.length - 1);
+  for (let len = max; len > 0; len--) {
+    if (PASTE_START.startsWith(value.slice(-len))) return len;
+  }
+  return 0;
 }
 
 function getActiveModel(config: DehaConfig): string {
