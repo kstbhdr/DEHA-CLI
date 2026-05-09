@@ -266,7 +266,7 @@ export async function sendWithToolsOpenAICompat(
     .map((tc) => {
       const fn = tc.function as { name?: string; arguments?: string } | undefined;
       const name = fn?.name?.trim();
-      const rawArguments = typeof fn?.arguments === 'string' ? fn.arguments.trim() : '';
+      const rawArguments = normalizeToolArguments(fn?.arguments);
       if (!name || !rawArguments) {
         return null;
       }
@@ -289,22 +289,28 @@ export async function sendWithToolsOpenAICompat(
 }
 
 function sanitizeOpenAICompatAssistantMessage(msg: OAIMessage): OAIMessage {
+  const msgToolCalls = Array.isArray(msg.tool_calls)
+    ? msg.tool_calls as Record<string, unknown>[]
+    : [];
+  const hasToolCalls = msgToolCalls.length > 0;
   const sanitized: OAIMessage = {
     role: 'assistant',
-    content: typeof msg.content === 'string' ? msg.content : '',
+    // DeepSeek follows OpenAI tool-call format: assistant tool-call messages may
+    // have null content and must be replayed with tool_calls before tool results.
+    content: hasToolCalls ? null : (typeof msg.content === 'string' ? msg.content : ''),
   };
 
-  if (typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) {
+  if (!hasToolCalls && typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) {
     sanitized.reasoning_content = msg.reasoning_content;
   }
 
-  if (Array.isArray(msg.tool_calls)) {
-    sanitized.tool_calls = msg.tool_calls
+  if (hasToolCalls) {
+    sanitized.tool_calls = msgToolCalls
       .map((tc) => {
         const id = typeof tc?.id === 'string' ? tc.id : '';
         const fn = tc?.function as { name?: unknown; arguments?: unknown } | undefined;
         const name = typeof fn?.name === 'string' ? fn.name : '';
-        const rawArguments = typeof fn?.arguments === 'string' ? fn.arguments : '';
+        const rawArguments = normalizeToolArguments(fn?.arguments);
         if (!id || !name || !rawArguments) {
           return null;
         }
@@ -322,6 +328,18 @@ function sanitizeOpenAICompatAssistantMessage(msg: OAIMessage): OAIMessage {
   }
 
   return sanitized;
+}
+
+function normalizeToolArguments(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (value && typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '';
+    }
+  }
+  return '';
 }
 
 function applyOpenAICompatProviderOptions(
