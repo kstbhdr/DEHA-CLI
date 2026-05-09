@@ -112,7 +112,7 @@ async function runAgentClaude(
         }
         continue;
       }
-      if (text) {
+      if (text && !isSilentInterimOutput(text)) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         logger.raw(roundText);
         logger.raw('\n');
@@ -126,7 +126,7 @@ async function runAgentClaude(
     autoContinueRounds = 0;
     forceToolUse = false;
 
-    if (text) {
+    if (text && !isSilentInterimOutput(text)) {
       logger.write('\n' + chalk.bold.cyan('DEHA:'));
       logger.raw(roundText);
       logger.raw('\n');
@@ -240,7 +240,7 @@ async function runAgentOpenAI(
         }
         continue;
       }
-      if (text) {
+      if (text && !isSilentInterimOutput(text)) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         logger.raw(roundText);
         logger.raw('\n');
@@ -255,7 +255,7 @@ async function runAgentOpenAI(
     autoContinueRounds = 0;
     forceToolUse = false;
 
-    if (text) {
+    if (text && !isSilentInterimOutput(text)) {
       logger.write('\n' + chalk.bold.cyan('DEHA:'));
       logger.raw(roundText);
       logger.raw('\n');
@@ -520,6 +520,8 @@ const INTERIM_PATTERNS: RegExp[] = [
 ];
 
 function containsInterimLanguage(normalized: string): boolean {
+  if (looksLikePlanningJson(normalized)) return true;
+
   if (INTERIM_PATTERNS.some((p) => p.test(normalized))) return true;
 
   return (
@@ -530,6 +532,16 @@ function containsInterimLanguage(normalized: string): boolean {
     normalized.includes('then i') ||
     normalized.includes('next i')
   );
+}
+
+function isSilentInterimOutput(text: string): boolean {
+  return looksLikePlanningJson(text.toLowerCase().trim());
+}
+
+function looksLikePlanningJson(normalized: string): boolean {
+  if (!normalized) return false;
+  if (!normalized.includes('execution_plan') && !normalized.includes('"steps"')) return false;
+  return normalized.includes('"ready"') || normalized.includes('"files_to_check"') || normalized.includes('"action"');
 }
 
 async function shouldContinueAfterNoToolResponse(
