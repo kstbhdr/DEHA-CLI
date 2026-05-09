@@ -1,6 +1,6 @@
 {
   "name": "deha-cli",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "DEHA - Akıllı AI Kodlama Asistanı CLI | Multi-model: Claude, OpenAI, DeepSeek, Ollama",
   "main": "dist/index.js",
   "bin": {

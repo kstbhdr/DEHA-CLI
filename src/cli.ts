@@ -54,7 +54,7 @@ export class DehaCLI {
     // ── deha build "görev" ────────────────────────────────────────────────
     this.program
       .command('build <task>')
-      .description('Coder-only build akışını çalıştır')
+      .description('Planner/Coder/Judge build akışını çalıştır')
       .option('--coder-provider <p>',   'Coder provider')
       .option('--coder-model <m>',      'Coder model')
       .option('--coder-key <k>',        'Coder API key')
