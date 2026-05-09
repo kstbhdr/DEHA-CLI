@@ -255,7 +255,10 @@ export async function sendWithToolsOpenAICompat(
     recordUsage(role.provider, role.model, 'agent', agentUsage.input, agentUsage.output, config, agentUsage.reasoning);
   }
   writeOpenAICompatDebugFile('last-openai-tool-message.json', msg);
-  const sanitizedAssistantMsg = sanitizeOpenAICompatAssistantMessage(msg);
+  const sanitizedAssistantMsg = sanitizeOpenAICompatAssistantMessage(
+    msg,
+    role.provider === 'deepseek' && config.deepseekThinking === 'enabled',
+  );
   writeOpenAICompatDebugFile('last-openai-tool-message-sanitized.json', sanitizedAssistantMsg);
 
   const text: string = (sanitizedAssistantMsg.content as string) ?? '';
@@ -288,7 +291,10 @@ export async function sendWithToolsOpenAICompat(
   };
 }
 
-function sanitizeOpenAICompatAssistantMessage(msg: OAIMessage): OAIMessage {
+function sanitizeOpenAICompatAssistantMessage(
+  msg: OAIMessage,
+  preserveReasoningForToolCalls = false,
+): OAIMessage {
   const msgToolCalls = Array.isArray(msg.tool_calls)
     ? msg.tool_calls as Record<string, unknown>[]
     : [];
@@ -300,7 +306,11 @@ function sanitizeOpenAICompatAssistantMessage(msg: OAIMessage): OAIMessage {
     content: hasToolCalls ? null : (typeof msg.content === 'string' ? msg.content : ''),
   };
 
-  if (!hasToolCalls && typeof msg.reasoning_content === 'string' && msg.reasoning_content.trim()) {
+  if (
+    typeof msg.reasoning_content === 'string' &&
+    msg.reasoning_content.trim() &&
+    (!hasToolCalls || preserveReasoningForToolCalls)
+  ) {
     sanitized.reasoning_content = msg.reasoning_content;
   }
 
