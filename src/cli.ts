@@ -19,6 +19,7 @@ import { runSystemTest } from './commands/test-runner';
 import { loadConversationMessages } from './conversations/manager';
 import { DEHA_VERSION_LABEL } from './version';
 import { logger } from './services/logger';
+import { createShoppingCommand } from './commands/shopping-command';
 
 export class DehaCLI {
   private program: Command;
@@ -299,6 +300,9 @@ export class DehaCLI {
       .action(async () => {
         await doctor();
       });
+
+    // ── deha shopping ─────────────────────────────────────────────────────
+    this.program.addCommand(createShoppingCommand());
 
     // ── deha (default: interaktif mod) ────────────────────────────────────
     this.program.action(async () => {

@@ -60,7 +60,7 @@ XAI_API_KEY=xai-...
 PLANNER_PROVIDER=openrouter
 PLANNER_MODEL=anthropic/claude-opus-4
 CODER_PROVIDER=deepseek
-CODER_MODEL=deepseek-chat
+CODER_MODEL=deepseek-v4-flash
 JUDGE_PROVIDER=xai
 JUDGE_MODEL=grok-3
 ```
@@ -83,7 +83,7 @@ deha judge src/index.ts "Check for security vulnerabilities"
 # Override pipeline roles via CLI flags
 deha build "Add Redis cache" \
   --planner-provider openrouter --planner-model anthropic/claude-opus-4 \
-  --coder-provider deepseek --coder-model deepseek-chat \
+  --coder-provider deepseek --coder-model deepseek-v4-flash \
   --judge-provider xai --judge-model grok-3
 
 # Terminal
@@ -230,7 +230,7 @@ Works with any OpenAI-compatible endpoint: LM Studio, vLLM, LocalAI, llama.cpp s
 |---|---|---|
 | `claude` | `ANTHROPIC_API_KEY` | claude-opus-4-6, claude-sonnet-4-6 |
 | `openai` | `OPENAI_API_KEY` | gpt-4o, gpt-4-turbo |
-| `deepseek` | `DEEPSEEK_API_KEY` | deepseek-chat, deepseek-coder |
+| `deepseek` | `DEEPSEEK_API_KEY` | deepseek-v4-flash, deepseek-chat, deepseek-coder |
 | `openrouter` | `OPENROUTER_API_KEY` | 200+ models |
 | `xai` | `XAI_API_KEY` | grok-3 |
 | `ollama` | — | Local, no API key needed |

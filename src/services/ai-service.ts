@@ -8,14 +8,16 @@ import { recordUsage, RoleLabel } from './usage-tracker';
 import { getCached, setCache } from './cache';
 
 export interface Message {
-  role: 'user' | 'assistant';
-  content: string;
+  role: 'user' | 'assistant' | 'tool' | 'system';
+  content: string | null;
+  tool_calls?: any[];
+  tool_call_id?: string;
+  reasoning_content?: string;
 }
 
 export type ToolDefinition = Anthropic.Tool;
 
 // ─── Role-based çağrı (Pipeline için) ──────────────────────────────────────
-// Her pipeline rolü (planner/coder/judge) kendi provider/model/key ile çalışır.
 
 export async function callRole(
   role: RoleConfig,
@@ -24,18 +26,18 @@ export async function callRole(
   systemPrompt: string,
   onChunk?: (chunk: string) => void,
   roleLabel: RoleLabel = 'chat',
+  onReasoning?: (chunk: string) => void,
 ): Promise<string> {
   const apiKey = resolveApiKey(role, globalConfig);
   const maxTokens = role.maxTokens ?? globalConfig.maxTokens;
   const temperature = role.temperature ?? globalConfig.temperature;
   const apiUrl = resolveApiUrl(role, globalConfig);
 
-  // OpenRouter sub-provider: role-level > global > undefined
   const openrouterProvider =
     role.openrouterProvider ?? globalConfig.openrouterProvider ?? undefined;
 
-  const track = (inp: number, out: number, reasoning = 0) =>
-    recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig, reasoning);
+  const track = (inp: number, out: number, reasoning = 0, cache = 0) =>
+    recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig, reasoning, cache);
 
   switch (role.provider) {
     case 'claude':
@@ -61,8 +63,6 @@ export async function callRole(
       throw new Error(`Unknown provider: ${role.provider}`);
   }
 }
-
-// ─── DehaConfig tabanlı çağrı (interaktif mod için) ────────────────────────
 
 function roleFromConfig(config: DehaConfig): RoleConfig {
   const modelMap: Record<string, string> = {
@@ -96,8 +96,9 @@ export async function streamMessage(
   messages: Message[],
   config: DehaConfig,
   onChunk: (chunk: string) => void,
+  onReasoning?: (chunk: string) => void,
 ): Promise<string> {
-  return callRole(roleFromConfig(config), config, messages, config.systemPrompt, onChunk);
+  return callRole(roleFromConfig(config), config, messages, config.systemPrompt, onChunk, 'chat', onReasoning);
 }
 
 // ─── Tool Calling ────────────────────────────────────────────────────────────
@@ -105,7 +106,6 @@ export async function streamMessage(
 export type ToolCall = { name: string; input: Record<string, unknown>; id: string };
 export type ToolResult = { id: string; content: string };
 
-/** Anthropic (input_schema) → OpenAI (parameters) format dönüşümü */
 function toOpenAITools(tools: ToolDefinition[]): Record<string, unknown>[] {
   return tools.map((t) => ({
     type: 'function',
@@ -117,27 +117,79 @@ function toOpenAITools(tools: ToolDefinition[]): Record<string, unknown>[] {
   }));
 }
 
-/** Claude native tool calling */
-
-// ─── Spinner Yardımcısı ──────────────────────────────────────────────────────
-
-function getModelLabel(config: DehaConfig): string {
-  if (config.provider === 'claude') return config.claudeModel;
-  if (config.provider === 'openai') return config.openaiModel;
-  if (config.provider === 'deepseek') return config.deepseekModel;
-  if (config.provider === 'ollama') return config.ollamaModel;
-  if (config.provider === 'openrouter') return config.openrouterModel;
-  if (config.provider === 'xai') return config.xaiModel;
-  if (config.provider === 'custom') return config.customModel || 'custom';
-  return 'unknown';
-}
-
 async function withSpinner<T>(
   _config: DehaConfig,
   _label: string,
   fn: () => Promise<T>,
 ): Promise<T> {
   return fn();
+}
+
+/** Anthropic specific message mapper */
+function toClaudeMessages(messages: Message[]): Anthropic.MessageParam[] {
+   return messages
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .map(m => ({
+       role: m.role as 'user' | 'assistant',
+       content: m.content || ''
+    }));
+}
+
+export function sanitizeHistoryForOpenAI(messages: Message[]): OAIMessage[] {
+  // ── Pass 1: Mutual-pairing – collect IDs from both sides ───────────────
+  const assistantToolCallIds = new Set<string>();
+  const toolResultIds = new Set<string>();
+
+  for (const m of messages) {
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls) {
+        if (tc?.id) assistantToolCallIds.add(tc.id);
+      }
+    }
+    if (m.role === 'tool' && m.tool_call_id) {
+      toolResultIds.add(m.tool_call_id);
+    }
+  }
+
+  // Paired = ID exists in BOTH assistant tool_calls AND tool results
+  const pairedIds = new Set<string>();
+  for (const id of assistantToolCallIds) {
+    if (toolResultIds.has(id)) pairedIds.add(id);
+  }
+
+  // ── Pass 2: Build sanitized output ─────────────────────────────────────
+  const sanitizedMessages: OAIMessage[] = [];
+
+  for (const m of messages) {
+    if (m.role === 'assistant') {
+      const msg: OAIMessage = { role: 'assistant', content: m.content || '' };
+      if (m.reasoning_content) msg.reasoning_content = m.reasoning_content;
+
+      if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+        const validToolCalls = m.tool_calls.filter((tc: any) => tc?.id && pairedIds.has(tc.id));
+        if (validToolCalls.length > 0) {
+          msg.tool_calls = validToolCalls;
+        }
+        // If no valid tool_calls remain, omit tool_calls entirely → regular assistant message
+      }
+
+      sanitizedMessages.push(msg);
+    } else if (m.role === 'tool') {
+      // Only keep tool results whose call_id is paired
+      if (m.tool_call_id && pairedIds.has(m.tool_call_id)) {
+        sanitizedMessages.push({
+          role: 'tool',
+          content: m.content || '',
+          tool_call_id: m.tool_call_id,
+        });
+      }
+      // Drop orphaned tool results silently
+    } else {
+      sanitizedMessages.push({ role: m.role, content: m.content || '' });
+    }
+  }
+
+  return sanitizedMessages;
 }
 
 export async function sendWithTools(
@@ -149,8 +201,8 @@ export async function sendWithTools(
   toolChoice: 'auto' | 'required' = 'auto',
 ): Promise<{ text: string; toolCalls: ToolCall[] }> {
   if (config.provider !== 'claude') {
-    const oaiMessages: OAIMessage[] = messages.map((m) => ({ role: m.role, content: m.content }));
-    const r = await sendWithToolsOpenAICompat(oaiMessages, config, tools, onChunk, abortSignal, toolChoice);
+    const sanitizedMessages = sanitizeHistoryForOpenAI(messages);
+    const r = await sendWithToolsOpenAICompat(sanitizedMessages, config, tools, onChunk, abortSignal, toolChoice);
     return { text: r.text, toolCalls: r.toolCalls };
   }
 
@@ -160,11 +212,11 @@ export async function sendWithTools(
   const client = new Anthropic({ apiKey });
   const response = await withSpinner(config, 'düşünüyor', () => client.messages.create({
     model: config.claudeModel,
-    max_tokens: config.maxTokens,
+    max_tokens: config.toolMaxTokens ?? config.maxTokens,
     system: config.systemPrompt,
     tools,
     tool_choice: toolChoice === 'required' ? { type: 'any' } : { type: 'auto' },
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    messages: toClaudeMessages(messages),
   }, { signal: abortSignal }));
 
   recordUsage(
@@ -191,10 +243,8 @@ export async function sendWithTools(
   return { text, toolCalls };
 }
 
-// OpenAI raw mesaj tipi — tool call/result için genişletilmiş
 export type OAIMessage = Record<string, unknown>;
 
-/** OpenAI-uyumlu tool calling (DeepSeek, OpenAI, OpenRouter, xAI) */
 export async function sendWithToolsOpenAICompat(
   messages: OAIMessage[],
   config: DehaConfig,
@@ -207,7 +257,7 @@ export async function sendWithToolsOpenAICompat(
   const apiKey = resolveApiKey(role, config);
   const apiUrl = resolveApiUrl(role, config);
   if (!apiKey) throw new Error(`API key missing (${apiUrl})`);
-  const toolMaxTokens = Math.max(config.maxTokens, config.toolMaxTokens);
+  const toolMaxTokens = role.maxTokens ?? config.toolMaxTokens ?? config.maxTokens;
 
   const body: Record<string, unknown> = {
     model: role.model,
@@ -223,11 +273,17 @@ export async function sendWithToolsOpenAICompat(
   }
   applyOpenAICompatProviderOptions(body, role.provider, config);
 
+  // DeepSeek non-reasoning models hard-cap at 8192 output tokens
+  // Sending more causes 400 Bad Request from the API
+  if (role.provider === 'deepseek' && !modelSupportsThinking(role.model as string)) {
+    body.max_tokens = Math.min((body.max_tokens as number), 8192);
+  }
+
   let response;
   try {
     response = await withSpinner(config, 'düşünüyor', () => axios.post(`${apiUrl}/chat/completions`, body, {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      timeout: 120000,
+      timeout: 300000,
       signal: abortSignal,
     }));
   } catch (err: unknown) {
@@ -257,7 +313,7 @@ export async function sendWithToolsOpenAICompat(
   writeOpenAICompatDebugFile('last-openai-tool-message.json', msg);
   const sanitizedAssistantMsg = sanitizeOpenAICompatAssistantMessage(
     msg,
-    role.provider === 'deepseek' && config.deepseekThinking === 'enabled',
+    true
   );
   writeOpenAICompatDebugFile('last-openai-tool-message-sanitized.json', sanitizedAssistantMsg);
 
@@ -301,8 +357,6 @@ function sanitizeOpenAICompatAssistantMessage(
   const hasToolCalls = msgToolCalls.length > 0;
   const sanitized: OAIMessage = {
     role: 'assistant',
-    // DeepSeek follows OpenAI tool-call format: assistant tool-call messages may
-    // have null content and must be replayed with tool_calls before tool results.
     content: hasToolCalls ? null : (typeof msg.content === 'string' ? msg.content : ''),
   };
 
@@ -352,6 +406,19 @@ function normalizeToolArguments(value: unknown): string {
   return '';
 }
 
+const DEEPSEEK_REASONING_MODELS = new Set([
+  'deepseek-reasoner',
+  'deepseek-r1',
+  'deepseek-r1-zero',
+]);
+
+function modelSupportsThinking(model: string): boolean {
+  const lower = model.toLowerCase();
+  return DEEPSEEK_REASONING_MODELS.has(lower)
+    || lower.includes('reasoner')
+    || lower.includes('-r1');
+}
+
 function applyOpenAICompatProviderOptions(
   body: Record<string, unknown>,
   provider: Provider,
@@ -359,11 +426,17 @@ function applyOpenAICompatProviderOptions(
 ): void {
   if (provider !== 'deepseek') return;
 
-  body.thinking = { type: config.deepseekThinking };
-  if (config.deepseekThinking === 'enabled') {
+  const model = (body.model as string) ?? '';
+
+  if (config.deepseekThinking === 'enabled' && modelSupportsThinking(model)) {
+    // Reasoning models: enable thinking, drop temperature
+    body.thinking = { type: 'enabled' };
     body.reasoning_effort = config.deepseekReasoningEffort;
     delete body.temperature;
   } else {
+    // Non-reasoning models (deepseek-chat, deepseek-v4-flash, etc.):
+    // Do NOT send thinking param — unsupported models return errors or behave oddly
+    delete body.thinking;
     delete body.reasoning_effort;
   }
 }
@@ -395,7 +468,8 @@ function normalizeAxiosError(err: unknown): Error {
     : JSON.stringify(err.response?.data ?? {});
 
   const detail = payload && payload !== '{}' ? ` - ${payload}` : '';
-  return new Error(`API request failed${status ? ` (${status})` : ''}${detail}`);
+  const axiosMsg = err.message ? `: ${err.message}` : '';
+  return new Error(`API request failed${status ? ` (${status})` : ''}${axiosMsg}${detail}`);
 }
 
 function extractAxiosErrorPayload(err: unknown): unknown {
@@ -422,26 +496,26 @@ function writeOpenAICompatDebugFile(fileName: string, payload: unknown): void {
       'utf-8',
     );
   } catch {
-    // debug yardımcıları hiçbir zaman ana akışı bozmamalı
   }
 }
 
-
-// ─── Claude implementasyonu ─────────────────────────────────────────────────
-
-type TrackFn = (inp: number, out: number, reasoning?: number) => void;
+type TrackFn = (inp: number, out: number, reasoning?: number, cache?: number) => void;
 
 interface UsageTokens {
   input: number;
   output: number;
   reasoning: number;
+  cache: number;
 }
 
 function extractUsageTokens(usage: unknown, assistantMessage?: OAIMessage): UsageTokens {
   const u = (usage && typeof usage === 'object') ? usage as Record<string, unknown> : {};
   const input = readNumber(u.prompt_tokens) ?? readNumber(u.input_tokens) ?? 0;
   const baseOutput = readNumber(u.completion_tokens) ?? readNumber(u.output_tokens) ?? 0;
+  
   const explicitReasoning = extractReasoningTokens(u);
+  const explicitCache = extractCacheTokens(u);
+  
   const visibleText = typeof assistantMessage?.content === 'string' ? assistantMessage.content : '';
   const reasoningText = typeof assistantMessage?.reasoning_content === 'string' ? assistantMessage.reasoning_content : '';
   const visibleEstimate = estimateTextTokens(visibleText);
@@ -452,7 +526,21 @@ function extractUsageTokens(usage: unknown, assistantMessage?: OAIMessage): Usag
     input,
     output: Math.max(baseOutput, fallbackOutput),
     reasoning: reasoningEstimate,
+    cache: explicitCache,
   };
+}
+
+function extractCacheTokens(usage: Record<string, unknown>): number {
+  const details =
+    asRecord(usage.prompt_tokens_details) ??
+    asRecord(usage.input_tokens_details) ??
+    asRecord(usage.usage_details);
+
+  return readNumber(details?.cached_tokens) ??
+    readNumber(details?.cache_read_tokens) ??
+    readNumber(details?.cache_hit_tokens) ??
+    readNumber(usage.prompt_cache_hit_tokens) ??
+    0;
 }
 
 function extractReasoningTokens(usage: Record<string, unknown>): number {
@@ -492,7 +580,7 @@ async function sendClaude(
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model, max_tokens: maxTokens, system: systemPrompt,
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    messages: toClaudeMessages(messages),
   });
   track?.(response.usage.input_tokens, response.usage.output_tokens);
   const block = response.content[0];
@@ -514,7 +602,7 @@ async function streamClaude(
   let full = '';
   const stream = client.messages.stream({
     model, max_tokens: maxTokens, system: systemPrompt,
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    messages: toClaudeMessages(messages),
   });
   for await (const event of stream) {
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -526,8 +614,6 @@ async function streamClaude(
   track?.(final.usage.input_tokens, final.usage.output_tokens);
   return full;
 }
-
-// ─── OpenAI-compatible (OpenAI, DeepSeek, OpenRouter, xAI) ─────────────────
 
 async function sendOpenAICompat(
   baseUrl: string,
@@ -545,7 +631,10 @@ async function sendOpenAICompat(
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   const body: Record<string, unknown> = {
     model,
-    messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    messages: [
+        { role: 'system', content: systemPrompt }, 
+        ...sanitizeHistoryForOpenAI(messages)
+    ],
     max_tokens: maxTokens,
     temperature,
   };
@@ -558,7 +647,7 @@ async function sendOpenAICompat(
   });
   const msg = response.data.choices[0].message as OAIMessage;
   const usage = extractUsageTokens(response.data.usage, msg);
-  if (usage.input > 0 || usage.output > 0) track?.(usage.input, usage.output, usage.reasoning);
+  if (usage.input > 0 || usage.output > 0) track?.(usage.input, usage.output, usage.reasoning, usage.cache);
   return typeof msg.content === 'string' ? msg.content : '';
 }
 
@@ -575,11 +664,15 @@ async function streamOpenAICompat(
   onChunk: (chunk: string) => void,
   track?: TrackFn,
   openrouterProvider?: string,
+  onReasoning?: (chunk: string) => void,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   const body: Record<string, unknown> = {
     model,
-    messages: [{ role: 'system', content: systemPrompt }, ...messages],
+    messages: [
+        { role: 'system', content: systemPrompt }, 
+        ...sanitizeHistoryForOpenAI(messages)
+    ],
     max_tokens: maxTokens,
     temperature,
     stream: true,
@@ -593,10 +686,8 @@ async function streamOpenAICompat(
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     responseType: 'stream',
   });
-  return parseSSEStream(response.data, onChunk, track);
+  return parseSSEStream(response.data, onChunk, track, onReasoning);
 }
-
-// ─── Ollama ─────────────────────────────────────────────────────────────────
 
 async function sendOllama(
   messages: Message[],
@@ -610,7 +701,10 @@ async function sendOllama(
     `${host}/api/chat`,
     {
       model,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
+      messages: [
+          { role: 'system', content: systemPrompt }, 
+          ...messages.map(m => ({ role: m.role, content: m.content }))
+      ],
       stream: false,
       options: { temperature, num_predict: maxTokens },
     },
@@ -632,7 +726,10 @@ async function streamOllama(
     `${host}/api/chat`,
     {
       model,
-      messages: [{ role: 'system', content: systemPrompt }, ...messages],
+      messages: [
+          { role: 'system', content: systemPrompt }, 
+          ...messages.map(m => ({ role: m.role, content: m.content }))
+      ],
       stream: true,
       options: { temperature, num_predict: maxTokens },
     },
@@ -654,12 +751,11 @@ async function streamOllama(
   });
 }
 
-// ─── SSE parser ─────────────────────────────────────────────────────────────
-
 function parseSSEStream(
   stream: NodeJS.ReadableStream,
   onChunk: (chunk: string) => void,
   track?: TrackFn,
+  onReasoning?: (chunk: string) => void,
 ): Promise<string> {
   let full = '';
   let reasoningContent = '';
@@ -677,15 +773,17 @@ function parseSSEStream(
           const delta: string = parsed.choices?.[0]?.delta?.content ?? '';
           const reasoningDelta: string = parsed.choices?.[0]?.delta?.reasoning_content ?? '';
           if (delta) { onChunk(delta); full += delta; }
-          if (reasoningDelta) reasoningContent += reasoningDelta;
-          // Some providers send usage in the final chunk (stream_options: include_usage)
+          if (reasoningDelta) {
+            if (onReasoning) onReasoning(reasoningDelta);
+            reasoningContent += reasoningDelta;
+          }
           if (parsed.usage && track) {
             const usage = extractUsageTokens(parsed.usage, {
               role: 'assistant',
               content: full,
               reasoning_content: reasoningContent,
             });
-            track(usage.input, usage.output, usage.reasoning);
+            track(usage.input, usage.output, usage.reasoning, usage.cache);
           }
         } catch { /* skip */ }
       }

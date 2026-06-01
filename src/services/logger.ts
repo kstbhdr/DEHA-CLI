@@ -133,6 +133,26 @@ export const logger = {
     process.stdout.write(msg);
   },
 
+  /** Başarı kutusu */
+  successBox(title: string, message?: string): void {
+    const content = message ? `${title}: ${message}` : title;
+    const width = Math.min(80, content.length + 6);
+    const line = '─'.repeat(width - 2);
+    this.write('\n' + chalk.green(`╭${line}╮`));
+    this.write(chalk.green('│ ') + chalk.bold.white('✓ ' + title) + (message ? chalk.dim(': ' + message) : '') + chalk.green(' │'.padStart(width - (content.length + 2) + 1)));
+    this.write(chalk.green(`╰${line}╯\n`));
+  },
+
+  /** Uyarı kutusu */
+  warningBox(title: string, message?: string): void {
+    const content = message ? `${title}: ${message}` : title;
+    const width = Math.min(80, content.length + 6);
+    const line = '─'.repeat(width - 2);
+    this.write('\n' + chalk.yellow(`╭${line}╮`));
+    this.write(chalk.yellow('│ ') + chalk.bold.white('⚠ ' + title) + (message ? chalk.dim(': ' + message) : '') + chalk.yellow(' │'.padStart(width - (content.length + 2) + 1)));
+    this.write(chalk.yellow(`╰${line}╯\n`));
+  },
+
   /** Test amaçlı iç durumu sıfırlar */
   _reset(): void {
     _minLevel = null;

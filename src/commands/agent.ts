@@ -1,21 +1,27 @@
 import chalk from 'chalk';
 import { DehaConfig } from '../config';
-import { Message, OAIMessage, ToolCall, sendWithTools, sendWithToolsOpenAICompat } from '../services/ai-service';
+import { Message, OAIMessage, ToolCall, sendWithTools, sendWithToolsOpenAICompat, sanitizeHistoryForOpenAI } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
 import { getWorkDir } from '../services/session-memory';
 import { logger } from '../services/logger';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
-function injectWorkDir(config: DehaConfig): DehaConfig {
+export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
   const workDir = getWorkDir();
+  const basePrompt = customSystemPrompt ?? config.systemPrompt;
   const workDirNote = workDir
     ? `\n\n[PROJECT CONTEXT]\n- ACTIVE WORKING DIRECTORY: ${workDir}\n- CRITICAL RULE: You are currently working in this project. All file operations (read, write, list, search) and shell commands MUST be performed within this directory by default.\n- If the user explicitly asks for another absolute path or says "root dizini", "/root", "VPS root", or similar, use that requested path exactly. In that case, "/root" means the server root user's home directory, NOT the project root.\n- Do NOT look at C:\\Users\\BAHADIR or other parent directories unless the user explicitly asks for a different project/path.\n- FOCUS: Stay within the project context unless the user explicitly names another path. If you need to list files without a specific path, list ${workDir} first.`
     : '';
   return {
     ...config,
-    systemPrompt: config.systemPrompt + workDirNote,
+    systemPrompt: basePrompt + workDirNote,
   };
+}
+
+export interface AgentResult {
+  response: string;
+  messages: Message[]; // The complete turn history
 }
 
 export async function runAgent(
@@ -23,7 +29,8 @@ export async function runAgent(
   config: DehaConfig,
   history: Message[] = [],
   abortSignal?: AbortSignal,
-): Promise<string> {
+  customSystemPrompt?: string,
+): Promise<AgentResult> {
   const mcpTools = mcpManager.getAnthropicTools();
   const allTools = [...DEHA_TOOLS, ...mcpTools];
 
@@ -32,7 +39,7 @@ export async function runAgent(
   }
 
   // WorkDir'i system prompt'a enjekte et
-  const enrichedConfig = injectWorkDir(config);
+  const enrichedConfig = injectWorkDir(config, customSystemPrompt);
 
   // Claude → native tool calling
   if (config.provider === 'claude') {
@@ -56,8 +63,9 @@ async function runAgentClaude(
   history: Message[],
   allTools: typeof DEHA_TOOLS,
   abortSignal?: AbortSignal,
-): Promise<string> {
+): Promise<AgentResult> {
   const messages: Message[] = [...history, { role: 'user', content: userMessage }];
+  const startIdx = history.length;
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
   const aggressiveAutoContinue = wantsUninterruptedExecution(userMessage);
   let round = 0;
@@ -66,6 +74,7 @@ async function runAgentClaude(
   let forceToolUse = false;
   let hadToolActivity = false;
   let postToolCompletionRounds = 0;
+  let consecutiveToolFailures = 0;
 
   while (round < maxRounds) {
     round++;
@@ -116,6 +125,10 @@ async function runAgentClaude(
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         logger.raw(roundText);
         logger.raw('\n');
+      } else if (hadToolActivity) {
+        // Tool aktivitesi vardı ama son yanıt silent/boş çıktı — özet iste
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(chalk.dim('[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]\n'));
       }
       break;
     }
@@ -136,20 +149,46 @@ async function runAgentClaude(
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
       const compactedResult = compactToolResultForModel(tc.name, result);
-      const preview = compactedResult.length > 200 ? compactedResult.slice(0, 200) + '…' : compactedResult;
-      logger.write(chalk.dim('    → ') + chalk.gray(preview));
+      const previewText = compactedResult.trim();
+      const preview = previewText.length === 0
+        ? chalk.red('(boş sonuç — timeout veya bağlantı hatası olabilir)')
+        : chalk.gray(previewText.length > 200 ? previewText.slice(0, 200) + '…' : previewText);
+      logger.write(chalk.dim('    → ') + preview);
       toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${compactedResult}\n</tool_result>`);
       finalText = text;
+
+      // Error tracking
+      if (isToolError(compactedResult)) {
+        consecutiveToolFailures++;
+      } else {
+        consecutiveToolFailures = 0;
+      }
+    }
+
+    // Round budget awareness
+    let budgetWarning = '';
+    if (round > 0 && round % 15 === 0) {
+      logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
+    }
+    if (round === 50) {
+      budgetWarning = '\n[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.';
+    }
+
+    // Error recovery
+    let errorRecovery = '';
+    if (consecutiveToolFailures >= 3) {
+      errorRecovery = '\n' + ERROR_RECOVERY_PROMPT;
+      consecutiveToolFailures = 0;
     }
 
     messages.push({ role: 'assistant', content: text || '[tool calls]' });
     messages.push({
       role: 'user',
-      content: toolResultBlocks.join('\n\n') + '\n\nBu sonuçları kullanarak devam et.',
+      content: toolResultBlocks.join('\n\n') + '\n\nUse these results to continue.' + budgetWarning + errorRecovery,
     });
   }
 
-  return finalText;
+  return { response: finalText, messages: messages.slice(startIdx) };
 }
 
 // ─── OpenAI-uyumlu agent döngüsü ────────────────────────────────────────────
@@ -160,11 +199,13 @@ async function runAgentOpenAI(
   history: Message[],
   allTools: typeof DEHA_TOOLS,
   abortSignal?: AbortSignal,
-): Promise<string> {
-  // Geçmiş mesajları OpenAI formatına dönüştür
+): Promise<AgentResult> {
+  // Geçmiş mesajları OpenAI formatına dönüştür + mutual-pairing ile orphan tool mesajlarını temizle
+  const startIdx = history.length;
+  const sanitizedHistory = sanitizeHistoryForOpenAI(history);
   const messages: OAIMessage[] = [
     { role: 'system', content: config.systemPrompt },
-    ...history.map((m) => ({ role: m.role, content: m.content })),
+    ...sanitizedHistory,
     { role: 'user', content: userMessage },
   ];
 
@@ -176,6 +217,7 @@ async function runAgentOpenAI(
   let forceToolUse = false;
   let hadToolActivity = false;
   let postToolCompletionRounds = 0;
+  let consecutiveToolFailures = 0;
 
   while (round < maxRounds) {
     round++;
@@ -193,9 +235,17 @@ async function runAgentOpenAI(
     );
     const inlineToolCalls = toolCalls.length > 0 ? [] : parseInlineXmlToolCalls(text, allTools);
     const effectiveToolCalls = toolCalls.length > 0 ? toolCalls : inlineToolCalls;
-    const effectiveAssistantMsg = inlineToolCalls.length > 0
+    let effectiveAssistantMsg = inlineToolCalls.length > 0
       ? withSyntheticOpenAIToolCalls(rawAssistantMsg, inlineToolCalls)
       : rawAssistantMsg;
+
+    if (effectiveToolCalls.length > 0 && effectiveAssistantMsg.tool_calls && Array.isArray(effectiveAssistantMsg.tool_calls)) {
+      const validIds = new Set(effectiveToolCalls.map(tc => tc.id));
+      effectiveAssistantMsg = {
+        ...effectiveAssistantMsg,
+        tool_calls: effectiveAssistantMsg.tool_calls.filter((tc: any) => validIds.has(tc.id))
+      };
+    }
 
     if (malformedToolCalls > 0 && effectiveToolCalls.length === 0) {
       forceToolUse = true;
@@ -240,13 +290,29 @@ async function runAgentOpenAI(
         }
         continue;
       }
-      if (text && !isSilentInterimOutput(text)) {
+      const reasoningText = rawAssistantMsg.reasoning_content 
+        ? chalk.dim(chalk.gray(`\n<think>\n${rawAssistantMsg.reasoning_content}\n</think>\n`))
+        : '';
+        
+      const hasVisibleOutput = (text && !isSilentInterimOutput(text)) || reasoningText;
+
+      if (hasVisibleOutput) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
-        logger.raw(roundText);
+        if (reasoningText) logger.raw(reasoningText);
+        if (text && !isSilentInterimOutput(text)) logger.raw(roundText);
         logger.raw('\n');
+      } else if (hadToolActivity) {
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(chalk.dim('[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]\n'));
       }
       break;
     }
+
+    const reasoningText = rawAssistantMsg.reasoning_content 
+      ? chalk.dim(chalk.gray(`\n<think>\n${rawAssistantMsg.reasoning_content}\n</think>\n`))
+      : '';
+      
+    const hasVisibleOutput = (text && !isSilentInterimOutput(text)) || reasoningText;
 
     // Assistant mesajını (tool_calls ile birlikte) geçmişe ekle
     messages.push(effectiveAssistantMsg);
@@ -255,9 +321,10 @@ async function runAgentOpenAI(
     autoContinueRounds = 0;
     forceToolUse = false;
 
-    if (text && !isSilentInterimOutput(text)) {
+    if (hasVisibleOutput) {
       logger.write('\n' + chalk.bold.cyan('DEHA:'));
-      logger.raw(roundText);
+      if (reasoningText) logger.raw(reasoningText);
+      if (text && !isSilentInterimOutput(text)) logger.raw(roundText);
       logger.raw('\n');
     }
 
@@ -266,8 +333,18 @@ async function runAgentOpenAI(
       printToolCall(tc.name, tc.input);
       const result = await runTool(tc.name, tc.input, config);
       const compactedResult = compactToolResultForModel(tc.name, result);
-      const preview = compactedResult.length > 200 ? compactedResult.slice(0, 200) + '…' : compactedResult;
-      logger.write(chalk.dim('    → ') + chalk.gray(preview));
+      const previewText = compactedResult.trim();
+      const preview = previewText.length === 0
+        ? chalk.red('(boş sonuç — timeout veya bağlantı hatası olabilir)')
+        : chalk.gray(previewText.length > 200 ? previewText.slice(0, 200) + '…' : previewText);
+      logger.write(chalk.dim('    → ') + preview);
+
+      // Error tracking
+      if (isToolError(compactedResult)) {
+        consecutiveToolFailures++;
+      } else {
+        consecutiveToolFailures = 0;
+      }
 
       // OpenAI tool result format
       messages.push({
@@ -278,9 +355,35 @@ async function runAgentOpenAI(
 
       finalText = text;
     }
+
+    // Round budget awareness
+    if (round > 0 && round % 15 === 0) {
+      logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
+    }
+    if (round === 50) {
+      messages.push({ role: 'user', content: '[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.' });
+    }
+
+    // Error recovery injection
+    if (consecutiveToolFailures >= 3) {
+      messages.push({ role: 'user', content: ERROR_RECOVERY_PROMPT });
+      consecutiveToolFailures = 0;
+    }
   }
 
-  return finalText;
+  // Convert internal OAIMessage back to Message[] for history
+  const resultHistory: Message[] = messages
+    .filter(m => m.role !== 'system')
+    .slice(startIdx) // Take only the new messages from this turn
+    .map(m => ({
+      role: m.role as any,
+      content: typeof m.content === 'string' ? m.content : (m.content === null ? '' : String(m.content)),
+      tool_calls: m.tool_calls as any[],
+      tool_call_id: m.tool_call_id as string,
+      reasoning_content: m.reasoning_content as string
+    }));
+
+  return { response: finalText, messages: resultHistory };
 }
 
 function compactToolResultForModel(toolName: string, result: string): string {
@@ -300,10 +403,118 @@ function compactToolResultForModel(toolName: string, result: string): string {
   ].join('\n');
 }
 
+/** 
+ * Geçmişteki devasa tool çıktılarını özetler.
+ * Mesaj geçmişinde 5 turdan eski olan tool sonuçlarını 
+ * "[TOOL: name -> OKUNDU/ÇALIŞTIRILDI]" formatına indirger.
+ */
+export function summarizeOldToolResults(history: Message[], keepCount = 10): Message[] {
+  if (history.length <= keepCount) return history;
+  
+  const result: Message[] = [];
+  const keepThreshold = history.length - keepCount;
+
+  for (let i = 0; i < history.length; i++) {
+    const msg = history[i];
+    if (i < keepThreshold && msg.role === 'tool') {
+       const content = (msg.content || '').trim();
+       
+       // Kısa sonuçları olduğu gibi bırak
+       if (content.length <= 500) {
+         result.push(msg);
+         continue;
+       }
+       
+       // Hata mesajlarını asla kırpma
+       const lower = content.toLowerCase();
+       if (lower.includes('error') || lower.includes('hata') || lower.includes('failed') || lower.includes('exception')) {
+         const summary = content.length <= 1500 
+           ? content 
+           : content.slice(0, 800) + `\n[... ${content.length - 1100} karakter kırpıldı ...]\n` + content.slice(-300);
+         result.push({ ...msg, content: summary });
+         continue;
+       }
+       
+       // Büyük sonuçlar: head + tail koru
+       const summary = content.slice(0, 300) + `\n[... tool sonucu kırpıldı: ${content.length} karakter → 450 karakter ...]\n` + content.slice(-150);
+       result.push({ ...msg, content: summary });
+    } else {
+       result.push(msg);
+    }
+  }
+  return result;
+}
+
+
+/**
+ * DeepSeek DSML format parser.
+ * DeepSeek sometimes emits tool calls as text in its internal DSML format:
+ *   <｜｜DSML｜｜invoke name="tool_name">
+ *     <｜｜DSML｜｜parameter name="param" string="true">value</｜｜DSML｜｜parameter>
+ *   </｜｜DSML｜｜invoke>
+ * instead of proper JSON tool_calls. This parser catches and executes them.
+ */
+function parseInlineDsmlToolCalls(text: string, tools: typeof DEHA_TOOLS): ToolCall[] {
+  if (!text || !text.includes('DSML')) return [];
+
+  const toolNames = new Set(tools.map((t) => t.name));
+  const calls: ToolCall[] = [];
+
+  // Match <*DSML*invoke name="tool_name">...</*DSML*invoke>
+  const invokePattern = /<[^>]*DSML[^>]*invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/[^>]*DSML[^>]*invoke>/gi;
+  let invokeMatch: RegExpExecArray | null;
+
+  while ((invokeMatch = invokePattern.exec(text)) !== null) {
+    const name = invokeMatch[1].trim();
+    if (!toolNames.has(name)) continue;
+
+    const body = invokeMatch[2];
+    const input: Record<string, unknown> = {};
+
+    // 1. Standard DSML parameter: <*DSML*parameter name="key" ...>value</*DSML*parameter>
+    const paramPattern = /<[^>]*DSML[^>]*parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/[^>]*DSML[^>]*parameter>/gi;
+    let paramMatch: RegExpExecArray | null;
+    while ((paramMatch = paramPattern.exec(body)) !== null) {
+      const key = paramMatch[1].trim();
+      const val = decodeXmlEntities(paramMatch[2].trim());
+      input[key] = coerceInlineXmlValue(val);
+    }
+
+    // 2. Short parameter format: <parameter=key>value</parameter>
+    const shortParamPattern = /<parameter=([^>]+)>([\s\S]*?)<\/parameter>/gi;
+    let shortParamMatch: RegExpExecArray | null;
+    while ((shortParamMatch = shortParamPattern.exec(body)) !== null) {
+      const key = shortParamMatch[1].trim();
+      const val = decodeXmlEntities(shortParamMatch[2].trim());
+      input[key] = coerceInlineXmlValue(val);
+    }
+
+    if (Object.keys(input).length > 0) {
+      calls.push({ name, input, id: `dsml_${name}_${calls.length}_${Date.now()}` });
+    }
+  }
+
+  return calls.slice(0, 8);
+}
+
 function parseInlineXmlToolCalls(text: string, tools: typeof DEHA_TOOLS): ToolCall[] {
-  if (!text || !text.includes('<')) return [];
+  if (!text) return [];
 
   const toolNames = new Set(tools.map((tool) => tool.name));
+
+  // 1. Markdown-style: [Tool Call: **read_file**({...})]  — xAI Grok, etc.
+  const mdCalls = parseInlineMarkdownToolCalls(text, toolNames);
+  if (mdCalls.length > 0) return mdCalls;
+
+  // 2. DeepSeek DSML format
+  if (text.includes('DSML')) {
+    const dsmlCalls = parseInlineDsmlToolCalls(text, tools);
+    if (dsmlCalls.length > 0) return dsmlCalls;
+  }
+
+  // 3. XML-style: <tool_name>...</tool_name>
+  if (!text.includes('<')) return [];
+
   const calls: ToolCall[] = [];
 
   for (const name of toolNames) {
@@ -319,6 +530,44 @@ function parseInlineXmlToolCalls(text: string, tools: typeof DEHA_TOOLS): ToolCa
         });
       }
     }
+  }
+
+  return calls.slice(0, 8);
+}
+
+/**
+ * Parse markdown-style inline tool calls emitted by xAI Grok and similar models.
+ * Matches patterns like:
+ *   [Tool Call: **read_file**({"path":"/root/file.ts","start_line":1,"end_line":50})]
+ *   [Tool Call: read_file({"path":"/root/file.ts"})]
+ *   **read_file**({"path":"/root/file.ts"})
+ */
+function parseInlineMarkdownToolCalls(text: string, toolNames: Set<string>): ToolCall[] {
+  const calls: ToolCall[] = [];
+
+  // Pattern 1: [Tool Call: **name**({...})] or [Tool Call: name({...})]
+  const toolCallPattern = /\[Tool\s*Call:\s*\*{0,2}(\w+)\*{0,2}\s*\((\{[\s\S]*?\})\)\s*\]/gi;
+  let match: RegExpExecArray | null;
+  while ((match = toolCallPattern.exec(text)) !== null) {
+    const name = match[1].trim();
+    if (!toolNames.has(name)) continue;
+    try {
+      const input = JSON.parse(match[2]) as Record<string, unknown>;
+      calls.push({ name, input, id: `md_${name}_${calls.length}_${Date.now()}` });
+    } catch { /* JSON parse failed, skip */ }
+  }
+
+  if (calls.length > 0) return calls.slice(0, 8);
+
+  // Pattern 2: Standalone **name**({...}) without [Tool Call:] wrapper
+  const standalonePattern = /\*{2}(\w+)\*{2}\s*\((\{[\s\S]*?\})\)/gi;
+  while ((match = standalonePattern.exec(text)) !== null) {
+    const name = match[1].trim();
+    if (!toolNames.has(name)) continue;
+    try {
+      const input = JSON.parse(match[2]) as Record<string, unknown>;
+      calls.push({ name, input, id: `md_${name}_${calls.length}_${Date.now()}` });
+    } catch { /* JSON parse failed, skip */ }
   }
 
   return calls.slice(0, 8);
@@ -433,27 +682,53 @@ function readPositiveInt(value: string | undefined, fallback: number): number {
 }
 
 const AUTO_CONTINUE_PROMPT = [
-  'Bu yanıt bir ara durum güncellemesi olarak algılandı.',
-  'Kullanıcıdan yeni bir mesaj bekleme ve onay isteme.',
-  'Az önce söylediğin inceleme, arama, okuma veya düzenleme adımını şimdi gerçekten uygula.',
-  'Gerekliyse tool kullanarak devam et ve görev tamamlanana kadar ilerle.',
-  'Sadece kendi başına çözülemeyen gerçek bir blokaj varsa dur.',
+  'This response was detected as an interim status update.',
+  'Do not wait for user input or ask for permission.',
+  'Actually execute the inspection, search, read, or edit step you just mentioned.',
+  'Use tools as needed and continue until the task is complete.',
+  'Only stop if there is a genuine blocker you cannot resolve on your own.',
 ].join(' ');
 
 const POST_TOOL_CONTINUE_PROMPT = [
-  'Az önce tool sonuçları üretildi ama kullanıcıya dönük final yanıt henüz tamamlanmadı.',
-  'Eğer kullanıcının istediği bilgi tool sonucunda geldiyse hemen nihai, somut cevabı yaz ve dur.',
-  'Sadece kullanıcının isteğini cevaplamak için doğrudan gerekli olan bir sonraki tool çağrısını yap.',
-  'Kapsamı genişletme, kod veya yapılandırma dosyalarını incelemeye geçme.',
-  'Yeni kullanıcı mesajı bekleme.',
+  'Tool results were just produced but the final user-facing response is not yet complete.',
+  'If you made a code change, VERIFY FIRST: re-read the file (did the edit land correctly?), if you changed an API endpoint test it with curl and READ THE RESPONSE BODY.',
+  'Getting HTTP 200 is NOT enough — prove that the response content is correct.',
+  'If the information the user requested is already in the tool results, write the final concrete answer and stop.',
+  'Only make the next tool call if it is directly required to answer the user\'s request.',
+  'Do not expand scope or start inspecting unrelated code or config files.',
+  '"I fixed it / Done" without testing is FORBIDDEN. You MUST test before claiming completion.',
 ].join(' ');
 
 const MALFORMED_TOOL_CALL_PROMPT = [
-  'Önceki tool çağrısı eksik veya bozuk JSON ile kesildi.',
-  'Aynı adımı yeniden dene ama sadece geçerli ve eksiksiz tool çağrıları üret.',
-  'Büyük bir dosya yazıyorsan içeriği daha küçük parçalara böl veya daha kısa bir araç çağrısı kullan.',
-  'Ara durum mesajı yazma.',
+  'The previous tool call was truncated or had malformed JSON.',
+  'Retry the same step but produce only valid and complete tool calls.',
+  'If you are writing a large file, break the content into smaller chunks or use a shorter tool call.',
+  'Do not write interim status messages.',
 ].join(' ');
+
+const ERROR_RECOVERY_PROMPT = [
+  '[ERROR RECOVERY] The last 3 tool calls returned errors.',
+  'Do NOT retry the same command — try a different approach.',
+  'Analyze the root cause: file not found? wrong path? syntax error?',
+  'Try a different file path, different command, or different parameters.',
+  'If 3 different approaches all fail, explain the situation to the user and ask for help.',
+].join(' ');
+
+function isToolError(result: string): boolean {
+  if (!result) return true;
+  const lower = result.toLowerCase();
+  return lower.startsWith('hata:') || lower.startsWith('error:') ||
+    lower.includes('command failed') || lower.includes('enoent') ||
+    lower.includes('permission denied') || lower.includes('not found') ||
+    lower.includes('timeout') || lower.includes('connection refused') ||
+    (lower.startsWith('{') && lower.includes('"error"'));
+}
+
+/** Check if the model's response contains a [STATUS: COMPLETE/CONTINUE/BLOCKED] tag */
+function parseStatusTag(text: string): 'COMPLETE' | 'CONTINUE' | 'BLOCKED' | null {
+  const match = text.match(/\[STATUS:\s*(COMPLETE|CONTINUE|BLOCKED)\]/i);
+  return match ? match[1].toUpperCase() as any : null;
+}
 
 function shouldAutoContinue(
   text: string,
@@ -553,6 +828,13 @@ async function shouldContinueAfterNoToolResponse(
   autoContinueRounds: number,
   aggressiveAutoContinue: boolean,
 ): Promise<boolean> {
+  // Önce structured STATUS tag kontrolü
+  const status = parseStatusTag(assistantText);
+  if (status === 'COMPLETE') return false;
+  if (status === 'BLOCKED') return false;
+  if (status === 'CONTINUE') return autoContinueRounds < MAX_AUTO_CONTINUE_ROUNDS;
+
+  // Fallback: regex heuristics
   if (shouldAutoContinue(assistantText, round, maxRounds, autoContinueRounds, aggressiveAutoContinue)) {
     return true;
   }
@@ -562,12 +844,8 @@ async function shouldContinueAfterNoToolResponse(
   }
 
   const normalized = assistantText.toLowerCase().trim();
-
-  // Interim dil varsa model sadece niyet bildirmiştir; devam edip işi gerçekten yapsın.
   if (containsInterimLanguage(normalized)) return true;
 
-  // Non-empty ve interim olmayan cevap final kabul edilir. Aksi halde basit cevaplar
-  // "görev tamamlandı" demediği için gereksiz tool döngüsüne giriyor.
   return false;
 }
 
@@ -582,17 +860,20 @@ async function shouldContinueAfterToolPhase(
   if (round >= maxRounds) return false;
   if (postToolCompletionRounds >= MAX_POST_TOOL_COMPLETION_ROUNDS) return false;
 
+  // Önce structured STATUS tag kontrolü
+  const status = parseStatusTag(assistantText);
+  if (status === 'COMPLETE') return false;
+  if (status === 'BLOCKED') return false;
+  if (status === 'CONTINUE') return true;
+
   const normalized = assistantText.toLowerCase().trim();
 
   // Boş cevap → devam et
   if (!normalized) return true;
 
-  // Tool sonrası model "okuyorum/bakayım/test edeceğim" gibi ara durum yazdıysa
-  // gerçekten sonraki tool adımına geçsin.
+  // Interim dil varsa devam
   if (containsInterimLanguage(normalized)) return true;
 
-  // Tool sonrası non-empty ve interim olmayan her cevap finaldir. Böylece basit
-  // "dosyayı oku" istekleri okuduktan sonra başka dosyalara sapmaz.
   return false;
 }
 

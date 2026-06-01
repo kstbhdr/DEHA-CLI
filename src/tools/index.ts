@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import { createTwoFilesPatch } from 'diff';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
@@ -247,7 +248,7 @@ export const DEHA_TOOLS: ToolDefinition[] = [
         query:       { type: 'string', description: 'Search query' },
         source:      { type: 'string', enum: ['web', 'github', 'stackoverflow', 'all'], description: 'Where to search (default: web)' },
         max_results: { type: 'number', description: 'Max results per source (default: 8)' },
-        crawl_top:   { type: 'number', description: 'Fetch full page content from top N results (default: 0)' },
+        crawl_top:   { type: 'number', description: 'Fetch full page content from top N results (default: 2)' },
       },
       required: ['query'],
     },
@@ -279,6 +280,59 @@ export const DEHA_TOOLS: ToolDefinition[] = [
         api_key:    { type: 'string', description: 'API key override (uses config key by default)' },
         api_url:    { type: 'string', description: 'Custom OpenAI-compatible endpoint URL (e.g. http://localhost:8080/v1)' },
       },
+    },
+  },
+  {
+    name: 'fetch_url',
+    description: 'Send an HTTP request to any URL (GET, POST, PUT, DELETE) with custom headers, body, and timeout. Ideal for testing APIs or checking webhooks.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url:     { type: 'string', description: 'Target URL' },
+        method:  { type: 'string', enum: ['GET', 'POST', 'PUT', 'DELETE'], description: 'HTTP method (default: GET)' },
+        headers: { type: 'object', description: 'Custom headers as key-value pairs' },
+        body:    { type: 'string', description: 'Request body string (for POST/PUT)' },
+        timeout: { type: 'number', description: 'Timeout in seconds (default: 15)' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'diff_files',
+    description: 'Compare two files and show the difference in unified diff format. Useful for reviewing code changes before committing.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_a:  { type: 'string', description: 'First file path (original)' },
+        file_b:  { type: 'string', description: 'Second file path (modified)' },
+        context: { type: 'number', description: 'Number of context lines to show (default: 3)' },
+      },
+      required: ['file_a', 'file_b'],
+    },
+  },
+  {
+    name: 'find_files',
+    description: 'Find files within a directory matching a glob pattern (e.g. **/*.ts, src/**/*.js). Automatically ignores node_modules, dist, and .git.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pattern:     { type: 'string', description: 'Glob pattern (e.g. **/*.ts, test-*.js)' },
+        directory:   { type: 'string', description: 'Directory to search in' },
+        max_results: { type: 'number', description: 'Maximum number of results to return (default: 50)' },
+      },
+      required: ['pattern', 'directory'],
+    },
+  },
+  {
+    name: 'git',
+    description: 'Execute Git commands in a secure and controlled environment. Read-only commands run instantly, write commands require approval.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Git command to run (e.g. "status", "diff", "commit -m \"msg\"", "push")' },
+        cwd:     { type: 'string', description: 'Working directory path (optional)' },
+      },
+      required: ['command'],
     },
   },
 ];
@@ -360,6 +414,8 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'search_in_files':
       case 'grep':            return toolSearchInFiles(inp);
       case 'mkdir':           return toolMkdir(inp);
+      case 'diff_files':      return toolDiffFiles(inp as any);
+      case 'find_files':      return toolFindFiles(inp as any);
       // Async toollar için placeholder — agent.ts'te executeToolAsync kullanılır
       case 'run_terminal':
       case 'run_python':
@@ -369,6 +425,8 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'web_search':
       case 'crawl_url':
       case 'run_shell':
+      case 'fetch_url':
+      case 'git':
         return `__ASYNC_TOOL__:${name}`;
       default: return `Bilinmeyen tool: ${name}`;
     }
@@ -404,6 +462,10 @@ export async function executeToolAsync(
         return await toolWebSearch(input as Parameters<typeof toolWebSearch>[0]);
       case 'crawl_url':
         return await toolCrawlUrl(input as Parameters<typeof toolCrawlUrl>[0]);
+      case 'fetch_url':
+        return await toolFetchUrl(input as any);
+      case 'git':
+        return await toolGit(input as any);
       default:
         return executeTool(name, input);
     }
@@ -435,6 +497,10 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     grep:            '🔍',
     web_search:      '🌍',
     crawl_url:       '🕷️ ',
+    fetch_url:       '🌐',
+    diff_files:      '📊',
+    find_files:      '🔎',
+    git:             '🔀',
   };
   const icon = icons[name] ?? '🔧';
   const preview = Object.entries(input)
@@ -589,7 +655,7 @@ async function toolRunShell(inp: ToolInput): Promise<string> {
 
   const result = execSync(inp.command, {
     cwd,
-    timeout: Math.min(inp.timeout ?? 30, 60) * 1000, // max 60 saniye
+    timeout: Math.min(inp.timeout ?? 60, 300) * 1000, // max 300 saniye (5 dk)
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
     maxBuffer: 10 * 1024 * 1024, // 10MB
@@ -663,5 +729,140 @@ function searchFile(
     });
   } catch {
     /* skip binary or unreadable files */
+  }
+}
+
+
+// ─── New Tool Implementations ──────────────────────────────────────────────
+
+async function toolFetchUrl(inp: { url: string; method?: string; headers?: Record<string, string>; body?: string; timeout?: number }): Promise<string> {
+  const { url, method = 'GET', headers = {}, body, timeout = 15 } = inp;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout * 1000);
+  
+  try {
+    const fetch = (await import('node-fetch')).default;
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: (method !== 'GET' && method !== 'HEAD' && body) ? body : undefined,
+      signal: controller.signal as any
+    });
+    
+    let resBody = await res.text();
+    try {
+      const json = JSON.parse(resBody);
+      resBody = JSON.stringify(json, null, 2);
+    } catch {} // Not JSON, keep as text
+    
+    if (resBody.length > 50000) {
+      resBody = resBody.slice(0, 50000) + `\n\n[TRUNCATED: Response body exceeded 50KB. Original size: ${resBody.length} bytes]`;
+    }
+    
+    return `HTTP ${res.status} ${res.statusText}\nHeaders: ${JSON.stringify(res.headers.raw())}\n\n${resBody}`;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+function toolDiffFiles(inp: { file_a: string; file_b: string; context?: number }): string {
+  const pathA = path.resolve(inp.file_a);
+  const pathB = path.resolve(inp.file_b);
+  const ctx = inp.context ?? 3;
+  
+  let contentA = '', contentB = '';
+  if (fs.existsSync(pathA)) contentA = fs.readFileSync(pathA, 'utf-8');
+  if (fs.existsSync(pathB)) contentB = fs.readFileSync(pathB, 'utf-8');
+  
+  if (!contentA && !contentB) return 'İki dosya da bulunamadı.';
+  
+  const patch = createTwoFilesPatch(pathA, pathB, contentA, contentB, '', '', { context: ctx });
+  return patch || 'Fark bulunamadı (dosyalar aynı).';
+}
+
+function toolFindFiles(inp: { pattern: string; directory: string; max_results?: number }): string {
+  const { minimatch } = require('minimatch');
+  const dir = path.resolve(inp.directory);
+  const pattern = inp.pattern;
+  const max = inp.max_results ?? 50;
+  
+  if (!fs.existsSync(dir)) throw new Error(`Dizin bulunamadı: ${dir}`);
+  
+  const results = [];
+  
+  function walk(currentDir: string, depth: number) {
+    if (depth > 10 || results.length >= max) return;
+    
+    let entries;
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch { return; }
+    
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.git' || e.name === 'dist') continue;
+      
+      const fullPath = path.join(currentDir, e.name);
+      const relPath = path.relative(dir, fullPath).replace(/\\/g, '/'); // Normalize to forward slash for minimatch
+      
+      if (e.isDirectory()) {
+        walk(fullPath, depth + 1);
+      } else {
+        if (minimatch(relPath, pattern, { matchBase: true, dot: true })) {
+          const size = fs.statSync(fullPath).size;
+          results.push(`${fullPath} (${Math.round(size/1024)} KB)`);
+        }
+      }
+    }
+  }
+  
+  walk(dir, 0);
+  
+  if (results.length === 0) return 'Eşleşen dosya bulunamadı.';
+  if (results.length >= max) results.push(`\n[TRUNCATED: Maksimum limit (${max}) ulaşıldı]`);
+  return results.join('\n');
+}
+
+async function toolGit(inp: { command: string; cwd?: string }): Promise<string> {
+  let cmd = inp.command.trim();
+  if (cmd.startsWith('git ')) cmd = cmd.substring(4);
+  
+  const safeCommands = ['status', 'diff', 'log', 'branch', 'show', 'blame', 'ls-files'];
+  const baseCmd = cmd.split(' ')[0];
+  const isSafe = safeCommands.includes(baseCmd);
+  
+  if (!isSafe && !autoAllowDangerousCommands) {
+      const inquirer = await import('inquirer').then(m => m.default || m);
+      const { action } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'action',
+          message: chalk.yellow(`\n⚠️ GIT DEĞİŞİKLİK KOMUTU:\n`) + 
+                   chalk.white(`   Komut: `) + chalk.cyan(`git ${cmd}`) + '\n\n' +
+                   chalk.bold('Bu işlemi onaylıyor musunuz?'),
+          choices: [
+            { name: '❌ İptal Et', value: 'cancel' },
+            { name: '✅ İzin ver', value: 'once' },
+            { name: '🔥 Her zaman izin ver', value: 'always' },
+          ],
+        }
+      ]);
+
+      if (action === 'cancel') {
+        throw new Error(`❌ Kullanıcı git işlemini iptal etti.`);
+      } else if (action === 'always') {
+        autoAllowDangerousCommands = true;
+      }
+  }
+  
+  const cwd = inp.cwd ? path.resolve(inp.cwd) : process.cwd();
+  try {
+    const result = execSync(`git ${cmd}`, {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    return result || '(çıktı yok)';
+  } catch (err: any) {
+    throw new Error(`Git hatası: ${err.stderr || err.message}`);
   }
 }

@@ -118,7 +118,7 @@ export interface DehaConfig {
 
 export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
   const base: DehaConfig = {
-    provider: ((process.env.DEHA_PROVIDER || 'claude').toLowerCase() as Provider),
+    provider: ((process.env.DEHA_PROVIDER || 'deepseek').toLowerCase() as Provider),
 
     anthropicApiKey:  process.env.ANTHROPIC_API_KEY,
     openaiApiKey:     process.env.OPENAI_API_KEY,
@@ -132,9 +132,9 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     claudeModel:      process.env.CLAUDE_MODEL      || 'claude-opus-4-6',
     openaiModel:      process.env.OPENAI_MODEL      || 'gpt-4o',
-    deepseekModel:    process.env.DEEPSEEK_MODEL    || 'deepseek-chat',
+    deepseekModel:    process.env.DEEPSEEK_MODEL    || 'deepseek-v4-flash',
     openrouterModel:  process.env.OPENROUTER_MODEL  || 'anthropic/claude-opus-4',
-    xaiModel:         process.env.XAI_MODEL         || 'grok-3',
+    xaiModel:         process.env.XAI_MODEL         || 'grok-4.3',
     customModel:      process.env.CUSTOM_MODEL      || 'local-model',
 
     ollamaHost:  process.env.OLLAMA_HOST  || 'http://localhost:11434',
@@ -182,17 +182,17 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 
     pipeline: {
       planner: {
-        provider:           ((process.env.PLANNER_PROVIDER || 'claude').toLowerCase() as Provider),
-        model:              process.env.PLANNER_MODEL   || 'claude-opus-4-6',
+        provider:           ((process.env.PLANNER_PROVIDER || 'deepseek').toLowerCase() as Provider),
+        model:              process.env.PLANNER_MODEL   || 'deepseek-v4-flash',
         apiKey:             process.env.PLANNER_API_KEY,
         apiUrl:             process.env.PLANNER_API_URL,
-        maxTokens:          safeParseInt(process.env.PLANNER_MAX_TOKENS,   2048),
+        maxTokens:          safeParseInt(process.env.PLANNER_MAX_TOKENS,   4096),
         temperature:        safeParseFloat(process.env.PLANNER_TEMPERATURE, 0.3),
         openrouterProvider: process.env.PLANNER_OPENROUTER_PROVIDER || undefined,
       },
       coder: {
         provider:           ((process.env.CODER_PROVIDER || 'deepseek').toLowerCase() as Provider),
-        model:              process.env.CODER_MODEL   || 'deepseek-chat',
+        model:              process.env.CODER_MODEL   || 'deepseek-v4-flash',
         apiKey:             process.env.CODER_API_KEY,
         apiUrl:             process.env.CODER_API_URL,
         maxTokens:          safeParseInt(process.env.CODER_MAX_TOKENS,   8192),
@@ -201,7 +201,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
       },
       judge: {
         provider:           ((process.env.JUDGE_PROVIDER || 'xai').toLowerCase() as Provider),
-        model:              process.env.JUDGE_MODEL   || 'grok-3',
+        model:              process.env.JUDGE_MODEL   || 'grok-4.3',
         apiKey:             process.env.JUDGE_API_KEY,
         apiUrl:             process.env.JUDGE_API_URL,
         maxTokens:          safeParseInt(process.env.JUDGE_MAX_TOKENS,   2048),

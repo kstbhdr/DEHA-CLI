@@ -48,6 +48,8 @@ export async function runCoder(
   judgeFeedback?: string,
   previousCode?: string,
   onChunk?: (chunk: string) => void,
+  abortSignal?: AbortSignal,
+  staticContext: Message[] = [],
 ): Promise<string> {
   const { pipeline } = config;
 
@@ -59,6 +61,6 @@ export async function runCoder(
       `\n\n## JUDGE FEEDBACK — Fix only the issues below, use EDIT blocks for unchanged parts:\n${judgeFeedback}`;
   }
 
-  const messages: Message[] = [{ role: 'user', content: userContent }];
+  const messages: Message[] = [...staticContext, { role: 'user', content: userContent }];
   return callRole(pipeline.coder, config, messages, CODER_PROMPT, onChunk, 'coder');
 }

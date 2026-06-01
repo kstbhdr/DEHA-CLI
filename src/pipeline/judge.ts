@@ -61,6 +61,8 @@ export async function runJudge(
   code: string,
   config: DehaConfig,
   onChunk?: (chunk: string) => void,
+  abortSignal?: AbortSignal,
+  staticContext: Message[] = [],
 ): Promise<JudgeVerdict> {
   const { pipeline } = config;
 
@@ -69,7 +71,7 @@ export async function runJudge(
     `## PLANNER'S PLAN\n${plan}\n\n` +
     `## CODER'S OUTPUT\n\`\`\`\n${code}\n\`\`\``;
 
-  const messages: Message[] = [{ role: 'user', content: userContent }];
+  const messages: Message[] = [...staticContext, { role: 'user', content: userContent }];
   const raw = await callRole(pipeline.judge, config, messages, JUDGE_PROMPT, onChunk, 'judge');
 
   return parseVerdict(raw);

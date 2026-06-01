@@ -24,27 +24,65 @@ export function editFile(input: {
 
   const original = fs.readFileSync(resolved, 'utf-8');
 
-  if (!original.includes(input.old_string)) {
-    // Bulunamadıysa yakın eşleşme ipucu ver
-    const lines = original.split('\n');
-    const firstLineOfOld = input.old_string.split('\n')[0].trim();
-    const closestLine = lines.findIndex((l) => l.includes(firstLineOfOld));
-    const hint = closestLine >= 0
-      ? ` En yakın eşleşme satır ${closestLine + 1}: "${lines[closestLine].trim().slice(0, 60)}"`
-      : '';
-    return `HATA: old_string dosyada bulunamadı.${hint}\nİpucu: Boşluk, girinti veya satır sonu farklılıklarını kontrol et.`;
+  // ── 1. Exact match ───────────────────────────────────────────────────────
+  if (original.includes(input.old_string)) {
+    const count = input.replace_all
+      ? (original.match(new RegExp(escapeRegex(input.old_string), 'g'))?.length ?? 0)
+      : 1;
+    const updated = input.replace_all
+      ? original.split(input.old_string).join(input.new_string)
+      : original.replace(input.old_string, input.new_string);
+    fs.writeFileSync(resolved, updated, 'utf-8');
+    return `✓ Düzenlendi: ${resolved} (${count} değişiklik)`;
   }
 
-  const count = input.replace_all
-    ? (original.match(new RegExp(escapeRegex(input.old_string), 'g'))?.length ?? 0)
-    : 1;
+  // ── 2. CRLF normalization fallback ──────────────────────────────────────
+  const normalizedOriginal = original.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const normalizedOld = input.old_string.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (normalizedOriginal.includes(normalizedOld)) {
+    // Rebuild with normalized content so replacement works
+    const updatedNorm = input.replace_all
+      ? normalizedOriginal.split(normalizedOld).join(input.new_string.replace(/\r\n/g, '\n'))
+      : normalizedOriginal.replace(normalizedOld, input.new_string.replace(/\r\n/g, '\n'));
+    fs.writeFileSync(resolved, updatedNorm, 'utf-8');
+    return `✓ Düzenlendi (CRLF normalize): ${resolved}`;
+  }
 
-  const updated = input.replace_all
-    ? original.split(input.old_string).join(input.new_string)
-    : original.replace(input.old_string, input.new_string);
+  // ── 3. Whitespace-insensitive fallback ──────────────────────────────────
+  // Strips leading/trailing whitespace per line for comparison only,
+  // then replaces the actual matching region in the file.
+  const normLines = (s: string) => s.replace(/\r\n/g, '\n').split('\n').map((l) => l.trimEnd());
+  const fileLines  = normLines(normalizedOriginal);
+  const oldLines   = normLines(normalizedOld);
 
-  fs.writeFileSync(resolved, updated, 'utf-8');
-  return `✓ Düzenlendi: ${resolved} (${count} değişiklik)`;
+  if (oldLines.length > 0) {
+    const firstOld = oldLines[0].trim();
+    for (let i = 0; i <= fileLines.length - oldLines.length; i++) {
+      if (fileLines[i].trim() !== firstOld) continue;
+      // Check if all lines match (trim-based)
+      let allMatch = true;
+      for (let j = 0; j < oldLines.length; j++) {
+        if (fileLines[i + j].trim() !== oldLines[j].trim()) { allMatch = false; break; }
+      }
+      if (allMatch) {
+        // Replace the matched lines with new_string lines, preserving indentation from new_string
+        const fileOriginalLines = normalizedOriginal.split('\n');
+        const newLines = input.new_string.replace(/\r\n/g, '\n').split('\n');
+        fileOriginalLines.splice(i, oldLines.length, ...newLines);
+        fs.writeFileSync(resolved, fileOriginalLines.join('\n'), 'utf-8');
+        return `✓ Düzenlendi (whitespace-normalized): ${resolved}`;
+      }
+    }
+  }
+
+  // ── Nothing matched — report error with hint ────────────────────────────
+  const lines = original.split('\n');
+  const firstLineOfOld = input.old_string.split('\n')[0].trim();
+  const closestLine = lines.findIndex((l) => l.includes(firstLineOfOld));
+  const hint = closestLine >= 0
+    ? ` En yakın eşleşme satır ${closestLine + 1}: "${lines[closestLine].trim().slice(0, 60)}"`
+    : '';
+  return `HATA: old_string dosyada bulunamadı.${hint}\nİpucu: Dosyayı önce read_file ile oku, tam içeriği kullan.`;
 }
 
 // ─── insert_lines: satır ekleme ─────────────────────────────────────────────
@@ -126,6 +164,47 @@ export function applyEditBlocks(blocks: EditBlock[]): string[] {
 
   return results;
 }
+
+// ─── NEW FILE: // FILE: <yol> formatını parse et ─────────────────────────────
+
+export interface NewFileBlock {
+  file: string;
+  content: string;
+}
+
+export function parseNewFileBlocks(text: string): NewFileBlock[] {
+  const blocks: NewFileBlock[] = [];
+  // ```\n// FILE: <yol>\n<içerik>\n``` or ```\n# FILE: <yol>\n<içerik>\n```
+  const pattern = /```(?:\w+)?\n(?:\/\/|#)\s*FILE:\s*([^\n]+)\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    blocks.push({
+      file:    match[1].trim(),
+      content: match[2].trimEnd(),
+    });
+  }
+  return blocks;
+}
+
+export function applyNewFileBlocks(blocks: NewFileBlock[]): string[] {
+  const results: string[] = [];
+
+  for (const block of blocks) {
+    const resolved = path.resolve(block.file);
+    try {
+      const dir = path.dirname(resolved);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(resolved, block.content, 'utf-8');
+      results.push(`✓ Dosya oluşturuldu: ${block.file}`);
+    } catch (err: any) {
+      results.push(`HATA: ${block.file} oluşturulamadı: ${err.message}`);
+    }
+  }
+
+  return results;
+}
+
 
 // ─── diff görüntüleyici (terminal'de eski↔yeni yan yana) ────────────────────
 

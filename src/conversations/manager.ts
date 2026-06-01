@@ -41,10 +41,11 @@ export function saveConversation(
   model: string,
   options: SaveConversationOptions = {},
 ): string | null {
-  if (messages.length < 2) return null; // çok kısa, kaydetme
+  if (messages.length < 1) return null;
 
   const now = new Date();
-  const title   = options.title || makeTitle(messages[0].content);
+  const firstUserMsg = messages.find(m => m.role === 'user');
+  const title   = options.title || makeTitle(firstUserMsg?.content || 'Sohbet');
   const id      = options.conversationId || createConversationId(title);
   const filePath = path.join(getConvDir(), `${id}.md`);
 
@@ -85,18 +86,33 @@ export function loadConversationMessages(id: string): Message[] | null {
 
   const messages: Message[] = [];
   // Split on role headers
-  const parts = raw.split(/^## (?:🧑 Kullanıcı|🤖 DEHA)\s*$/m);
+  const parts = raw.split(/^## (?:🧑 Kullanıcı|🤖 DEHA|🛠 Tool Sonucu.*)\s*$/m);
 
   // Determine role order by scanning headers in order
-  const headerMatches = [...raw.matchAll(/^## (🧑 Kullanıcı|🤖 DEHA)\s*$/gm)];
+  const headerMatches = [...raw.matchAll(/^## (🧑 Kullanıcı|🤖 DEHA|🛠 Tool Sonucu.*?)\s*$/gm)];
 
   for (let i = 0; i < headerMatches.length; i++) {
     const header = headerMatches[i][1];
-    const role = header === '🧑 Kullanıcı' ? 'user' : 'assistant';
+    let role: 'user' | 'assistant' | 'tool' = 'user';
+    let tool_call_id: string | undefined;
+
+    if (header === '🧑 Kullanıcı') {
+      role = 'user';
+    } else if (header === '🤖 DEHA') {
+      role = 'assistant';
+    } else if (header.startsWith('🛠 Tool Sonucu')) {
+      role = 'tool';
+      const idMatch = header.match(/id: ([\w-]+)/);
+      if (idMatch) tool_call_id = idMatch[1];
+    }
+
     const content = (parts[i + 1] || '')
       .replace(/\n---\s*$/, '') // trailing separator
       .trim();
-    if (content) messages.push({ role, content });
+
+    if (content || role === 'assistant') {
+       messages.push({ role, content, tool_call_id });
+    }
   }
 
   return messages.length > 0 ? messages : null;
@@ -147,12 +163,29 @@ function buildMarkdown(
     if (msg.role === 'user') {
       lines.push(`## 🧑 Kullanıcı`);
       lines.push('');
-      lines.push(msg.content);
+      lines.push(msg.content || '');
       lines.push('');
-    } else {
+    } else if (msg.role === 'assistant') {
       lines.push(`## 🤖 DEHA`);
       lines.push('');
-      lines.push(msg.content);
+      if (msg.reasoning_content) {
+         lines.push(`> 💭 **Thinking:** ${msg.reasoning_content.slice(0, 500)}${msg.reasoning_content.length > 500 ? '...' : ''}\n`);
+      }
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+         for (const tc of msg.tool_calls) {
+            const args = typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments);
+            lines.push(`[Tool Call: **${tc.function.name}**(${args.slice(0, 100)}${args.length > 100 ? '...' : ''})]`);
+         }
+         lines.push('');
+      }
+      lines.push(msg.content || '');
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    } else if (msg.role === 'tool') {
+      lines.push(`## 🛠 Tool Sonucu (id: ${msg.tool_call_id || 'unknown'})`);
+      lines.push('');
+      lines.push(msg.content || '');
       lines.push('');
       lines.push('---');
       lines.push('');

@@ -1,0 +1,19 @@
+
+import { Command } from 'commander';
+import { createShoppingCommand } from './commands/shopping-command';
+
+const program = new Command();
+
+program
+  .name('second-brain')
+  .description('Second Brain CLI - Kişisel bilgi yönetim sistemi')
+  .version('1.0.0');
+
+// Mevcut komutlar...
+// program.addCommand(createChatCommand());
+// program.addCommand(createSearchCommand());
+
+// Yeni shopping komutu
+program.addCommand(createShoppingCommand());
+
+program.parse(process.argv);

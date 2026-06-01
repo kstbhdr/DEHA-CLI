@@ -88,10 +88,28 @@ export async function toolWebSearch(input: {
   query: string;
   source?: 'web';
   max_results?: number;
+  crawl_top?: number;
 }): Promise<string> {
-  const { query, max_results = 8 } = input;
+  const { query, max_results = 8, crawl_top = 2 } = input;
   const results = await duckDuckGoSearch(query, max_results);
-  return formatResults('DuckDuckGo', results) || 'No results found.';
+  
+  let output = formatResults('DuckDuckGo', results) || 'No results found.';
+  
+  if (crawl_top > 0 && results.length > 0) {
+    const urlsToCrawl = results.slice(0, crawl_top);
+    output += `\n\n=== Crawling Top ${urlsToCrawl.length} Search Results ===\n`;
+    for (const res of urlsToCrawl) {
+      output += `\n--- Content from: ${res.title} (${res.url}) ---\n`;
+      try {
+        const pageContent = await toolCrawlUrl({ url: res.url });
+        output += pageContent + '\n';
+      } catch (err) {
+        output += `Error crawling URL: ${err instanceof Error ? err.message : String(err)}\n`;
+      }
+    }
+  }
+  
+  return output;
 }
 
 export async function toolCrawlUrl(input: {

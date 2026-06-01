@@ -125,11 +125,12 @@ function cosineSimilarity(a: number[], b: number[]): number {
  * Yeni mesajı Redis'e kaydeder + Vector Store'a arka planda yazar.
  */
 export async function addMessage(message: Message): Promise<void> {
-  const embedding = await generateEmbedding(message.content);
+  const content = message.content || (message.tool_calls ? JSON.stringify(message.tool_calls) : '');
+  const embedding = await generateEmbedding(content);
   const stored: StoredMessage = {
     id: crypto.randomUUID(),
     role: message.role as 'user' | 'assistant',
-    content: message.content,
+    content: content,
     embedding,
     timestamp: Date.now(),
   };

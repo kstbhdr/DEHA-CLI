@@ -7,8 +7,8 @@
  */
 
 export interface Message {
-  role: 'user' | 'assistant';
-  content: string;
+  role: string;
+  content: string | null;
 }
 
 const CHARS_PER_TOKEN = 3.5;
@@ -19,7 +19,7 @@ const MSG_OVERHEAD_TOKENS = 4;
 /**
  * Bir metin parçasının yaklaşık token sayısını döner.
  */
-export function estimateTokens(text: string): number {
+export function estimateTokens(text: string | null): number {
   if (!text) return 0;
   return Math.ceil(text.length / CHARS_PER_TOKEN);
 }

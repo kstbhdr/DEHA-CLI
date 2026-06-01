@@ -1,23 +1,13 @@
 /**
  * Session Memory Service — v2 (Context Compression Destekli)
- *
- * Katmanlı bellek mimarisi:
- *  - Tier 1 (hot):  Redis (REDIS_URL varsa, yoksa localhost:6379 fallback) veya in-memory Map — anlık erişim
- *  - Tier 2 (warm): .deha/session-buffer.json — CLI yeniden başlatılırsa geri yükle
- *  - Tier 3 (cold): ~/.deha/conversations/*.json — kalıcı arşiv (20 mesajda bir flush)
- *
- * Context Compression:
- *  - Token sayısı maxContextTokens * compressThreshold'u geçince otomatik compress
- *  - Eski mesajlar AI ile özetlenir → tek bir "context recap" olarak enjekte edilir
- *  - Son minHotMessages mesaj her zaman tam kalır (özetlenmez)
- *  - Özet birikimli: yeni özet = eski özet + yeni özetlenen mesajlar
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type { Message } from './ai-service';
-import { estimateTokens, estimateMessagesTokens, getMaxContextTokens } from './token-counter';
+import { estimateTokens, estimateMessagesTokens } from './token-counter';
+import { generateRepoMap } from './repo-map';
 
 // ─── Sabitler ────────────────────────────────────────────────────────────────
 
@@ -25,7 +15,7 @@ const SESSION_BUFFER_DIR = path.join(process.cwd(), '.deha');
 const SESSION_BUFFER_FILE = path.join(SESSION_BUFFER_DIR, 'session-buffer.json');
 const COLD_STORAGE_DIR = path.join(os.homedir(), '.deha', 'conversations');
 const FLUSH_THRESHOLD = 20;
-const MIN_ALWAYS_HOT_MESSAGES = 5;
+const MIN_ALWAYS_HOT_MESSAGES = 20;
 const DEFAULT_MODEL_CONTEXT_BUDGET_TOKENS = 80_000;
 const MAX_SUMMARY_CHARS = 24_000;
 const MAX_CONTEXT_MESSAGE_CHARS = 16_000;
@@ -33,7 +23,6 @@ const MAX_CONTEXT_MESSAGE_CHARS = 16_000;
 // ─── Redis (opsiyonel) ────────────────────────────────────────────────────────
 
 let redisClient: RedisLike | null = null;
-
 let _redisChecked = false;
 
 interface RedisLike {
@@ -43,46 +32,49 @@ interface RedisLike {
   quit(): Promise<unknown>;
 }
 
-
 async function getRedis(): Promise<RedisLike | null> {
   if (_redisChecked) return redisClient;
   _redisChecked = true;
-  // REDIS_URL varsa onu kullan, yoksa localhost:6379'a fallback (memory.ts ile tutarlı)
   const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
   try {
     const { default: Redis } = await import('ioredis');
     const client = new Redis(url, { lazyConnect: true, connectTimeout: 3000 });
+    client.on('error', () => { /* Suppress unhandled errors */ });
     await client.connect();
     redisClient = client;
     return client;
   } catch {
-    return null; // Redis yoksa sessizce in-memory'ye düş, bir daha dene
+    return null;
   }
 }
+
 // ─── Session state ────────────────────────────────────────────────────────────
 
 interface SessionState {
   sessionId: string;
   messages: Message[];
-  summary: string;        // eski mesajların AI özeti
-  workDir: string;        // aktif çalışma dizini
-  flushedCount: number;   // cold storage'a kaç mesaj yazıldı
-  compressCount: number;  // kaç kez compress yapıldı
+  summary: string;        
+  pinnedContext: string[]; // Pinli talimatlar
+  architectureFiles: string[]; // Mimari dosyalar (Anayasa)
+  workDir: string;        
+  flushedCount: number;   
+  compressCount: number;  
 }
 
 let _state: SessionState = {
   sessionId: Date.now().toString(36),
   messages: [],
   summary: '',
+  pinnedContext: [],
+  architectureFiles: [],
   workDir: process.cwd(),
   flushedCount: 0,
   compressCount: 0,
 };
 
-// ─── Başlangıç yükleme ───────────────────────────────────────────────────────
+// ─── Core Logic ──────────────────────────────────────────────────────────────
 
 export async function loadSession(): Promise<void> {
-  // 1. Redis'ten dene
   const redis = await getRedis();
   if (redis) {
     const raw = await redis.get('deha:session:latest');
@@ -93,21 +85,19 @@ export async function loadSession(): Promise<void> {
           _state = { ..._state, ...saved };
           return;
         }
-      } catch { /* bozuk veri */ }
+      } catch { }
     }
   }
 
-  // 2. Warm buffer'dan dene
   if (fs.existsSync(SESSION_BUFFER_FILE)) {
     try {
       const raw = fs.readFileSync(SESSION_BUFFER_FILE, 'utf-8');
       const saved = JSON.parse(raw) as Partial<SessionState>;
-      // 10 dakikadan eski buffer'ı yoksay
       const age = Date.now() - parseInt(saved.sessionId ?? '0', 36);
       if (age < 10 * 60 * 1000 && shouldLoadSessionForCurrentDir(saved)) {
         _state = { ..._state, ...saved };
       }
-    } catch { /* bozuk dosya */ }
+    } catch { }
   }
 }
 
@@ -120,79 +110,147 @@ function shouldLoadSessionForCurrentDir(saved: Partial<SessionState>): boolean {
   }
 }
 
-// ─── Mesaj ekleme ────────────────────────────────────────────────────────────
-
 export async function appendMessage(message: Message): Promise<void> {
   _state.messages.push(message);
-
-  // Her mesajdan sonra warm buffer'a yaz
   _writeWarmBuffer();
-
-  // Redis'e async yaz (beklemiyoruz)
   _writeRedis().catch(() => {});
-
-  // 20 mesaj biriktiyse cold storage'a flush et
   if (_state.messages.length - _state.flushedCount >= FLUSH_THRESHOLD) {
     await _flushCold(false);
   }
 }
 
-// ─── Bağlam oluşturma ─────────────────────────────────────────────────────────
+export function addArchitectureFile(filePath: string): void {
+  const resolved = path.resolve(filePath);
+  if (!_state.architectureFiles) _state.architectureFiles = [];
+  if (!_state.architectureFiles.includes(resolved)) {
+    _state.architectureFiles.push(resolved);
+    _writeWarmBuffer();
+  }
+}
+
+export function clearArchitectureFiles(): void {
+  _state.architectureFiles = [];
+  _writeWarmBuffer();
+}
 
 /**
- * Modele gönderilecek mesaj dizisini oluşturur:
- * - Özet (varsa) başa "context recap" olarak eklenir
- * - Tüm mevcut mesajlar eklenir (compress sonrası sadece hot window kalır)
- * - Bekleyen kullanıcı mesajı varsa sona eklenir
+ * Optimized for Prompt Caching:
+ * 1. ARCHITECTURE (The Constitution - Most Static)
+ * 2. Pinned Context (En Üst - En Sabit - Cache dostu)
+ * 3. Repo Map (Top - Static)
+ * 4. Context Recap / Summary (Middle - Semi-Static)
  */
+export function buildStaticContextMessages(): Message[] {
+  const result: Message[] = [];
+
+  // 0. ARCHITECTURE
+  if (_state.architectureFiles && _state.architectureFiles.length > 0) {
+    let architectureContent = '';
+    for (const file of _state.architectureFiles) {
+      if (fs.existsSync(file)) {
+        const content = fs.readFileSync(file, 'utf-8');
+        architectureContent += `\n--- FILE: ${path.relative(_state.workDir, file)} ---\n${content}\n`;
+      }
+    }
+    if (architectureContent) {
+      result.push({
+        role: 'user',
+        content: `<project_architecture_constitution>\n${architectureContent}\nCRITICAL RULE: These files define the core logic and Second Brain of the project. NEVER propose changes to these files without explicit user approval. If you are a specialized agent (Coder/Judge), always check these files first.\n</project_architecture_constitution>`,
+      });
+      result.push({
+        role: 'assistant',
+        content: 'Proje anayasasını ve mimari dökümanları (Second Brain) hafızama kazıdım. Onay almadan bu yapıları değiştirmeyeceğim.',
+      });
+    }
+  }
+  
+  // 1. PINNED CONTEXT
+  if (_state.pinnedContext && _state.pinnedContext.length > 0) {
+    const content = _state.pinnedContext.join('\n\n');
+    result.push({
+      role: 'user',
+      content: `<pinned_instructions>\n${content}\n</pinned_instructions>`,
+    });
+    result.push({
+      role: 'assistant',
+      content: 'Sabit talimatları aldım, bunları her zaman önceliklendireceğim.',
+    });
+  }
+
+  // 2. PROJECT STRUCTURE
+  if (_state.workDir) {
+    const repoMap = generateRepoMap(_state.workDir, { maxDepth: 2 });
+    if (repoMap) {
+      result.push({
+        role: 'user',
+        content: `<project_structure>\n${repoMap}\n</project_structure>`,
+      });
+      result.push({
+        role: 'assistant',
+        content: 'Proje yapısını aldım.',
+      });
+    }
+  }
+
+  // 3. CONTEXT RECAP / SUMMARY
+  if (_state.summary) {
+    result.push({
+      role: 'user',
+      content: `<context_recap>\n${truncateText(_state.summary, MAX_SUMMARY_CHARS)}\n</context_recap>`,
+    });
+    result.push({
+      role: 'assistant',
+      content: 'Bağlam özetini aldım.',
+    });
+  }
+
+  return result;
+}
+
 export function buildContextMessages(
   pendingUserMessage?: string,
   options: { maxTokens?: number; minHotMessages?: number } = {},
 ): Message[] {
   const msgs = _state.messages;
-  const result: Message[] = [];
+  const staticContext = buildStaticContextMessages();
+  const result: Message[] = [...staticContext];
   const budget = options.maxTokens ?? DEFAULT_MODEL_CONTEXT_BUDGET_TOKENS;
   const minHot = Math.max(options.minHotMessages ?? MIN_ALWAYS_HOT_MESSAGES, MIN_ALWAYS_HOT_MESSAGES);
-  const pushIfFits = (message: Message, force = false): boolean => {
-    const compacted = compactContextMessage(message);
-    if (!force && estimateMessagesTokens([...result, compacted]) > budget) return false;
-    result.push(compacted);
-    return true;
-  };
 
-  // Özet varsa başa "system recap" olarak ekle
-  if (_state.summary) {
-    pushIfFits({
-      role: 'user',
-      content: `[CONTEXT RECAP — önceki konuşma özeti]\n${truncateText(_state.summary, MAX_SUMMARY_CHARS)}`,
-    }, true);
-    pushIfFits({
-      role: 'assistant',
-      content: 'Tamam, önceki konuşmamızın bağlamını aldım. Devam edelim.',
-    }, true);
-  }
-
-  // En az son 5 mesaj her zaman korunur. Daha eski mesajlar bütçeye sığdığı kadar eklenir.
+  // 4. CONVERSATION HISTORY (Bottom - Dynamic)
   const hotStart = Math.max(0, msgs.length - minHot);
   const older = msgs.slice(0, hotStart);
   const hot = msgs.slice(hotStart);
 
+  // Eski mesajları bütçeye sığdır — EN YENİDEN ESKİYE iterasyon
+  // Böylece bütçe dolunca en ESKİ mesajlar düşer, en yeniler kalır
+  const fittingOlder: Message[] = [];
+  const hotCompacted = hot.map(compactContextMessage);
+  const hotTokens = estimateMessagesTokens(hotCompacted);
+  const staticTokens = estimateMessagesTokens(result);
+  let olderTokens = 0;
+
   for (let i = older.length - 1; i >= 0; i--) {
-    const candidate = [compactContextMessage(older[i]), ...result.slice(_state.summary ? 2 : 0), ...hot.map(compactContextMessage)];
-    const withRecap = _state.summary ? result.slice(0, 2).concat(candidate) : candidate;
-    if (estimateMessagesTokens(withRecap) <= budget) {
-      result.splice(_state.summary ? 2 : 0, 0, compactContextMessage(older[i]));
-    } else {
-      break;
-    }
+    const compacted = compactContextMessage(older[i]);
+    const msgTokens = estimateMessagesTokens([compacted]);
+    if (staticTokens + olderTokens + msgTokens + hotTokens > budget) break;
+    fittingOlder.unshift(compacted); // unshift → sırayı korur (eski → yeni)
+    olderTokens += msgTokens;
   }
 
-  for (const msg of hot) {
-    pushIfFits(msg, true);
+  // Eski mesajları doğru sırada ekle
+  for (const msg of fittingOlder) {
+    result.push(msg);
   }
 
+  // Son (hot) mesajları ekle — bunlar her zaman eklenir
+  for (const msg of hotCompacted) {
+    result.push(msg);
+  }
+
+  // Kullanıcının yeni mesajı
   if (pendingUserMessage) {
-    pushIfFits({ role: 'user', content: pendingUserMessage }, true);
+    result.push({ role: 'user', content: `<current_task>\n${pendingUserMessage}\n</current_task>` });
   }
 
   return result;
@@ -209,12 +267,8 @@ export async function hydrateSession(
   _state.messages = [...messages];
   _state.flushedCount = 0;
   _state.compressCount = 0;
-  if (!options.preserveSummary) {
-    _state.summary = '';
-  }
-  if (options.workDir) {
-    _state.workDir = options.workDir;
-  }
+  if (!options.preserveSummary) _state.summary = '';
+  if (options.workDir) _state.workDir = options.workDir;
   _writeWarmBuffer();
   await _writeRedis().catch(() => {});
 }
@@ -224,6 +278,8 @@ export async function resetSession(workDir = process.cwd()): Promise<void> {
     sessionId: Date.now().toString(36),
     messages: [],
     summary: '',
+    pinnedContext: [],
+    architectureFiles: [],
     workDir,
     flushedCount: 0,
     compressCount: 0,
@@ -232,21 +288,29 @@ export async function resetSession(workDir = process.cwd()): Promise<void> {
   await _writeRedis().catch(() => {});
 }
 
-// ─── WorkDir yönetimi ─────────────────────────────────────────────────────────
+export function addPinnedMessage(text: string): void {
+  if (!_state.pinnedContext) _state.pinnedContext = [];
+  if (!_state.pinnedContext.includes(text)) {
+    _state.pinnedContext.push(text);
+    _writeWarmBuffer();
+  }
+}
+
+export function clearPinnedMessages(): void {
+  _state.pinnedContext = [];
+  _writeWarmBuffer();
+}
 
 export function setWorkDir(dir: string): void {
   _state.workDir = dir;
   _writeWarmBuffer();
-
-  // Eğer hafızada özet yoksa, dizindeki .deha_summary.md'yi yüklemeyi dene
   if (!_state.summary && dir && fs.existsSync(dir)) {
     try {
       const summaryPath = path.join(dir, '.deha_summary.md');
       if (fs.existsSync(summaryPath)) {
-        const content = fs.readFileSync(summaryPath, 'utf-8');
-        _state.summary = content.replace(/^# DEHA — Proje Özeti\n\n> Son Güncelleme: .*\n\n/, '');
+        _state.summary = fs.readFileSync(summaryPath, 'utf-8').replace(/^# DEHA — Proje Özeti\n\n> Son Güncelleme: .*\n\n/, '');
       }
-    } catch { /* sessiz geç */ }
+    } catch { }
   }
 }
 
@@ -254,74 +318,40 @@ export function getWorkDir(): string {
   return _state.workDir;
 }
 
-/** Kullanıcı mesajından dizin yolu tespit et (örn. "C:\Users\..." veya "aimhack klasörü") */
-export function detectWorkDir(message: string): string | null {
-  const currentDir = _state.workDir;
-  const lowered = message.toLowerCase();
-
-  // 1. Windows absolute path: C:\... veya C:/...
-  const winMatch = message.match(/\b([A-Za-z]:[\\\/][^\s,'"]+)/);
-  if (winMatch) {
-    const candidate = winMatch[1].replace(/[\\\/]+$/, '');
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-      return candidate;
-    }
-  }
-
-  // 2. Klasör ismiyle geçiş (örn: "aimhack klasöründe çalışalım")
-  // Mesaj içindeki kelimeleri ayırıp mevcut dizinde böyle bir klasör var mı bakıyoruz
-  const words = message.split(/\s+/);
-  for (const word of words) {
-    const cleaned = word.replace(/['".,]/g, '');
-    if (!cleaned || cleaned.length < 3) continue;
-    
-    const candidate = path.resolve(currentDir, cleaned);
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-      // Sadece "klasör", "dizin", "project", "folder" kelimeleri yanındaysa veya direkt isimse
-      if (lowered.includes('klasör') || lowered.includes('dizin') || lowered.includes('project') || words.length < 5) {
-        return candidate;
-      }
-    }
-  }
-
-  // 3. Unix absolute path: /home/... or /Users/...
-  const unixMatch = message.match(/\b(\/[^\s,'"]+)/);
-  if (unixMatch) {
-    const candidate = unixMatch[1].replace(/\/+$/, '');
-    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-      return candidate;
-    }
-  }
-  return null;
+export function getContextStats(maxContextTokens: number): {
+  messages: number;
+  tokens: number;
+  usagePercent: number;
+  workDir: string;
+  compressCount: number;
+} {
+  const total = estimateMessagesTokens(_state.messages as any) + estimateTokens(_state.summary);
+  return {
+    messages: _state.messages.length,
+    tokens: total,
+    usagePercent: (total / maxContextTokens) * 100,
+    workDir: _state.workDir,
+    compressCount: _state.compressCount,
+  };
 }
 
-// ─── Context Compression ─────────────────────────────────────────────────────
+export function detectWorkDir(message: string): string | null {
+  const match = message.match(/SET_WORKDIR:\s*([\S]+)/i);
+  return match ? match[1] : null;
+}
 
-/**
- * Context sınıra yaklaştıysa otomatik compress yapar.
- * @returns compress yapıldıysa true
- */
 export async function autoCompress(
   summarizeFn: (messages: Message[]) => Promise<string>,
   maxContextTokens: number,
   compressThreshold: number,
   minHotMessages: number,
 ): Promise<boolean> {
-  const totalTokens = estimateMessagesTokens(_state.messages);
+  const totalTokens = estimateMessagesTokens(_state.messages as any);
   const summaryTokens = estimateTokens(_state.summary);
-  const currentUsage = totalTokens + summaryTokens;
-  const threshold = maxContextTokens * compressThreshold;
-
-  if (currentUsage < threshold) return false;
-
-  // En az minHotMessages mesaj korunmalı, gerisi özetlenecek
+  if (totalTokens + summaryTokens < maxContextTokens * compressThreshold) return false;
   return summarizeOld(summarizeFn, minHotMessages);
 }
 
-/**
- * Eski mesajları AI ile özetler.
- * Son hotCount mesajı özetlemez, bunlar bağlamda tam kalır.
- */
 export async function summarizeOld(
   summarizeFn: (messages: Message[]) => Promise<string>,
   hotCount?: number,
@@ -329,32 +359,20 @@ export async function summarizeOld(
   const minHot = Math.max(hotCount ?? 10, MIN_ALWAYS_HOT_MESSAGES);
   const msgs = _state.messages;
   if (msgs.length <= minHot) return false;
-
   const toSummarize = msgs.slice(0, -minHot);
-  if (toSummarize.length < 4) return false; // özetlenecek kadar yok
+  if (toSummarize.length < 4) return false;
 
   try {
     const newSummary = await summarizeFn(toSummarize);
+    const stickyContext = `[STICKY CONTEXT]\n- ACTIVE WORKDIR: ${_state.workDir}\n- SUMMARY VERSION: ${_state.compressCount + 1}\n\n`;
+    _state.summary = _state.summary 
+      ? truncateText(`${stickyContext}${_state.summary}\n\n---\n\n[Sonraki Bölüm Özeti]\n${newSummary}`, MAX_SUMMARY_CHARS)
+      : truncateText(`${stickyContext}${newSummary}`, MAX_SUMMARY_CHARS);
 
-    // Bağlam Çivisi (Context Anchor): Aktif dizin ve kritik bilgileri koru
-    const stickyContext = `[STICKY CONTEXT]\n- ACTIVE WORKDIR: ${_state.workDir}\n- SESSION ID: ${_state.sessionId}\n- SUMMARY VERSION: ${_state.compressCount + 1}\n\n`;
-
-    // Birikimli özet: eski özet + yeni özet
-    if (_state.summary) {
-      _state.summary = truncateText(`${stickyContext}${_state.summary}\n\n---\n\n[Sonraki Bölüm Özeti]\n${newSummary}`, MAX_SUMMARY_CHARS);
-    } else {
-      _state.summary = truncateText(`${stickyContext}${newSummary}`, MAX_SUMMARY_CHARS);
-    }
-
-    // Özeti projenin içine de kaydet (Persistence)
     if (_state.workDir && fs.existsSync(_state.workDir)) {
-      try {
-        const summaryPath = path.join(_state.workDir, '.deha_summary.md');
-        fs.writeFileSync(summaryPath, `# DEHA — Proje Özeti\n\n> Son Güncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
-      } catch { /* sessiz geç */ }
+      fs.writeFileSync(path.join(_state.workDir, '.deha_summary.md'), `# DEHA — Proje Özeti\n\n> Son Güncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
     }
 
-    // Özetlenen mesajları memory'den çıkar, sadece hot window'u tut
     _state.messages = msgs.slice(-minHot);
     _state.compressCount++;
     _writeWarmBuffer();
@@ -364,120 +382,76 @@ export async function summarizeOld(
   }
 }
 
-/**
- * Mevcut context durumu hakkında bilgi döner.
- */
-export function getContextStats(maxContextTokens: number): {
-  messages: number;
-  summaryTokens: number;
-  messagesTokens: number;
-  totalTokens: number;
-  usagePercent: number;
-  hasSummary: boolean;
-  compressCount: number;
-  workDir: string;
-} {
-  const summaryTokens = estimateTokens(_state.summary);
-  const messagesTokens = estimateMessagesTokens(_state.messages);
-  const totalTokens = summaryTokens + messagesTokens;
-  return {
-    messages: _state.messages.length,
-    summaryTokens,
-    messagesTokens,
-    totalTokens,
-    usagePercent: maxContextTokens > 0 ? (totalTokens / maxContextTokens) * 100 : 0,
-    hasSummary: !!_state.summary,
-    compressCount: _state.compressCount,
-    workDir: _state.workDir,
-  };
-}
-
-// ─── Çıkışta flush ────────────────────────────────────────────────────────────
-
-/** /exit veya SIGINT'te çağırılır — tüm kalan mesajları cold storage'a yazar */
-
 export async function flushOnExit(): Promise<void> {
-  // Önce Redis state'i güncelle (beklenmeyen async yazmaları tamamla)
   const redis = await getRedis();
-  if (redis) {
-    await redis.set('deha:session:latest', JSON.stringify(_state)).catch(() => {});
-  }
-
+  if (redis) await redis.set('deha:session:latest', JSON.stringify(_state)).catch(() => {});
   await _flushCold(true);
-
-  // Redis key'i temizle ve bağlantıyı kapat
   if (redis) {
     await redis.del('deha:session:latest').catch(() => {});
     await redis.quit().catch(() => {});
   }
-
-  // Warm buffer'ı sil
-  try { fs.unlinkSync(SESSION_BUFFER_FILE); } catch { /* yok olabilir */ }
+  try { fs.unlinkSync(SESSION_BUFFER_FILE); } catch { }
 }
-/** Aktif session stats (eski uyumluluk) */
-export function getSessionStats(): { messages: number; summary: boolean; workDir: string } {
-  return {
-    messages: _state.messages.length,
-    summary: !!_state.summary,
-    workDir: _state.workDir,
-  };
-}
-
-// ─── Özel yardımcılar ────────────────────────────────────────────────────────
 
 function _writeWarmBuffer(): void {
   try {
     if (!fs.existsSync(SESSION_BUFFER_DIR)) fs.mkdirSync(SESSION_BUFFER_DIR, { recursive: true });
     fs.writeFileSync(SESSION_BUFFER_FILE, JSON.stringify(_state), 'utf-8');
-  } catch { /* disk hatası — sessizce geç */ }
+  } catch { }
 }
 
 async function _writeRedis(): Promise<void> {
   const redis = await getRedis();
-  if (!redis) return;
-  await redis.set('deha:session:latest', JSON.stringify(_state));
+  if (redis) await redis.set('deha:session:latest', JSON.stringify(_state));
 }
 
 async function _flushCold(isFinal: boolean): Promise<void> {
   const msgs = _state.messages;
   const unflushed = msgs.slice(_state.flushedCount);
   if (!unflushed.length && !isFinal) return;
-
   try {
-    if (!fs.existsSync(COLD_STORAGE_DIR)) {
-      fs.mkdirSync(COLD_STORAGE_DIR, { recursive: true });
-    }
-
-    const date = new Date().toISOString().slice(0, 10);
-    const file = path.join(COLD_STORAGE_DIR, `${date}-${_state.sessionId}.json`);
-
-    const record = {
-      sessionId: _state.sessionId,
-      workDir: _state.workDir,
-      summary: _state.summary,
-      messages: msgs,
-      flushedAt: new Date().toISOString(),
-    };
-
-    fs.writeFileSync(file, JSON.stringify(record, null, 2), 'utf-8');
+    if (!fs.existsSync(COLD_STORAGE_DIR)) fs.mkdirSync(COLD_STORAGE_DIR, { recursive: true });
+    const file = path.join(COLD_STORAGE_DIR, `${new Date().toISOString().slice(0, 10)}-${_state.sessionId}.json`);
+    fs.writeFileSync(file, JSON.stringify({ ..._state, flushedAt: new Date().toISOString() }, null, 2), 'utf-8');
     _state.flushedCount = msgs.length;
-  } catch { /* disk hatası */ }
+  } catch { }
 }
 
 function compactContextMessage(message: Message): Message {
-  return {
-    ...message,
-    content: truncateText(message.content, MAX_CONTEXT_MESSAGE_CHARS),
-  };
+  const content = message.content || '';
+  if (content.length <= MAX_CONTEXT_MESSAGE_CHARS) return message;
+
+  // Tool mesajları: hata mesajlarını koru, akıllı kırpma yap
+  if (message.role === 'tool') {
+    return { ...message, content: compactToolContent(content, MAX_CONTEXT_MESSAGE_CHARS) };
+  }
+
+  return { ...message, content: truncateText(content, MAX_CONTEXT_MESSAGE_CHARS) };
+}
+
+/**
+ * Tool sonuçlarını akıllıca kırpar:
+ * - Hata mesajlarını ASLA kırpma
+ * - JSON yanıtlarında anahtarları koru
+ * - Dosya okumalarında head + tail tut
+ */
+function compactToolContent(content: string, maxChars: number): string {
+  // Hata mesajlarını olduğu gibi bırak (genelde kısadır)
+  const lowerContent = content.toLowerCase();
+  if (lowerContent.includes('error') || lowerContent.includes('hata') || lowerContent.includes('failed') || lowerContent.includes('exception')) {
+    // Hata mesajı bile çok uzunsa, yine de biraz kırp ama daha fazla tut
+    if (content.length <= maxChars * 1.5) return content;
+    return truncateText(content, Math.floor(maxChars * 1.5));
+  }
+
+  return truncateText(content, maxChars);
 }
 
 function truncateText(text: string, maxChars: number): string {
   if (!text || text.length <= maxChars) return text;
-  const head = Math.floor(maxChars * 0.65);
-  const tail = Math.max(0, maxChars - head - 180);
-  return [
-    text.slice(0, head),
-    `\n\n[... DEHA context compression: ${text.length - head - tail} karakter kırpıldı ...]\n\n`,
-    tail > 0 ? text.slice(-tail) : '',
-  ].join('');
+  const placeholder = `\n\n[... ${text.length} karakterden ${maxChars} karakter tutuldu ...]\n\n`;
+  const available = maxChars - placeholder.length;
+  const head = Math.floor(available * 0.55);
+  const tail = available - head;
+  return text.slice(0, head) + placeholder + (tail > 0 ? text.slice(-tail) : '');
 }

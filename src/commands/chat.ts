@@ -6,30 +6,43 @@ import { detectIntent, enrichWithSearch } from '../services/intent';
 export function formatResponse(text: string): string {
   let formatted = text;
 
-  // Kod bloklarını renklendir
+  // Kod bloklarını renklendir ve çerçevele
   formatted = formatted.replace(
     /```(\w*)\n([\s\S]*?)```/g,
     (_match, lang, code) => {
-      const header = lang
-        ? chalk.bgGray.white(` ${lang} `) + '\n'
-        : chalk.bgGray.white(' code ') + '\n';
-      return '\n' + header + chalk.cyan(code.trimEnd()) + '\n' + chalk.gray('─'.repeat(50)) + '\n';
+      const cleanCode = code.trimEnd();
+      const lines = cleanCode.split('\n');
+      const width = Math.min(80, Math.max(...lines.map((l: string) => l.length)) + 4);
+      
+      const top = chalk.gray('╭' + '─'.repeat(width - 2) + '╮');
+      const header = lang 
+        ? chalk.gray('│ ') + chalk.bgWhite.black(` ${lang.toUpperCase()} `) + chalk.gray('─'.repeat(width - lang.length - 5) + '┤')
+        : chalk.gray('├' + '─'.repeat(width - 2) + '┤');
+      const bottom = chalk.gray('╰' + '─'.repeat(width - 2) + '╯');
+      
+      const body = lines.map((l: string) => chalk.gray('│ ') + chalk.cyan(l.padEnd(width - 4)) + chalk.gray(' │')).join('\n');
+      
+      return '\n' + top + '\n' + header + '\n' + body + '\n' + bottom + '\n';
     },
   );
 
   // Inline kod
-  formatted = formatted.replace(/`([^`]+)`/g, chalk.bgBlack.yellow(' $1 '));
+  formatted = formatted.replace(/`([^`]+)`/g, chalk.bgGray.yellow(' $1 '));
 
-  // Başlıklar
-  formatted = formatted.replace(/^### (.+)$/gm, chalk.bold.magenta('▸ $1'));
-  formatted = formatted.replace(/^## (.+)$/gm, chalk.bold.cyan('◆ $1'));
-  formatted = formatted.replace(/^# (.+)$/gm, chalk.bold.white('═ $1 ═'));
+  // Başlıklar - Daha modern stiller
+  formatted = formatted.replace(/^### (.+)$/gm, chalk.bold.magenta('● $1'));
+  formatted = formatted.replace(/^## (.+)$/gm, chalk.bold.cyan('❯ $1'));
+  formatted = formatted.replace(/^# (.+)$/gm, (match, p1) => {
+    const title = p1.trim();
+    const line = '═'.repeat(title.length + 4);
+    return chalk.bold.white(`\n${line}\n  ${title}\n${line}`);
+  });
 
   // Bold
-  formatted = formatted.replace(/\*\*(.+?)\*\*/g, chalk.bold('$1'));
+  formatted = formatted.replace(/\*\*(.+?)\*\*/g, chalk.bold.yellow('$1'));
 
   // Liste maddeleri
-  formatted = formatted.replace(/^- (.+)$/gm, chalk.gray('  •') + ' $1');
+  formatted = formatted.replace(/^- (.+)$/gm, chalk.cyan('  •') + ' $1');
 
   return formatted;
 }
