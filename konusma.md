@@ -1275,7 +1275,7 @@ npx vitest run    →  ✅ 233/233 TEST GEÇTİ (20 dosya)
 
 | Adım | Detay |
 |------|-------|
-| SSH bağlantı | `root@84.46.247.137` |
+| SSH bağlantı | `root@[VPS_IP]` |
 | Remote URL | `DEHA-CLI-yerel` → `DEHA-CLI` düzeltildi |
 | Git sync | `git reset --hard origin/main` → `3c7c030` |
 | Build | `npx tsc` ✅ |
@@ -1301,7 +1301,7 @@ VPS: npx vitest run    →  ✅ 250/250 (23 dosya, 4.29s)
 |-------|--------|-------|------|
 | PC | `9c031d1` | ✅ | ✅ 250/250 |
 | GitHub | `9c031d1` | — | — |
-| VPS `84.46.247.137` | `9c031d1` | ✅ | ✅ 250/250 |
+| VPS `[VPS_IP]` | `9c031d1` | ✅ | ✅ 250/250 |
 
 ---
 
