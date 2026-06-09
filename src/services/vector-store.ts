@@ -193,7 +193,7 @@ export function resetVectorStore(): void {
 
 async function tryChromaDB(): Promise<VectorStore | null> {
   try {
-    const url = process.env.CHROMA_URL || 'http://localhost:8000';
+    const url = process.env.CHROMA_URL || 'http://127.0.0.1:8000';
 
     // Port açık mı kontrol et
     const isOpen = await isPortOpen(url);

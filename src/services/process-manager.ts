@@ -61,28 +61,62 @@ function waitPort(port: number, maxMs: number): Promise<boolean> {
 export async function ensureRedis(): Promise<'running' | 'started' | 'unavailable'> {
   if (await isPortOpen(REDIS_PORT)) return 'running';
 
+  const isLinux = process.platform === 'linux';
+  const username = os.userInfo?.()?.username || process.env.USER || 'root';
+
+  // Linux'ta doğrudan kurulu redis-server'ı tercih et (redis-memory-server Linux binary'leri SSL kütüphanesi uyumsuzluğu yaşayabiliyor)
+  if (isLinux) {
+    if (!which('redis-server') && username === 'root') {
+      try {
+        // Colab gibi root yetkisi olan ortamlarda paket yöneticisiyle kurmaya çalış
+        execSync('apt-get update -y && apt-get install -y redis-server', { stdio: 'ignore', timeout: 30000 });
+      } catch {
+        // Hata durumunda sessiz kal, alt adımlarla devam et
+      }
+    }
+
+    if (which('redis-server')) {
+      try {
+        _redisProc = spawn('redis-server', ['--port', String(REDIS_PORT), '--loglevel', 'warning', '--bind', '127.0.0.1'], {
+          stdio: 'ignore',
+        });
+        _redisProc.on('error', () => {});
+
+        const ok = await waitPort(REDIS_PORT, 3000);
+        if (ok) {
+          process.env.REDIS_URL = `redis://127.0.0.1:${REDIS_PORT}`;
+          return 'started';
+        }
+      } catch {
+        // Hata durumunda redis-memory-server fallback'e düş
+      }
+    }
+  }
+
+  // Windows/macOS'ta veya Linux'ta kurulu redis yoksa redis-memory-server'ı dene
   try {
     const { RedisMemoryServer } = await import('redis-memory-server');
     const server = new RedisMemoryServer({
-      instance: { port: REDIS_PORT },
+      instance: { port: REDIS_PORT, ip: '127.0.0.1' },
       binary: { downloadDir: path.join(os.homedir(), '.deha', 'redis-bin') },
     });
     await server.start();
-    process.env.REDIS_URL = `redis://localhost:${REDIS_PORT}`;
+    process.env.REDIS_URL = `redis://127.0.0.1:${REDIS_PORT}`;
 
     process.once('exit', () => server.stop().catch(() => {}));
     return 'started';
   } catch {
+    // redis-memory-server başarısız olduysa ve kurulu redis-server varsa (Windows/macOS fallback)
     if (!which('redis-server')) return 'unavailable';
 
-    _redisProc = spawn('redis-server', ['--port', String(REDIS_PORT), '--loglevel', 'warning'], {
+    _redisProc = spawn('redis-server', ['--port', String(REDIS_PORT), '--loglevel', 'warning', '--bind', '127.0.0.1'], {
       stdio: 'ignore',
     });
     _redisProc.on('error', () => {});
 
     const ok = await waitPort(REDIS_PORT, 3000);
     if (ok) {
-      process.env.REDIS_URL = `redis://localhost:${REDIS_PORT}`;
+      process.env.REDIS_URL = `redis://127.0.0.1:${REDIS_PORT}`;
       return 'started';
     }
     return 'unavailable';
@@ -116,11 +150,11 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
   if (chromaBin) {
     _chromaProc = spawn(
       chromaBin,
-      ['run', '--path', CHROMA_DATA, '--port', String(CHROMA_PORT), '--host', 'localhost'],
+      ['run', '--path', CHROMA_DATA, '--port', String(CHROMA_PORT), '--host', '127.0.0.1'],
       { stdio: 'ignore', env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
     );
   } else {
-    const startScript = `from chromadb.cli.cli import app; import sys; sys.argv=['chroma','run','--path',r'${CHROMA_DATA}','--port','${CHROMA_PORT}','--host','localhost']; app()`;
+    const startScript = `from chromadb.cli.cli import app; import sys; sys.argv=['chroma','run','--path',r'${CHROMA_DATA}','--port','${CHROMA_PORT}','--host','127.0.0.1']; app()`;
     _chromaProc = spawn(
       py,
       ['-c', startScript],
@@ -132,7 +166,7 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
 
   const ok = await waitPort(CHROMA_PORT, 15_000); // VPS'te biraz daha sabırlı olalım
   if (ok) {
-    process.env.CHROMA_URL = `http://localhost:${CHROMA_PORT}`;
+    process.env.CHROMA_URL = `http://127.0.0.1:${CHROMA_PORT}`;
     return 'started';
   }
   return 'unavailable';
