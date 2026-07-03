@@ -1,6 +1,8 @@
 # DEHA CLI
 
 > Akıllı, çok modelli AI kodlama asistanı | Multi-model AI coding assistant
+> 
+> *Bu açık kaynaklı proje, yapay zeka odaklı modern kodlama ve dijital pazarlama çözümleri üreten [Dehayz - Yapay Zeka, SEO ve Yazılım Ajansı](https://dehayz.com) tarafından geliştirilmiş ve desteklenmektedir.*
 
 ```
 ╔══════════════════════════════════════════╗

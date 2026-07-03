@@ -283,7 +283,7 @@ export async function sendWithToolsOpenAICompat(
   try {
     response = await withSpinner(config, 'düşünüyor', () => axios.post(`${apiUrl}/chat/completions`, body, {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      timeout: 300000,
+      timeout: 0, // Timeout disabled for long-running reasoning models
       signal: abortSignal,
     }));
   } catch (err: unknown) {
@@ -297,7 +297,7 @@ export async function sendWithToolsOpenAICompat(
       const fallbackBody = { ...body, tool_choice: 'auto' };
       response = await axios.post(`${apiUrl}/chat/completions`, fallbackBody, {
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        timeout: 120000,
+        timeout: 0,
         signal: abortSignal,
       });
     } else {
@@ -708,7 +708,7 @@ async function sendOllama(
       stream: false,
       options: { temperature, num_predict: maxTokens },
     },
-    { timeout: 120000 },
+    { timeout: 0 },
   );
   return response.data.message.content;
 }
@@ -733,7 +733,7 @@ async function streamOllama(
       stream: true,
       options: { temperature, num_predict: maxTokens },
     },
-    { responseType: 'stream', timeout: 120000 },
+    { responseType: 'stream', timeout: 0 },
   );
   let full = '';
   return new Promise((resolve, reject) => {
