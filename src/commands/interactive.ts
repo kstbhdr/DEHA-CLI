@@ -548,7 +548,7 @@ function resolveAtFiles(message: string): string {
   });
 }
 
-function isVersionQuestion(message: string): boolean { return message.toLowerCase().includes('versiyon') || message.toLowerCase().includes('version'); }
+function isVersionQuestion(message: string): boolean { const msg = message.trim().toLowerCase(); return msg === 'versiyon' || msg === 'version' || msg === 'sürüm'; }
 function normalizeThinkingState(value: string): 'enabled' | 'disabled' | null { const v = value.toLowerCase(); if (['on', 'enable', 'enabled'].includes(v)) return 'enabled'; if (['off', 'disable', 'disabled'].includes(v)) return 'disabled'; return null; }
 function normalizeThinkingEffort(value: string): 'high' | 'max' { return value.toLowerCase() === 'max' ? 'max' : 'high'; }
 
