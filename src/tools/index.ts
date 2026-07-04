@@ -615,9 +615,43 @@ export function isSafeCommand(command: string): { safe: boolean; reason?: string
 async function toolRunShell(inp: ToolInput): Promise<string> {
   if (!inp.command) throw new Error('command gerekli');
 
-  // Güvenlik kısıtlamaları kullanıcı isteği üzerine tamamen kaldırıldı.
-  // İnteraktif prompt'lar Colab gibi ortamlarda sonsuz bekleme (hang) yaptığı için iptal edildi.
-  const cwd = inp.cwd ? path.resolve(inp.cwd) : process.cwd();
+  // Güvenlik kontrolü
+  const check = isSafeCommand(inp.command);
+  if (!check.safe) {
+    if (!autoAllowDangerousCommands) {
+      const inquirer = await import('inquirer').then(m => m.default || m);
+      const { action } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'action',
+          message: chalk.yellow(`\n⚠️ TEHLİKELİ KOMUT TESPİT EDİLDİ:\n`) + 
+                   chalk.white(`   Komut: `) + chalk.cyan(inp.command) + '\n' +
+                   chalk.white(`   Sebep: `) + chalk.red(check.reason) + '\n\n' +
+                   chalk.bold('Bu komutu çalıştırmak istiyor musunuz?'),
+          choices: [
+            { name: '❌ İptal Et (Agent\'a hata dön)', value: 'cancel' },
+            { name: '✅ Sadece bu seferlik izin ver', value: 'once' },
+            { name: '🔥 Bu oturum boyunca HER ŞEYE izin ver (Bir daha sorma)', value: 'always' },
+          ],
+        }
+      ]);
+
+      if (action === 'cancel') {
+        throw new Error(`❌ Kullanıcı güvenlik nedeniyle bu komutu reddetti.\nAgent shell komutları sınırlıdır. Dosya işlemleri için write_file/edit_file/read_file tool'larını kullanın.`);
+      } else if (action === 'always') {
+        autoAllowDangerousCommands = true;
+      }
+    }
+  }
+
+  // Çalışma dizinini proje köküyle sınırla
+  const projectRoot = process.cwd();
+  const cwd = inp.cwd ? path.resolve(inp.cwd) : projectRoot;
+
+  // Proje dışına çıkışı engelle
+  if (!cwd.startsWith(projectRoot)) {
+    throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nProje kökü: ${projectRoot}`);
+  }
 
   const result = execSync(inp.command, {
     cwd,
