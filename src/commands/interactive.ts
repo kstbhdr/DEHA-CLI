@@ -382,6 +382,11 @@ export async function interactive(
         const roleHistory = specializedHistories[activeRole];
         const { PLANNER_PROMPT, JUDGE_PROMPT } = await import('../prompts.config');
         const specializedSystemPrompt = activeRole === 'planner' ? PLANNER_PROMPT : JUDGE_PROMPT;
+
+        const userMsgObj: Message = { role: 'user', content: userMessage };
+        roleHistory.push(userMsgObj);
+        await appendMessage(userMsgObj).catch(() => {});
+
         const abortController = new AbortController();
         activeAbortController = abortController;
         try {
@@ -408,6 +413,11 @@ export async function interactive(
         const minHotMessages = Math.max(config.minHotMessages, 20);
 
 
+
+        const userMsgObj: Message = { role: 'user', content: userMessage };
+        history.push(userMsgObj);
+        await appendMessage(userMsgObj);
+        addMessage(userMsgObj).catch(() => {});
 
         const contextHistory = buildContextMessages(undefined, { maxTokens: contextBudget, minHotMessages });
         const summarizedHistory = summarizeOldToolResults(contextHistory, 25);

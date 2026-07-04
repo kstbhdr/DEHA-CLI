@@ -64,7 +64,7 @@ async function runAgentClaude(
   allTools: typeof DEHA_TOOLS,
   abortSignal?: AbortSignal,
 ): Promise<AgentResult> {
-  const messages: Message[] = [...history, { role: 'user', content: userMessage }];
+  const messages: Message[] = [...history];
   const startIdx = history.length;
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
   const aggressiveAutoContinue = wantsUninterruptedExecution(userMessage);
@@ -206,7 +206,6 @@ async function runAgentOpenAI(
   const messages: OAIMessage[] = [
     { role: 'system', content: config.systemPrompt },
     ...sanitizedHistory,
-    { role: 'user', content: userMessage },
   ];
 
   const maxRounds = config.maxToolRounds || MAX_TOOL_ROUNDS;
