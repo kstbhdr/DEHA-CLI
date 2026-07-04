@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import axios from 'axios';
+import * as http from 'http';
+import * as https from 'https';
 import Anthropic from '@anthropic-ai/sdk';
 import chalk from 'chalk';
 import { DehaConfig, Provider, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
@@ -16,6 +18,40 @@ export interface Message {
 }
 
 export type ToolDefinition = Anthropic.Tool;
+
+const keepAliveAgentHttp = new http.Agent({ keepAlive: true });
+const keepAliveAgentHttps = new https.Agent({ keepAlive: true });
+
+async function postWithRetry(url: string, data: any, config: any, retries = 2): Promise<any> {
+  const mergedConfig = {
+    ...config,
+    httpAgent: keepAliveAgentHttp,
+    httpsAgent: keepAliveAgentHttps,
+  };
+  
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await axios.post(url, data, mergedConfig);
+    } catch (err: any) {
+      const msg = err.message || '';
+      const isNetworkError = msg.includes('socket hang up') || 
+                             msg.includes('ECONNRESET') || 
+                             msg.includes('ETIMEDOUT') || 
+                             msg.includes('timeout') ||
+                             err.code === 'ECONNRESET' ||
+                             err.code === 'ETIMEDOUT';
+      
+      if (isNetworkError && attempt < retries) {
+        if (config.responseType !== 'stream') {
+          // Sleep for 2 seconds before retry
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
+        }
+      }
+      throw err;
+    }
+  }
+}
 
 // ─── Role-based çağrı (Pipeline için) ──────────────────────────────────────
 
@@ -281,7 +317,7 @@ export async function sendWithToolsOpenAICompat(
 
   let response;
   try {
-    response = await withSpinner(config, 'düşünüyor', () => axios.post(`${apiUrl}/chat/completions`, body, {
+    response = await withSpinner(config, 'düşünüyor', () => postWithRetry(`${apiUrl}/chat/completions`, body, {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       timeout: 0, // Timeout disabled for long-running reasoning models
       signal: abortSignal,
@@ -295,7 +331,7 @@ export async function sendWithToolsOpenAICompat(
     });
     if (shouldRetryWithAutoToolChoice(err, toolChoice)) {
       const fallbackBody = { ...body, tool_choice: 'auto' };
-      response = await axios.post(`${apiUrl}/chat/completions`, fallbackBody, {
+      response = await postWithRetry(`${apiUrl}/chat/completions`, fallbackBody, {
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
         timeout: 0,
         signal: abortSignal,
@@ -642,8 +678,9 @@ async function sendOpenAICompat(
     body.provider = { only: [openrouterProvider], allow_fallbacks: false };
   }
   applyOpenAICompatProviderOptions(body, provider, config);
-  const response = await axios.post(`${baseUrl}/chat/completions`, body, {
+  const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    timeout: 0,
   });
   const msg = response.data.choices[0].message as OAIMessage;
   const usage = extractUsageTokens(response.data.usage, msg);
@@ -682,9 +719,10 @@ async function streamOpenAICompat(
     body.provider = { only: [openrouterProvider], allow_fallbacks: false };
   }
   applyOpenAICompatProviderOptions(body, provider, config);
-  const response = await axios.post(`${baseUrl}/chat/completions`, body, {
+  const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     responseType: 'stream',
+    timeout: 0,
   });
   return parseSSEStream(response.data, onChunk, track, onReasoning);
 }
@@ -697,7 +735,7 @@ async function sendOllama(
   maxTokens: number,
   temperature: number,
 ): Promise<string> {
-  const response = await axios.post(
+  const response = await postWithRetry(
     `${host}/api/chat`,
     {
       model,
@@ -722,7 +760,7 @@ async function streamOllama(
   temperature: number,
   onChunk: (chunk: string) => void,
 ): Promise<string> {
-  const response = await axios.post(
+  const response = await postWithRetry(
     `${host}/api/chat`,
     {
       model,
