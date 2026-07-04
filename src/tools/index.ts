@@ -655,7 +655,7 @@ async function toolRunShell(inp: ToolInput): Promise<string> {
 
   const result = execSync(inp.command, {
     cwd,
-    timeout: Math.min(inp.timeout ?? 60, 300) * 1000, // max 300 saniye (5 dk)
+    timeout: Math.min(inp.timeout ?? 60, 86400) * 1000, // max 24 saat (86400 saniye)
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
     maxBuffer: 10 * 1024 * 1024, // 10MB
