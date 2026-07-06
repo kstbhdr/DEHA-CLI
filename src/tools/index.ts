@@ -405,10 +405,10 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
     switch (name) {
       case 'read_file':
       case 'cat':             return toolReadFile(inp);
-      case 'write_file':      return toolWriteFile(inp);
-      case 'edit_file':       return editFile(inp as Parameters<typeof editFile>[0]);
-      case 'insert_lines':    return insertLines(inp as Parameters<typeof insertLines>[0]);
-      case 'delete_lines':    return deleteLines(inp as Parameters<typeof deleteLines>[0]);
+      case 'write_file':
+      case 'edit_file':
+      case 'insert_lines':
+      case 'delete_lines':    return `__ASYNC_TOOL__:${name}`;
       case 'list_dir':
       case 'ls':              return toolListDir(inp);
       case 'search_in_files':
@@ -443,6 +443,18 @@ export async function executeToolAsync(
 ): Promise<string> {
   try {
     switch (name) {
+      case 'write_file':
+        await ensureSafeFileAccess((input as ToolInput).path!, 'write_file');
+        return toolWriteFile(input as ToolInput);
+      case 'edit_file':
+        await ensureSafeFileAccess((input as any).path, 'edit_file');
+        return editFile(input as any);
+      case 'insert_lines':
+        await ensureSafeFileAccess((input as any).path, 'insert_lines');
+        return insertLines(input as any);
+      case 'delete_lines':
+        await ensureSafeFileAccess((input as any).path, 'delete_lines');
+        return deleteLines(input as any);
       case 'run_shell':
         return await toolRunShell(input as ToolInput);
       case 'run_terminal':
@@ -499,7 +511,7 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     crawl_url:       '🕷️ ',
     fetch_url:       '🌐',
     diff_files:      '📊',
-    find_files:      '🔎',
+    find_files:       '🔎',
     git:             '🔀',
   };
   const icon = icons[name] ?? '🔧';
@@ -610,6 +622,50 @@ export function isSafeCommand(command: string): { safe: boolean; reason?: string
   }
 
   return { safe: true };
+}
+
+async function ensureSafeFileAccess(filePath: string, operationName: string): Promise<void> {
+  if (!filePath) return;
+  
+  const SENSITIVE_PATTERNS = [
+    /keystore/i,
+    /\.key$/i,
+    /\.pem$/i,
+    /id_rsa/i,
+    /\.env/i,
+    /credentials/i,
+    /\.jks$/i,
+    /\.p12$/i,
+    /secret/i
+  ];
+  
+  const isSensitive = SENSITIVE_PATTERNS.some(p => p.test(filePath));
+  if (!isSensitive) return;
+  
+  if (!autoAllowDangerousCommands) {
+    const inquirer = await import('inquirer').then(m => m.default || m);
+    const { action } = await inquirer.prompt([
+      {
+        type: 'list',
+        name: 'action',
+        message: chalk.yellow(`\n⚠️ HASSAS DOSYA DEĞİŞİKLİĞİ TESPİT EDİLDİ:\n`) + 
+                 chalk.white(`   Dosya: `) + chalk.cyan(filePath) + '\n' +
+                 chalk.white(`   İşlem: `) + chalk.red(operationName) + '\n\n' +
+                 chalk.bold('Ajan bu dosyanın içeriğini değiştirmek istiyor. İzin veriyor musunuz?'),
+        choices: [
+          { name: '❌ İptal Et (Agent\'a hata dön)', value: 'cancel' },
+          { name: '✅ Sadece bu seferlik izin ver', value: 'once' },
+          { name: '🔥 Bu oturum boyunca HER ŞEYE izin ver (Bir daha sorma)', value: 'always' },
+        ],
+      }
+    ]);
+
+    if (action === 'cancel') {
+      throw new Error(`❌ Kullanıcı güvenlik nedeniyle '${filePath}' dosyasına '${operationName}' işlemini reddetti.`);
+    } else if (action === 'always') {
+      autoAllowDangerousCommands = true;
+    }
+  }
 }
 
 async function toolRunShell(inp: ToolInput): Promise<string> {
