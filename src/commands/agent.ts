@@ -408,13 +408,17 @@ function compactToolResultForModel(toolName: string, result: string): string {
  * "[TOOL: name -> OKUNDU/ÇALIŞTIRILDI]" formatına indirger.
  */
 export function summarizeOldToolResults(history: Message[], keepCount = 10): Message[] {
-  if (history.length <= keepCount) return history;
-  
+  const pairedToolCallIds = collectAssistantToolCallIds(history);
   const result: Message[] = [];
   const keepThreshold = history.length - keepCount;
 
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
+    if (msg.role === 'tool' && (!msg.tool_call_id || !pairedToolCallIds.has(msg.tool_call_id))) {
+      result.push(asPreviousToolResultContext(msg));
+      continue;
+    }
+
     if (i < keepThreshold && msg.role === 'tool') {
        const content = (msg.content || '').trim();
        
@@ -442,6 +446,42 @@ export function summarizeOldToolResults(history: Message[], keepCount = 10): Mes
     }
   }
   return result;
+}
+
+function collectAssistantToolCallIds(history: Message[]): Set<string> {
+  const ids = new Set<string>();
+
+  for (const msg of history) {
+    if (msg.role !== 'assistant' || !Array.isArray(msg.tool_calls)) continue;
+    for (const toolCall of msg.tool_calls) {
+      const id = typeof toolCall?.id === 'string' ? toolCall.id : '';
+      if (id) ids.add(id);
+    }
+  }
+
+  return ids;
+}
+
+function asPreviousToolResultContext(msg: Message): Message {
+  const id = msg.tool_call_id ? ` id=${msg.tool_call_id}` : '';
+  const content = compactPreviousToolContext(msg.content || '');
+  return {
+    role: 'user',
+    content: `<previous_tool_result${id}>\n${content}\n</previous_tool_result>`,
+  };
+}
+
+function compactPreviousToolContext(content: string): string {
+  const trimmed = content.trim();
+  if (trimmed.length <= 2_000) return trimmed;
+
+  return [
+    trimmed.slice(0, 1_200),
+    '',
+    `[... previous tool result truncated: ${trimmed.length} chars total ...]`,
+    '',
+    trimmed.slice(-600),
+  ].join('\n');
 }
 
 
