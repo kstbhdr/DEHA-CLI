@@ -18,6 +18,9 @@ const LEGACY_WRONG_VISION_MODELS = new Set([
   'qwen/qwen3-32b',
 ]);
 
+const DEFAULT_IMAGE_PROVIDER = 'xai';
+const DEFAULT_IMAGE_MODEL = 'grok-imagine-image';
+
 // ─── Rol Konfigürasyonu ─────────────────────────────────────────────────────
 
 export interface RoleConfig {
@@ -78,6 +81,12 @@ export interface DehaConfig {
   visionModel: string;
   visionApiKey?: string;
   visionApiUrl?: string;
+
+  // Image generation
+  imageProvider: string;
+  imageModel: string;
+  imageApiKey?: string;
+  imageApiUrl?: string;
 
   // Pricing per role (USD per million tokens)
   chatInputPrice: number;
@@ -148,6 +157,11 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     visionModel:    normalizeVisionModel(process.env.VISION_MODEL),
     visionApiKey:   process.env.VISION_API_KEY,
     visionApiUrl:   process.env.VISION_API_URL,
+
+    imageProvider: (process.env.IMAGE_PROVIDER || DEFAULT_IMAGE_PROVIDER).trim().toLowerCase(),
+    imageModel:    process.env.IMAGE_MODEL || DEFAULT_IMAGE_MODEL,
+    imageApiKey:   process.env.IMAGE_API_KEY,
+    imageApiUrl:   process.env.IMAGE_API_URL,
 
     chatInputPrice:     safeParseFloat(process.env.CHAT_INPUT_PRICE,     3.00),
     chatOutputPrice:    safeParseFloat(process.env.CHAT_OUTPUT_PRICE,    15.00),

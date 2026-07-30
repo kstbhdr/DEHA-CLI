@@ -132,21 +132,30 @@ async function analyzeWithOpenAICompat(
   opts: VisionOptions,
 ): Promise<string> {
   const provider = opts.provider ?? 'openai';
+  // NOT: `??` yerine `||` — `/model` komutu boş bırakılan alanları da .env'e boş
+  // string ("KEY=") olarak yazıyor, ve boş string `??` için "tanımlı" sayılır,
+  // bu yüzden gerçek default'a (openrouter/openai URL'i vb.) hiç düşmez.
+  //
+  // `config.visionApiKey`/`visionModel`/`visionApiUrl`, `/model`'de en son
+  // seçilen visionProvider için doldurulur — sadece o provider hâlâ etkin
+  // provider ise güvenilir; bir çağrıda `provider` başka bir değere override
+  // edilirse (örn. toolVisionAnalyze(provider:"openai") ama config'te
+  // visionProvider="openrouter" kayıtlı) yanlış key/URL/model gönderilmesin.
   const apiKey =
-    opts.apiKey ??
-    config.visionApiKey ??
-    (provider === 'openrouter' ? config.openrouterApiKey : undefined) ??
-    (provider === 'custom' ? config.customApiKey : undefined) ??
+    opts.apiKey ||
+    (provider === 'openrouter' ? config.openrouterApiKey : undefined) ||
+    (provider === 'custom' ? config.customApiKey : undefined) ||
+    (provider === config.visionProvider ? config.visionApiKey : undefined) ||
     config.openaiApiKey;
   if (!apiKey) throw new Error(`${provider.toUpperCase()} API key missing (or pass apiKey in options)`);
 
-  const model  = opts.model ?? config.visionModel ?? 'gpt-4o';
+  const model  = opts.model || (provider === config.visionProvider ? config.visionModel : undefined) || 'gpt-4o';
   const detail = opts.detail ?? 'auto';
   const baseUrl =
-    opts.apiUrl ??
-    config.visionApiUrl ??
-    (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : undefined) ??
-    (provider === 'custom' ? config.customApiUrl : undefined) ??
+    opts.apiUrl ||
+    (provider === config.visionProvider ? config.visionApiUrl : undefined) ||
+    (provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : undefined) ||
+    (provider === 'custom' ? config.customApiUrl : undefined) ||
     'https://api.openai.com/v1';
 
   const response = await axios.post(

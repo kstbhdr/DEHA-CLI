@@ -283,6 +283,27 @@ export const DEHA_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: 'generate_image',
+    description: 'Generate one or more images from a text prompt (text-to-image). Saves the result to disk and returns the file path(s). Use for illustrations, mockups, icons, or any visual asset the user asks to create.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt:        { type: 'string', description: 'Text description of the image to generate' },
+        n:             { type: 'number', description: 'Number of images to generate (default: 1)' },
+        size:          { type: 'string', description: 'Image size, e.g. "1024x1024" (OpenAI) or a resolution tier like "1K"/"2K" (OpenRouter). NOT supported on xAI — omit it there, xAI rejects this field with a 400 error.' },
+        aspect_ratio:  { type: 'string', description: 'Aspect ratio, e.g. "16:9" (OpenRouter only)' },
+        quality:       { type: 'string', enum: ['auto', 'low', 'medium', 'high'], description: 'Output quality (OpenRouter only)' },
+        output_format: { type: 'string', enum: ['png', 'jpeg', 'webp', 'svg'], description: 'Output file format (OpenRouter only)' },
+        output_path:   { type: 'string', description: 'Explicit file path to save the image (default: ~/.deha/images/)' },
+        provider:      { type: 'string', enum: ['xai', 'openai', 'openrouter', 'custom'], description: 'Image provider (default: config imageProvider)' },
+        model:         { type: 'string', description: 'Model name override, e.g. "google/gemini-2.5-flash-image" (OpenRouter)' },
+        api_key:       { type: 'string', description: 'API key override (uses config key by default)' },
+        api_url:       { type: 'string', description: 'Custom endpoint URL override' },
+      },
+      required: ['prompt'],
+    },
+  },
+  {
     name: 'fetch_url',
     description: 'Send an HTTP request to any URL (GET, POST, PUT, DELETE) with custom headers, body, and timeout. Ideal for testing APIs or checking webhooks.',
     input_schema: {
@@ -422,6 +443,7 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'smoke_test':
       case 'browser_action':
       case 'vision_analyze':
+      case 'generate_image':
       case 'web_search':
       case 'crawl_url':
       case 'run_shell':
@@ -470,6 +492,11 @@ export async function executeToolAsync(
         const { toolVisionAnalyze } = await import('./vision');
         return await toolVisionAnalyze(input as Parameters<typeof toolVisionAnalyze>[0], config);
       }
+      case 'generate_image': {
+        if (!config) return 'generate_image için config gerekli';
+        const { toolGenerateImage } = await import('./image-gen');
+        return await toolGenerateImage(input as Parameters<typeof toolGenerateImage>[0], config);
+      }
       case 'web_search':
         return await toolWebSearch(input as Parameters<typeof toolWebSearch>[0]);
       case 'crawl_url':
@@ -505,6 +532,7 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     smoke_test:      '🧪',
     browser_action:  '🌐',
     vision_analyze:  '👁️ ',
+    generate_image:  '🎨',
     search_in_files: '🔍',
     grep:            '🔍',
     web_search:      '🌍',

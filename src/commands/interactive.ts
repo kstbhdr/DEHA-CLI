@@ -58,7 +58,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/help')}                    Bu yardım mesajını göster
   ${chalk.cyan('/new')}                     Yeni sohbet başlat
   ${chalk.cyan('/clear')}                   Sohbet geçmişini temizle
-  ${chalk.cyan('/model')}                   Model & provider ayarlarını düzenle (Chat/Planner/Coder/Judge/Vision)
+  ${chalk.cyan('/model')}                   Model & provider ayarlarını düzenle (Chat/Planner/Coder/Judge/Vision/Image)
   ${chalk.cyan('/thinking [on|off] [effort]')} DeepSeek thinking mode'u aç/kapat
   ${chalk.cyan('/agent <soru>')}            Araç çağırabilen ajan modu (Claude)
   ${chalk.cyan('/build <görev>')}           Planner/Coder/Judge build akışını çalıştır

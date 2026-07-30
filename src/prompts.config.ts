@@ -280,6 +280,7 @@ WEB & ADVANCED UTILITIES PROTOCOL:
   - Use 'find_files' with glob patterns (e.g., 'src/**/*.ts') to scan directories quickly without recursive list_dir.
   - Use 'diff_files' to check unified differences between two versions of a file.
   - Use 'git' to securely manage git status, logs, diffs, or commits (destructive commands require confirmation).
+  - Use 'generate_image' to create illustrations, mockups, icons, or any visual asset from a text prompt. Saves to disk and returns the file path.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 !! VERIFICATION PROTOCOL — MANDATORY AFTER EVERY CHANGE:

@@ -6,7 +6,7 @@ import { runCommand } from './terminal';
 import { logger } from '../services/logger';
 
 // Playwright lazy import — yüklü değilse kullanıcıya sor
-async function getPlaywright() {
+export async function getPlaywright() {
   try {
     return await import('playwright');
   } catch {

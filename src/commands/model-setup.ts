@@ -62,6 +62,27 @@ function defaultVisionKey(provider: string, config: DehaConfig): string {
   }
 }
 
+function defaultImageModel(provider: string, config: DehaConfig): string {
+  if (config.imageProvider === provider && config.imageModel) return config.imageModel;
+  switch (provider) {
+    case 'xai':        return 'grok-imagine-image';
+    case 'openai':     return 'gpt-image-1';
+    case 'openrouter': return 'google/gemini-2.5-flash-image';
+    default:           return config.imageModel;
+  }
+}
+
+function defaultImageKey(provider: string, config: DehaConfig): string {
+  if (config.imageApiKey) return config.imageApiKey;
+  switch (provider) {
+    case 'xai':        return config.xaiApiKey ?? '';
+    case 'openai':     return config.openaiApiKey ?? '';
+    case 'openrouter': return config.openrouterApiKey ?? '';
+    case 'custom':     return config.customApiKey ?? '';
+    default:           return '';
+  }
+}
+
 // ─── Ana fonksiyon ────────────────────────────────────────────────────────────
 
 export async function modelSetup(config: DehaConfig): Promise<void> {
@@ -275,6 +296,43 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     },
   ]);
 
+  // ── 6. Image Generation ────────────────────────────────────────────────────
+  logger.write('\n' + chalk.bold.hex('#FF69B4')('  ── Görsel Üretimi (Image Generation) ──────'));
+  const image = await inquirer.prompt([
+    {
+      type: 'list',
+      name: 'provider',
+      message: 'Provider:',
+      choices: [
+        { name: 'xAI  (Grok Imagine)', value: 'xai' },
+        { name: 'OpenAI  (gpt-image-1 / DALL-E)', value: 'openai' },
+        { name: 'OpenRouter  (Gemini/Flux/Seedream vb.)', value: 'openrouter' },
+        { name: 'Custom  API', value: 'custom' },
+      ],
+      default: config.imageProvider || 'xai',
+    },
+    {
+      type: 'input',
+      name: 'model',
+      message: 'Model adı:',
+      default: (ans: { provider: string }) => defaultImageModel(ans.provider, config),
+    },
+    {
+      type: 'password',
+      name: 'apiKey',
+      message: 'API Key (boş = global key):',
+      mask: '*',
+      default: (ans: { provider: string }) => defaultImageKey(ans.provider, config),
+    },
+    {
+      type: 'input',
+      name: 'apiUrl',
+      message: 'Custom API URL:',
+      default: config.imageApiUrl || config.customApiUrl,
+      when: (ans: { provider: string }) => ans.provider === 'custom',
+    },
+  ]);
+
   // ── Pipeline max iterations ────────────────────────────────────────────────
   logger.write('\n' + chalk.bold.white('  ── Pipeline Ayarları ──────────────────────'));
   const pipeline = await inquirer.prompt([
@@ -289,6 +347,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   type ChatAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string };
   type RoleAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number };
   type VisionAns  = { provider: string;   model: string; apiKey?: string; apiUrl?: string };
+  type ImageAns   = { provider: string;   model: string; apiKey?: string; apiUrl?: string };
   type PipeAns    = { maxIterations: number };
 
   // ── Config'e uygula ────────────────────────────────────────────────────────
@@ -298,6 +357,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     coder:    coder    as RoleAns,
     judge:    judge    as RoleAns,
     vision:   vision   as VisionAns,
+    image:    image    as ImageAns,
     pipeline: pipeline as PipeAns,
   });
 
@@ -314,6 +374,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   row('Coder',   chalk.bold.green,    config.pipeline.coder.provider,    config.pipeline.coder.model);
   row('Judge',   chalk.bold.red,      config.pipeline.judge.provider,    config.pipeline.judge.model);
   row('Vision',  chalk.bold.magenta,  (vision as VisionAns).provider,    (vision as VisionAns).model);
+  row('Image',   chalk.bold.hex('#FF69B4'), (image as ImageAns).provider, (image as ImageAns).model);
   logger.write('');
 }
 
@@ -327,10 +388,11 @@ function applyToConfig(
     coder:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number };
     judge:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number };
     vision:   { provider: string;   model: string; apiKey?: string; apiUrl?: string };
+    image:    { provider: string;   model: string; apiKey?: string; apiUrl?: string };
     pipeline: { maxIterations: number };
   },
 ): void {
-  const { chat, planner, coder, judge, vision, pipeline } = answers;
+  const { chat, planner, coder, judge, vision, image, pipeline } = answers;
 
   // Chat
   config.provider = chat.provider;
@@ -367,6 +429,12 @@ function applyToConfig(
   config.visionModel    = normalizeVisionModel(vision.model);
   if (vision.apiKey) config.visionApiKey = vision.apiKey;
   if (vision.apiUrl) config.visionApiUrl = vision.apiUrl;
+
+  // Image generation
+  config.imageProvider = image.provider;
+  config.imageModel    = image.model;
+  if (image.apiKey) config.imageApiKey = image.apiKey;
+  if (image.apiUrl) config.imageApiUrl = image.apiUrl;
 
   // Pipeline
   config.pipeline.maxIterations = Math.min(Math.max(Number(pipeline.maxIterations) || 5, 1), 5);
@@ -451,6 +519,10 @@ function persistConfig(config: DehaConfig): void {
     VISION_MODEL: config.visionModel,
     VISION_API_KEY: config.visionApiKey ?? '',
     VISION_API_URL: config.visionApiUrl ?? '',
+    IMAGE_PROVIDER: config.imageProvider,
+    IMAGE_MODEL: config.imageModel,
+    IMAGE_API_KEY: config.imageApiKey ?? '',
+    IMAGE_API_URL: config.imageApiUrl ?? '',
     PIPELINE_MAX_ITERATIONS: String(config.pipeline.maxIterations),
     DEHA_MAX_TOOL_ROUNDS: String(config.maxToolRounds),
   };

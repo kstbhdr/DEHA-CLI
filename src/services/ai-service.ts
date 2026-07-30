@@ -161,14 +161,41 @@ async function withSpinner<T>(
   return fn();
 }
 
-/** Anthropic specific message mapper */
-function toClaudeMessages(messages: Message[]): Anthropic.MessageParam[] {
-   return messages
-    .filter(m => m.role === 'user' || m.role === 'assistant')
-    .map(m => ({
-       role: m.role as 'user' | 'assistant',
-       content: m.content || ''
-    }));
+/**
+ * Anthropic specific message mapper.
+ * When `enableCache` is set, the last content block gets a cache_control
+ * breakpoint so the growing conversation prefix is served from cache on
+ * the next turn instead of being reprocessed at full price.
+ */
+function toClaudeMessages(messages: Message[], enableCache = false): Anthropic.MessageParam[] {
+  const filtered = messages.filter(m => m.role === 'user' || m.role === 'assistant');
+  return filtered.map((m, i) => {
+    const role = m.role as 'user' | 'assistant';
+    if (enableCache && i === filtered.length - 1) {
+      return {
+        role,
+        content: [
+          {
+            type: 'text' as const,
+            text: m.content || '',
+            cache_control: { type: 'ephemeral' as const },
+          },
+        ],
+      };
+    }
+    return { role, content: m.content || '' };
+  });
+}
+
+/** Wraps the system prompt in a cache_control breakpoint (also covers `tools`, which render before `system`). */
+function toClaudeSystem(systemPrompt: string): Anthropic.TextBlockParam[] {
+  return [
+    {
+      type: 'text',
+      text: systemPrompt,
+      cache_control: { type: 'ephemeral' },
+    },
+  ];
 }
 
 export function sanitizeHistoryForOpenAI(messages: Message[]): OAIMessage[] {
@@ -249,10 +276,10 @@ export async function sendWithTools(
   const response = await withSpinner(config, 'düşünüyor', () => client.messages.create({
     model: config.claudeModel,
     max_tokens: config.toolMaxTokens ?? config.maxTokens,
-    system: config.systemPrompt,
+    system: toClaudeSystem(config.systemPrompt),
     tools,
     tool_choice: toolChoice === 'required' ? { type: 'any' } : { type: 'auto' },
-    messages: toClaudeMessages(messages),
+    messages: toClaudeMessages(messages, true),
   }, { signal: abortSignal }));
 
   recordUsage(
@@ -262,6 +289,8 @@ export async function sendWithTools(
     response.usage.input_tokens,
     response.usage.output_tokens,
     config,
+    0,
+    response.usage.cache_read_input_tokens ?? 0,
   );
 
   let text = '';
@@ -281,6 +310,48 @@ export async function sendWithTools(
 
 export type OAIMessage = Record<string, unknown>;
 
+/** OpenRouter forwards `cache_control` straight through to Anthropic's API when the
+ * model is `anthropic/...`, but only if content is sent as a block array — a plain
+ * string body never hits the prompt cache. */
+function isAnthropicViaOpenRouter(provider: Provider, model: string): boolean {
+  // OpenRouter model slugs can carry a leading "~" (their "-latest" alias routing, e.g. "~anthropic/claude-sonnet-latest")
+  return provider === 'openrouter' && model.toLowerCase().replace(/^~/, '').startsWith('anthropic/');
+}
+
+function withCacheBreakpoint(content: unknown): unknown {
+  if (typeof content !== 'string') return content;
+  return [
+    {
+      type: 'text',
+      text: content,
+      cache_control: { type: 'ephemeral' },
+    },
+  ];
+}
+
+/**
+ * Adds Anthropic-style cache_control breakpoints to an OpenAI-compat message array
+ * for OpenRouter requests routed to a Claude model. Two breakpoints: the system
+ * message (also covers `tools`, which render before `system` on Anthropic's side)
+ * and the last message (caches the growing conversation prefix turn over turn).
+ */
+function applyOpenRouterClaudeCache(messages: OAIMessage[]): OAIMessage[] {
+  if (messages.length === 0) return messages;
+  const out = messages.map(m => ({ ...m }));
+
+  const sysIdx = out.findIndex(m => m.role === 'system');
+  if (sysIdx !== -1) {
+    out[sysIdx].content = withCacheBreakpoint(out[sysIdx].content);
+  }
+
+  const lastIdx = out.length - 1;
+  if (lastIdx !== sysIdx) {
+    out[lastIdx].content = withCacheBreakpoint(out[lastIdx].content);
+  }
+
+  return out;
+}
+
 export async function sendWithToolsOpenAICompat(
   messages: OAIMessage[],
   config: DehaConfig,
@@ -295,9 +366,13 @@ export async function sendWithToolsOpenAICompat(
   if (!apiKey) throw new Error(`API key missing (${apiUrl})`);
   const toolMaxTokens = role.maxTokens ?? config.toolMaxTokens ?? config.maxTokens;
 
+  const cacheableMessages = isAnthropicViaOpenRouter(role.provider, role.model as string)
+    ? applyOpenRouterClaudeCache(messages)
+    : messages;
+
   const body: Record<string, unknown> = {
     model: role.model,
-    messages,
+    messages: cacheableMessages,
     tools: toOpenAITools(tools),
     tool_choice: toolChoice === 'required' ? 'required' : 'auto',
     max_tokens: toolMaxTokens,
@@ -615,10 +690,10 @@ async function sendClaude(
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
-    model, max_tokens: maxTokens, system: systemPrompt,
-    messages: toClaudeMessages(messages),
+    model, max_tokens: maxTokens, system: toClaudeSystem(systemPrompt),
+    messages: toClaudeMessages(messages, true),
   });
-  track?.(response.usage.input_tokens, response.usage.output_tokens);
+  track?.(response.usage.input_tokens, response.usage.output_tokens, 0, response.usage.cache_read_input_tokens ?? 0);
   const block = response.content[0];
   if (block.type !== 'text') throw new Error('Unexpected response type');
   return block.text;
@@ -637,8 +712,8 @@ async function streamClaude(
   const client = new Anthropic({ apiKey });
   let full = '';
   const stream = client.messages.stream({
-    model, max_tokens: maxTokens, system: systemPrompt,
-    messages: toClaudeMessages(messages),
+    model, max_tokens: maxTokens, system: toClaudeSystem(systemPrompt),
+    messages: toClaudeMessages(messages, true),
   });
   for await (const event of stream) {
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -647,7 +722,7 @@ async function streamClaude(
     }
   }
   const final = await stream.finalMessage();
-  track?.(final.usage.input_tokens, final.usage.output_tokens);
+  track?.(final.usage.input_tokens, final.usage.output_tokens, 0, final.usage.cache_read_input_tokens ?? 0);
   return full;
 }
 
@@ -665,12 +740,16 @@ async function sendOpenAICompat(
   openrouterProvider?: string,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
+  let oaiMessages: OAIMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...sanitizeHistoryForOpenAI(messages)
+  ];
+  if (isAnthropicViaOpenRouter(provider, model)) {
+    oaiMessages = applyOpenRouterClaudeCache(oaiMessages);
+  }
   const body: Record<string, unknown> = {
     model,
-    messages: [
-        { role: 'system', content: systemPrompt }, 
-        ...sanitizeHistoryForOpenAI(messages)
-    ],
+    messages: oaiMessages,
     max_tokens: maxTokens,
     temperature,
   };
@@ -704,12 +783,16 @@ async function streamOpenAICompat(
   onReasoning?: (chunk: string) => void,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
+  let oaiMessages: OAIMessage[] = [
+      { role: 'system', content: systemPrompt },
+      ...sanitizeHistoryForOpenAI(messages)
+  ];
+  if (isAnthropicViaOpenRouter(provider, model)) {
+    oaiMessages = applyOpenRouterClaudeCache(oaiMessages);
+  }
   const body: Record<string, unknown> = {
     model,
-    messages: [
-        { role: 'system', content: systemPrompt }, 
-        ...sanitizeHistoryForOpenAI(messages)
-    ],
+    messages: oaiMessages,
     max_tokens: maxTokens,
     temperature,
     stream: true,
