@@ -8,6 +8,7 @@ import * as os from 'os';
 import type { Message } from './ai-service';
 import { estimateTokens, estimateMessagesTokens } from './token-counter';
 import { generateRepoMap } from './repo-map';
+import { safeSlice } from './text-utils';
 
 // ─── Sabitler ────────────────────────────────────────────────────────────────
 
@@ -453,5 +454,5 @@ function truncateText(text: string, maxChars: number): string {
   const available = maxChars - placeholder.length;
   const head = Math.floor(available * 0.55);
   const tail = available - head;
-  return text.slice(0, head) + placeholder + (tail > 0 ? text.slice(-tail) : '');
+  return safeSlice(text, 0, head) + placeholder + (tail > 0 ? safeSlice(text, -tail) : '');
 }

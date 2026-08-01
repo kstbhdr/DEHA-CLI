@@ -5,6 +5,7 @@ import { Transform } from 'stream';
 import chalk from 'chalk';
 import { DehaConfig, getProviderLabel } from '../config';
 import { Message, sendMessage } from '../services/ai-service';
+import { safeSlice } from '../services/text-utils';
 import { formatResponse } from './chat';
 import { runAgent, summarizeOldToolResults } from './agent';
 import { mcpManager } from '../mcp/manager';
@@ -473,8 +474,8 @@ async function summarizeForCompression(msgs: Message[], config: DehaConfig, maxC
 
   // Tool mesajlarını akıllıca özetle — sadece ilk 300 char
   const formatMsg = (m: Message, maxLen: number) => {
-    const content = (m.content || '').slice(0, maxLen);
-    if (m.role === 'tool') return `[tool]: ${content.slice(0, 200)}`;
+    const content = safeSlice(m.content || '', 0, maxLen);
+    if (m.role === 'tool') return `[tool]: ${safeSlice(content, 0, 200)}`;
     return `[${m.role}]: ${content}`;
   };
 

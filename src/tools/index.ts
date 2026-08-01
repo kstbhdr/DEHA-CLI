@@ -11,6 +11,7 @@ import { toolBrowserAction } from './browser';
 import { toolWebSearch, toolCrawlUrl } from './search';
 import { editFile, insertLines, deleteLines } from './edit';
 import { logger } from '../services/logger';
+import { safeSlice } from '../services/text-utils';
 // vision tool requires DehaConfig, handled separately in agent.ts
 
 // ─── Tool definitions (Claude API schema) ──────────────────────────────────
@@ -840,7 +841,7 @@ async function toolFetchUrl(inp: { url: string; method?: string; headers?: Recor
     } catch {} // Not JSON, keep as text
     
     if (resBody.length > 50000) {
-      resBody = resBody.slice(0, 50000) + `\n\n[TRUNCATED: Response body exceeded 50KB. Original size: ${resBody.length} bytes]`;
+      resBody = safeSlice(resBody, 0, 50000) + `\n\n[TRUNCATED: Response body exceeded 50KB. Original size: ${resBody.length} bytes]`;
     }
     
     return `HTTP ${res.status} ${res.statusText}\nHeaders: ${JSON.stringify(res.headers.raw())}\n\n${resBody}`;

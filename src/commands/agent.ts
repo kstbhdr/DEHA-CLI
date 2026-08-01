@@ -5,6 +5,7 @@ import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../too
 import { mcpManager } from '../mcp/manager';
 import { getWorkDir } from '../services/session-memory';
 import { logger } from '../services/logger';
+import { safeSlice } from '../services/text-utils';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
@@ -76,13 +77,16 @@ async function runAgentClaude(
   let postToolCompletionRounds = 0;
   let consecutiveToolFailures = 0;
 
+  let lastStopReason: string | null = null;
+
   while (round < maxRounds) {
     round++;
     let roundText = '';
 
-    const { text, toolCalls } = await sendWithTools(messages, config, allTools, (chunk) => {
+    const { text, toolCalls, stopReason } = await sendWithTools(messages, config, allTools, (chunk) => {
       roundText += chunk;
     }, abortSignal, forceToolUse ? 'required' : 'auto');
+    lastStopReason = stopReason;
     const effectiveToolCalls = toolCalls.length > 0
       ? toolCalls
       : parseInlineXmlToolCalls(text, allTools);
@@ -129,6 +133,12 @@ async function runAgentClaude(
         // Tool aktivitesi vardı ama son yanıt silent/boş çıktı — özet iste
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         logger.raw(chalk.dim('[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]\n'));
+      } else {
+        // Ne görünür metin ne tool aktivitesi var — kullanıcıya asla sessiz
+        // dönmeyelim, aksi halde "chat cevap vermiyor" gibi görünür.
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(chalk.red(describeEmptyResponse(lastStopReason)));
+        logger.raw('\n');
       }
       break;
     }
@@ -218,11 +228,13 @@ async function runAgentOpenAI(
   let postToolCompletionRounds = 0;
   let consecutiveToolFailures = 0;
 
+  let lastFinishReason: string | null = null;
+
   while (round < maxRounds) {
     round++;
     let roundText = '';
 
-    const { text, toolCalls, rawAssistantMsg, malformedToolCalls } = await sendWithToolsOpenAICompat(
+    const { text, toolCalls, rawAssistantMsg, malformedToolCalls, finishReason } = await sendWithToolsOpenAICompat(
       messages,
       config,
       allTools,
@@ -232,6 +244,7 @@ async function runAgentOpenAI(
       abortSignal,
       forceToolUse ? 'required' : 'auto',
     );
+    lastFinishReason = finishReason;
     const inlineToolCalls = toolCalls.length > 0 ? [] : parseInlineXmlToolCalls(text, allTools);
     const effectiveToolCalls = toolCalls.length > 0 ? toolCalls : inlineToolCalls;
     let effectiveAssistantMsg = inlineToolCalls.length > 0
@@ -303,14 +316,20 @@ async function runAgentOpenAI(
       } else if (hadToolActivity) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         logger.raw(chalk.dim('[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]\n'));
+      } else {
+        // Ne görünür metin ne tool aktivitesi var — kullanıcıya asla sessiz
+        // dönmeyelim, aksi halde "chat cevap vermiyor" gibi görünür.
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(chalk.red(describeEmptyResponse(lastFinishReason)));
+        logger.raw('\n');
       }
       break;
     }
 
-    const reasoningText = rawAssistantMsg.reasoning_content 
+    const reasoningText = rawAssistantMsg.reasoning_content
       ? chalk.dim(chalk.gray(`\n<think>\n${rawAssistantMsg.reasoning_content}\n</think>\n`))
       : '';
-      
+
     const hasVisibleOutput = (text && !isSilentInterimOutput(text)) || reasoningText;
 
     // Assistant mesajını (tool_calls ile birlikte) geçmişe ekle
@@ -394,11 +413,11 @@ function compactToolResultForModel(toolName: string, result: string): string {
   const omitted = result.length - headChars - tailChars;
 
   return [
-    result.slice(0, headChars),
+    safeSlice(result, 0, headChars),
     '',
     `[DEHA TOOL OUTPUT TRUNCATED: ${toolName} sonucu ${result.length} karakterdi; ${omitted} karakter modele gönderilmedi. Daha spesifik path/pattern ile tekrar çağır.]`,
     '',
-    tailChars > 0 ? result.slice(-tailChars) : '',
+    tailChars > 0 ? safeSlice(result, -tailChars) : '',
   ].join('\n');
 }
 
@@ -431,15 +450,15 @@ export function summarizeOldToolResults(history: Message[], keepCount = 10): Mes
        // Hata mesajlarını asla kırpma
        const lower = content.toLowerCase();
        if (lower.includes('error') || lower.includes('hata') || lower.includes('failed') || lower.includes('exception')) {
-         const summary = content.length <= 1500 
-           ? content 
-           : content.slice(0, 800) + `\n[... ${content.length - 1100} karakter kırpıldı ...]\n` + content.slice(-300);
+         const summary = content.length <= 1500
+           ? content
+           : safeSlice(content, 0, 800) + `\n[... ${content.length - 1100} karakter kırpıldı ...]\n` + safeSlice(content, -300);
          result.push({ ...msg, content: summary });
          continue;
        }
-       
+
        // Büyük sonuçlar: head + tail koru
-       const summary = content.slice(0, 300) + `\n[... tool sonucu kırpıldı: ${content.length} karakter → 450 karakter ...]\n` + content.slice(-150);
+       const summary = safeSlice(content, 0, 300) + `\n[... tool sonucu kırpıldı: ${content.length} karakter → 450 karakter ...]\n` + safeSlice(content, -150);
        result.push({ ...msg, content: summary });
     } else {
        result.push(msg);
@@ -476,11 +495,11 @@ function compactPreviousToolContext(content: string): string {
   if (trimmed.length <= 2_000) return trimmed;
 
   return [
-    trimmed.slice(0, 1_200),
+    safeSlice(trimmed, 0, 1_200),
     '',
     `[... previous tool result truncated: ${trimmed.length} chars total ...]`,
     '',
-    trimmed.slice(-600),
+    safeSlice(trimmed, -600),
   ].join('\n');
 }
 
@@ -850,6 +869,16 @@ function containsInterimLanguage(normalized: string): boolean {
 
 function isSilentInterimOutput(text: string): boolean {
   return looksLikePlanningJson(text.toLowerCase().trim());
+}
+
+/** Model hiç metin/tool_call üretmeden turu bitirdiğinde kullanıcıya gösterilecek teşhis mesajı. */
+function describeEmptyResponse(stopReason: string | null): string {
+  const isTruncated = stopReason === 'max_tokens' || stopReason === 'length';
+  if (isTruncated) {
+    return '[DEHA: Model boş yanıt döndürdü — yanıt token limitine (max_tokens) takılmış olabilir. ' +
+      'DEHA_TOOL_MAX_TOKENS değerini artırmayı veya /clear ile konuşma geçmişini kısaltmayı deneyin.]';
+  }
+  return `[DEHA: Model boş yanıt döndürdü (stop_reason: ${stopReason ?? 'bilinmiyor'}). Tekrar deneyin veya mesajı yeniden ifade edin.]`;
 }
 
 function looksLikePlanningJson(normalized: string): boolean {

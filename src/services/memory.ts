@@ -18,6 +18,7 @@
 
 import * as crypto from 'crypto';
 import axios from 'axios';
+import { safeSlice } from './text-utils';
 import type { Message } from './ai-service';
 import { getVectorStore, StoredMessage } from './vector-store';
 
@@ -173,7 +174,7 @@ export async function getContext(
 
   const contextNote: Message = {
     role: 'user',
-    content: `[RELEVANT PAST CONTEXT]\n${relevant.map(m => `${m.role}: ${m.content.slice(0, 300)}`).join('\n---\n')}`,
+    content: `[RELEVANT PAST CONTEXT]\n${relevant.map(m => `${m.role}: ${safeSlice(m.content, 0, 300)}`).join('\n---\n')}`,
   };
   const contextAck: Message = {
     role: 'assistant',

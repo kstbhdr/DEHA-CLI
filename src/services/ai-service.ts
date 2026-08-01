@@ -8,6 +8,7 @@ import chalk from 'chalk';
 import { DehaConfig, Provider, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
 import { getCached, setCache } from './cache';
+import { sanitizeLoneSurrogates } from './text-utils';
 
 export interface Message {
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -21,6 +22,16 @@ export type ToolDefinition = Anthropic.Tool;
 
 const keepAliveAgentHttp = new http.Agent({ keepAlive: true });
 const keepAliveAgentHttps = new https.Agent({ keepAlive: true });
+
+/**
+ * Long-running reasoning models genuinely need minutes, so we can't use a short
+ * timeout — but `timeout: 0` (fully disabled) means a server that stalls
+ * mid-request (connection stays ESTABLISHED, no bytes, no error) hangs the CLI
+ * forever with no recovery except the user manually hitting Ctrl+C. 15 minutes
+ * is generous enough for any real reasoning response while still guaranteeing
+ * the request eventually fails and the agent loop can report an error.
+ */
+const REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 
 async function postWithRetry(url: string, data: any, config: any, retries = 2): Promise<any> {
   const mergedConfig = {
@@ -171,19 +182,20 @@ function toClaudeMessages(messages: Message[], enableCache = false): Anthropic.M
   const filtered = messages.filter(m => m.role === 'user' || m.role === 'assistant');
   return filtered.map((m, i) => {
     const role = m.role as 'user' | 'assistant';
+    const content = sanitizeLoneSurrogates(m.content || '');
     if (enableCache && i === filtered.length - 1) {
       return {
         role,
         content: [
           {
             type: 'text' as const,
-            text: m.content || '',
+            text: content,
             cache_control: { type: 'ephemeral' as const },
           },
         ],
       };
     }
-    return { role, content: m.content || '' };
+    return { role, content };
   });
 }
 
@@ -192,7 +204,7 @@ function toClaudeSystem(systemPrompt: string): Anthropic.TextBlockParam[] {
   return [
     {
       type: 'text',
-      text: systemPrompt,
+      text: sanitizeLoneSurrogates(systemPrompt),
       cache_control: { type: 'ephemeral' },
     },
   ];
@@ -225,8 +237,8 @@ export function sanitizeHistoryForOpenAI(messages: Message[]): OAIMessage[] {
 
   for (const m of messages) {
     if (m.role === 'assistant') {
-      const msg: OAIMessage = { role: 'assistant', content: m.content || '' };
-      if (m.reasoning_content) msg.reasoning_content = m.reasoning_content;
+      const msg: OAIMessage = { role: 'assistant', content: sanitizeLoneSurrogates(m.content || '') };
+      if (m.reasoning_content) msg.reasoning_content = sanitizeLoneSurrogates(m.reasoning_content);
 
       if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
         const validToolCalls = m.tool_calls.filter((tc: any) => tc?.id && pairedIds.has(tc.id));
@@ -242,13 +254,13 @@ export function sanitizeHistoryForOpenAI(messages: Message[]): OAIMessage[] {
       if (m.tool_call_id && pairedIds.has(m.tool_call_id)) {
         sanitizedMessages.push({
           role: 'tool',
-          content: m.content || '',
+          content: sanitizeLoneSurrogates(m.content || ''),
           tool_call_id: m.tool_call_id,
         });
       }
       // Drop orphaned tool results silently
     } else {
-      sanitizedMessages.push({ role: m.role, content: m.content || '' });
+      sanitizedMessages.push({ role: m.role, content: sanitizeLoneSurrogates(m.content || '') });
     }
   }
 
@@ -262,11 +274,11 @@ export async function sendWithTools(
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
   toolChoice: 'auto' | 'required' = 'auto',
-): Promise<{ text: string; toolCalls: ToolCall[] }> {
+): Promise<{ text: string; toolCalls: ToolCall[]; stopReason: string | null }> {
   if (config.provider !== 'claude') {
     const sanitizedMessages = sanitizeHistoryForOpenAI(messages);
     const r = await sendWithToolsOpenAICompat(sanitizedMessages, config, tools, onChunk, abortSignal, toolChoice);
-    return { text: r.text, toolCalls: r.toolCalls };
+    return { text: r.text, toolCalls: r.toolCalls, stopReason: r.finishReason };
   }
 
   const apiKey = config.anthropicApiKey;
@@ -305,7 +317,7 @@ export async function sendWithTools(
     }
   }
 
-  return { text, toolCalls };
+  return { text, toolCalls, stopReason: response.stop_reason ?? null };
 }
 
 export type OAIMessage = Record<string, unknown>;
@@ -352,6 +364,15 @@ function applyOpenRouterClaudeCache(messages: OAIMessage[]): OAIMessage[] {
   return out;
 }
 
+/** Last-mile safety net before an `OAIMessage[]` becomes a request body — see `sanitizeLoneSurrogates`. */
+function sanitizeOAIMessages(messages: OAIMessage[]): OAIMessage[] {
+  return messages.map((m) => (
+    typeof m.content === 'string'
+      ? { ...m, content: sanitizeLoneSurrogates(m.content) }
+      : m
+  ));
+}
+
 export async function sendWithToolsOpenAICompat(
   messages: OAIMessage[],
   config: DehaConfig,
@@ -359,16 +380,17 @@ export async function sendWithToolsOpenAICompat(
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
   toolChoice: 'auto' | 'required' = 'auto',
-): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage; malformedToolCalls: number }> {
+): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage; malformedToolCalls: number; finishReason: string | null }> {
   const role = roleFromConfig(config);
   const apiKey = resolveApiKey(role, config);
   const apiUrl = resolveApiUrl(role, config);
   if (!apiKey) throw new Error(`API key missing (${apiUrl})`);
   const toolMaxTokens = role.maxTokens ?? config.toolMaxTokens ?? config.maxTokens;
 
+  const sanitizedMessages = sanitizeOAIMessages(messages);
   const cacheableMessages = isAnthropicViaOpenRouter(role.provider, role.model as string)
-    ? applyOpenRouterClaudeCache(messages)
-    : messages;
+    ? applyOpenRouterClaudeCache(sanitizedMessages)
+    : sanitizedMessages;
 
   const body: Record<string, unknown> = {
     model: role.model,
@@ -394,7 +416,7 @@ export async function sendWithToolsOpenAICompat(
   try {
     response = await withSpinner(config, 'düşünüyor', () => postWithRetry(`${apiUrl}/chat/completions`, body, {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      timeout: 0, // Timeout disabled for long-running reasoning models
+      timeout: REQUEST_TIMEOUT_MS,
       signal: abortSignal,
     }));
   } catch (err: unknown) {
@@ -408,7 +430,7 @@ export async function sendWithToolsOpenAICompat(
       const fallbackBody = { ...body, tool_choice: 'auto' };
       response = await postWithRetry(`${apiUrl}/chat/completions`, fallbackBody, {
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        timeout: 0,
+        timeout: REQUEST_TIMEOUT_MS,
         signal: abortSignal,
       });
     } else {
@@ -416,7 +438,9 @@ export async function sendWithToolsOpenAICompat(
     }
   }
 
-  const msg = response.data.choices[0].message as OAIMessage;
+  const choice = response.data.choices[0];
+  const msg = choice.message as OAIMessage;
+  const finishReason: string | null = choice.finish_reason ?? null;
   const agentUsage = extractUsageTokens(response.data.usage, msg);
   if (agentUsage.input > 0 || agentUsage.output > 0) {
     recordUsage(role.provider, role.model, 'agent', agentUsage.input, agentUsage.output, config, agentUsage.reasoning);
@@ -455,6 +479,7 @@ export async function sendWithToolsOpenAICompat(
     toolCalls,
     rawAssistantMsg: sanitizedAssistantMsg,
     malformedToolCalls: Math.max(0, rawToolCalls.length - toolCalls.length),
+    finishReason,
   };
 }
 
@@ -741,7 +766,7 @@ async function sendOpenAICompat(
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   let oaiMessages: OAIMessage[] = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: sanitizeLoneSurrogates(systemPrompt) },
       ...sanitizeHistoryForOpenAI(messages)
   ];
   if (isAnthropicViaOpenRouter(provider, model)) {
@@ -759,7 +784,7 @@ async function sendOpenAICompat(
   applyOpenAICompatProviderOptions(body, provider, config);
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    timeout: 0,
+    timeout: REQUEST_TIMEOUT_MS,
   });
   const msg = response.data.choices[0].message as OAIMessage;
   const usage = extractUsageTokens(response.data.usage, msg);
@@ -784,7 +809,7 @@ async function streamOpenAICompat(
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   let oaiMessages: OAIMessage[] = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: sanitizeLoneSurrogates(systemPrompt) },
       ...sanitizeHistoryForOpenAI(messages)
   ];
   if (isAnthropicViaOpenRouter(provider, model)) {
@@ -805,7 +830,7 @@ async function streamOpenAICompat(
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     responseType: 'stream',
-    timeout: 0,
+    timeout: REQUEST_TIMEOUT_MS,
   });
   return parseSSEStream(response.data, onChunk, track, onReasoning);
 }
@@ -829,7 +854,7 @@ async function sendOllama(
       stream: false,
       options: { temperature, num_predict: maxTokens },
     },
-    { timeout: 0 },
+    { timeout: REQUEST_TIMEOUT_MS },
   );
   return response.data.message.content;
 }
@@ -854,7 +879,7 @@ async function streamOllama(
       stream: true,
       options: { temperature, num_predict: maxTokens },
     },
-    { responseType: 'stream', timeout: 0 },
+    { responseType: 'stream', timeout: REQUEST_TIMEOUT_MS },
   );
   let full = '';
   return new Promise((resolve, reject) => {
