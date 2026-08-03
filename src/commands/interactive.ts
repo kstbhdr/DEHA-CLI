@@ -423,9 +423,15 @@ export async function interactive(
         const contextHistory = buildContextMessages(undefined, { maxTokens: contextBudget, minHotMessages });
         const summarizedHistory = summarizeOldToolResults(contextHistory, 25);
 
-        const agentResult = await runAgent(userMessage, config, summarizedHistory, abortController.signal);
-        history.push(...agentResult.messages);
-        for (const msg of agentResult.messages) { await appendMessage(msg); addMessage(msg).catch(() => {}); }
+        // A crash/kill mid-turn used to lose the entire turn silently (nothing
+        // was persisted until runAgent fully returned) — "devam et" afterwards
+        // had zero memory of a tool call that was in flight. Persist each
+        // message as it's produced instead of batching at the end.
+        await runAgent(userMessage, config, summarizedHistory, abortController.signal, undefined, async (msg) => {
+          history.push(msg);
+          await appendMessage(msg);
+          addMessage(msg).catch(() => {});
+        });
 
         saveConversation(history, config.provider, getActiveModel(config), { conversationId: conversationId ?? undefined });
         const compressed = await autoCompress((msgs) => summarizeForCompression(msgs, config, maxCtxTokens), maxCtxTokens, config.compressThreshold, minHotMessages);

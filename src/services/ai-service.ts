@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import { DehaConfig, Provider, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
 import { getCached, setCache } from './cache';
-import { sanitizeLoneSurrogates } from './text-utils';
+import { sanitizeLoneSurrogates, safeSlice } from './text-utils';
 
 export interface Message {
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -264,10 +264,22 @@ export function sanitizeHistoryForOpenAI(messages: Message[]): OAIMessage[] {
 
       if (m.tool_calls && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
         const validToolCalls = m.tool_calls.filter((tc: any) => tc?.id && pairedIds.has(tc.id));
+        const orphanedToolCalls = m.tool_calls.filter((tc: any) => !(tc?.id && pairedIds.has(tc.id)));
+
         if (validToolCalls.length > 0) {
           msg.tool_calls = validToolCalls;
         }
-        // If no valid tool_calls remain, omit tool_calls entirely → regular assistant message
+
+        // A tool_call with no matching result usually means the process was
+        // killed/interrupted mid-call (crash, Ctrl+C, session restart). Simply
+        // dropping it — the API requires every tool_call to be immediately
+        // followed by its result, so we can't just leave it in — erases the
+        // model's memory that it was doing something. Note it in plain text
+        // instead, so "devam et" resumes with the interrupted intent visible.
+        if (orphanedToolCalls.length > 0) {
+          const note = describeOrphanedToolCalls(orphanedToolCalls);
+          msg.content = msg.content ? `${msg.content as string}\n\n${note}` : note;
+        }
       }
 
       sanitizedMessages.push(msg);
@@ -287,6 +299,24 @@ export function sanitizeHistoryForOpenAI(messages: Message[]): OAIMessage[] {
   }
 
   return sanitizedMessages;
+}
+
+/** Renders orphaned tool_calls (see `sanitizeHistoryForOpenAI`) as a short plain-text note. */
+function describeOrphanedToolCalls(orphaned: Array<Record<string, unknown>>): string {
+  const lines = orphaned.map((tc) => {
+    const fn = tc?.function as { name?: unknown; arguments?: unknown } | undefined;
+    const name = typeof fn?.name === 'string' ? fn.name : 'bilinmeyen_araç';
+    const rawArgs = typeof fn?.arguments === 'string' ? fn.arguments : '';
+    const argsPreview = rawArgs ? safeSlice(rawArgs, 0, 150) : '';
+    return `- ${name}(${argsPreview}${rawArgs.length > 150 ? '…' : ''})`;
+  });
+
+  return [
+    '[SİSTEM NOTU: Önceki turda aşağıdaki araç çağrısı/çağrıları sonucu alınamadan kesildi',
+    '(bağlantı koptu / oturum yeniden başlatıldı). Sonuçları bilinmiyor:',
+    ...lines,
+    'Devam etmeden önce gerekiyorsa mevcut durumu kontrol et veya çağrıyı tekrarla.]',
+  ].join('\n');
 }
 
 export async function sendWithTools(

@@ -25,12 +25,16 @@ export interface AgentResult {
   messages: Message[]; // The complete turn history
 }
 
+/** Turn sırasında üretilen her yeni mesajı ANINDA kalıcılaştırmak için — bkz. runAgent'ın onMessage parametresi. */
+export type OnMessage = (msg: Message) => void | Promise<void>;
+
 export async function runAgent(
   userMessage: string,
   config: DehaConfig,
   history: Message[] = [],
   abortSignal?: AbortSignal,
   customSystemPrompt?: string,
+  onMessage?: OnMessage,
 ): Promise<AgentResult> {
   const mcpTools = mcpManager.getAnthropicTools();
   const allTools = [...DEHA_TOOLS, ...mcpTools];
@@ -44,11 +48,11 @@ export async function runAgent(
 
   // Claude → native tool calling
   if (config.provider === 'claude') {
-    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal);
+    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage);
   }
 
   // OpenAI-uyumlu providerlar (DeepSeek, OpenAI, OpenRouter, xAI, custom)
-  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal);
+  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage);
 }
 
 const MAX_TOOL_ROUNDS = 200;
@@ -64,6 +68,7 @@ async function runAgentClaude(
   history: Message[],
   allTools: typeof DEHA_TOOLS,
   abortSignal?: AbortSignal,
+  onMessage?: OnMessage,
 ): Promise<AgentResult> {
   const messages: Message[] = [...history];
   const startIdx = history.length;
@@ -78,6 +83,15 @@ async function runAgentClaude(
   let consecutiveToolFailures = 0;
 
   let lastStopReason: string | null = null;
+
+  // A process crash/kill mid-turn previously lost the whole turn (nothing was
+  // persisted until the full multi-round loop returned). Persisting each
+  // message as it's produced means a resumed session can at least see what
+  // was attempted instead of the model having zero memory of pending work.
+  const pushMessage = async (msg: Message): Promise<void> => {
+    messages.push(msg);
+    await onMessage?.(msg);
+  };
 
   while (round < maxRounds) {
     round++;
@@ -115,8 +129,8 @@ async function runAgentClaude(
       if (shouldContinue) {
         autoContinueRounds++;
         forceToolUse = true;
-        messages.push({ role: 'assistant', content: text });
-        messages.push({
+        await pushMessage({ role: 'assistant', content: text });
+        await pushMessage({
           role: 'user',
           content: hadToolActivity ? POST_TOOL_CONTINUE_PROMPT : AUTO_CONTINUE_PROMPT,
         });
@@ -191,8 +205,8 @@ async function runAgentClaude(
       consecutiveToolFailures = 0;
     }
 
-    messages.push({ role: 'assistant', content: text || '[tool calls]' });
-    messages.push({
+    await pushMessage({ role: 'assistant', content: text || '[tool calls]' });
+    await pushMessage({
       role: 'user',
       content: toolResultBlocks.join('\n\n') + '\n\nUse these results to continue.' + budgetWarning + errorRecovery,
     });
@@ -209,6 +223,7 @@ async function runAgentOpenAI(
   history: Message[],
   allTools: typeof DEHA_TOOLS,
   abortSignal?: AbortSignal,
+  onMessage?: OnMessage,
 ): Promise<AgentResult> {
   // Geçmiş mesajları OpenAI formatına dönüştür + mutual-pairing ile orphan tool mesajlarını temizle
   const startIdx = history.length;
@@ -229,6 +244,17 @@ async function runAgentOpenAI(
   let consecutiveToolFailures = 0;
 
   let lastFinishReason: string | null = null;
+
+  // A process crash/kill mid-turn previously lost the whole turn (nothing was
+  // persisted until the full multi-round loop returned) — a resumed session
+  // had zero memory of a tool call that was in flight. Persisting each
+  // message immediately means even a partial tool_calls/tool_result set
+  // survives; sanitizeHistoryForOpenAI now turns any leftover orphaned
+  // tool_calls into a visible text note instead of silently dropping them.
+  const pushMessage = async (msg: OAIMessage): Promise<void> => {
+    messages.push(msg);
+    if (onMessage) await onMessage(toHistoryMessage(msg));
+  };
 
   while (round < maxRounds) {
     round++;
@@ -261,7 +287,7 @@ async function runAgentOpenAI(
 
     if (malformedToolCalls > 0 && effectiveToolCalls.length === 0) {
       forceToolUse = true;
-      messages.push({
+      await pushMessage({
         role: 'user',
         content: MALFORMED_TOOL_CALL_PROMPT,
       });
@@ -292,8 +318,8 @@ async function runAgentOpenAI(
       if (shouldContinue) {
         autoContinueRounds++;
         forceToolUse = true;
-        messages.push(effectiveAssistantMsg);
-        messages.push({
+        await pushMessage(effectiveAssistantMsg);
+        await pushMessage({
           role: 'user',
           content: hadToolActivity ? POST_TOOL_CONTINUE_PROMPT : AUTO_CONTINUE_PROMPT,
         });
@@ -333,7 +359,7 @@ async function runAgentOpenAI(
     const hasVisibleOutput = (text && !isSilentInterimOutput(text)) || reasoningText;
 
     // Assistant mesajını (tool_calls ile birlikte) geçmişe ekle
-    messages.push(effectiveAssistantMsg);
+    await pushMessage(effectiveAssistantMsg);
     hadToolActivity = true;
     postToolCompletionRounds = 0;
     autoContinueRounds = 0;
@@ -365,7 +391,7 @@ async function runAgentOpenAI(
       }
 
       // OpenAI tool result format
-      messages.push({
+      await pushMessage({
         role: 'tool',
         tool_call_id: tc.id,
         content: compactedResult,
@@ -379,12 +405,12 @@ async function runAgentOpenAI(
       logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
     }
     if (round === 50) {
-      messages.push({ role: 'user', content: '[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.' });
+      await pushMessage({ role: 'user', content: '[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.' });
     }
 
     // Error recovery injection
     if (consecutiveToolFailures >= 3) {
-      messages.push({ role: 'user', content: ERROR_RECOVERY_PROMPT });
+      await pushMessage({ role: 'user', content: ERROR_RECOVERY_PROMPT });
       consecutiveToolFailures = 0;
     }
   }
@@ -393,15 +419,19 @@ async function runAgentOpenAI(
   const resultHistory: Message[] = messages
     .filter(m => m.role !== 'system')
     .slice(startIdx) // Take only the new messages from this turn
-    .map(m => ({
-      role: m.role as any,
-      content: typeof m.content === 'string' ? m.content : (m.content === null ? '' : String(m.content)),
-      tool_calls: m.tool_calls as any[],
-      tool_call_id: m.tool_call_id as string,
-      reasoning_content: m.reasoning_content as string
-    }));
+    .map(toHistoryMessage);
 
   return { response: finalText, messages: resultHistory };
+}
+
+function toHistoryMessage(m: OAIMessage): Message {
+  return {
+    role: m.role as any,
+    content: typeof m.content === 'string' ? m.content : (m.content === null ? '' : String(m.content)),
+    tool_calls: m.tool_calls as any[],
+    tool_call_id: m.tool_call_id as string,
+    reasoning_content: m.reasoning_content as string,
+  };
 }
 
 function compactToolResultForModel(toolName: string, result: string): string {
