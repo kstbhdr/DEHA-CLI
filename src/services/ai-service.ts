@@ -164,12 +164,34 @@ function toOpenAITools(tools: ToolDefinition[]): Record<string, unknown>[] {
   }));
 }
 
+/**
+ * A long tool-calling round (big accumulated context, a reasoning model, a slow
+ * upstream) can legitimately take minutes with zero output on screen — this was
+ * previously a silent no-op, so a genuinely-working request was indistinguishable
+ * from a hung one. Ora renders an animated spinner so the user always sees DEHA
+ * is still working, not stuck.
+ */
 async function withSpinner<T>(
   _config: DehaConfig,
-  _label: string,
+  label: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return fn();
+  if (!process.stdout.isTTY) return fn();
+
+  const ora = (await import('ora')).default;
+  const startedAt = Date.now();
+  const spinner = ora({ text: label, discardStdin: false }).start();
+  const tick = setInterval(() => {
+    const secs = Math.floor((Date.now() - startedAt) / 1000);
+    spinner.text = `${label} (${secs}s)`;
+  }, 1000);
+
+  try {
+    return await fn();
+  } finally {
+    clearInterval(tick);
+    spinner.stop();
+  }
 }
 
 /**
