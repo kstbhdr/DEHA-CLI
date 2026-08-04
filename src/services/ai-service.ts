@@ -39,19 +39,27 @@ async function postWithRetry(url: string, data: any, config: any, retries = 2): 
     httpAgent: keepAliveAgentHttp,
     httpsAgent: keepAliveAgentHttps,
   };
-  
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       return await axios.post(url, data, mergedConfig);
     } catch (err: any) {
       const msg = err.message || '';
-      const isNetworkError = msg.includes('socket hang up') || 
-                             msg.includes('ECONNRESET') || 
-                             msg.includes('ETIMEDOUT') || 
+      // EPIPE ("write EPIPE") happens when a request is issued on a
+      // keep-alive socket the *server* already closed while it sat idle in
+      // our agent's free pool — very common after a long tool call (e.g. a
+      // multi-minute `sleep` while polling a job) between two API calls. The
+      // write never reaches the server, so retrying is always safe (nothing
+      // was processed), and the fresh attempt gets a new socket.
+      const isNetworkError = msg.includes('socket hang up') ||
+                             msg.includes('ECONNRESET') ||
+                             msg.includes('ETIMEDOUT') ||
+                             msg.includes('EPIPE') ||
                              msg.includes('timeout') ||
                              err.code === 'ECONNRESET' ||
-                             err.code === 'ETIMEDOUT';
-      
+                             err.code === 'ETIMEDOUT' ||
+                             err.code === 'EPIPE';
+
       if (isNetworkError && attempt < retries) {
         if (config.responseType !== 'stream') {
           // Sleep for 2 seconds before retry
