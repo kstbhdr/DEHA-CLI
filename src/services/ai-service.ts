@@ -51,14 +51,22 @@ async function postWithRetry(url: string, data: any, config: any, retries = 2): 
       // multi-minute `sleep` while polling a job) between two API calls. The
       // write never reaches the server, so retrying is always safe (nothing
       // was processed), and the fresh attempt gets a new socket.
+      // ENOTFOUND/EAI_AGAIN are DNS resolution failures — usually a brief
+      // resolver hiccup (EAI_AGAIN literally means "temporary failure, try
+      // again"), not a real "this domain doesn't exist". No request was ever
+      // sent, so retrying is safe here too.
       const isNetworkError = msg.includes('socket hang up') ||
                              msg.includes('ECONNRESET') ||
                              msg.includes('ETIMEDOUT') ||
                              msg.includes('EPIPE') ||
+                             msg.includes('ENOTFOUND') ||
+                             msg.includes('EAI_AGAIN') ||
                              msg.includes('timeout') ||
                              err.code === 'ECONNRESET' ||
                              err.code === 'ETIMEDOUT' ||
-                             err.code === 'EPIPE';
+                             err.code === 'EPIPE' ||
+                             err.code === 'ENOTFOUND' ||
+                             err.code === 'EAI_AGAIN';
 
       if (isNetworkError && attempt < retries) {
         if (config.responseType !== 'stream') {
