@@ -111,11 +111,52 @@ export function loadConversationMessages(id: string): Message[] | null {
       .trim();
 
     if (content || role === 'assistant') {
-       messages.push({ role, content, tool_call_id });
+      if (role === 'tool') {
+        // Markdown round-trip loses the assistant-side tool_calls array (only a
+        // truncated preview text is stored, with no id) — so a resumed
+        // 'tool'-role message can never re-pair with anything. Both agent
+        // loops then discard it as "orphaned": sanitizeHistoryForOpenAI drops
+        // any tool result whose call_id isn't found among live tool_calls,
+        // and toClaudeMessages filters out the 'tool' role entirely. Net
+        // effect: every tool result from a resumed session vanished from
+        // what the model actually sees, while the transcript displayed above
+        // still shows all past commands as attempted. Folding it into a
+        // plain 'user' message (matching the existing <previous_tool_result>
+        // convention already used for old-tool-result summarization) keeps
+        // the actual output intact and immune to the pairing/role filters.
+        const idAttr = tool_call_id ? ` id=${tool_call_id}` : '';
+        messages.push({
+          role: 'user',
+          content: `<previous_tool_result${idAttr}>\n${content}\n</previous_tool_result>`,
+        });
+      } else {
+        messages.push({ role, content, tool_call_id });
+      }
     }
   }
 
-  return messages.length > 0 ? messages : null;
+  return messages.length > 0 ? mergeConsecutiveSameRole(messages) : null;
+}
+
+/**
+ * Folding every 'tool' message into 'user' (above) can leave several
+ * adjacent 'user' entries in a row (one per tool call in a multi-tool
+ * round). The OpenAI-compatible APIs tolerate that fine, but Anthropic's
+ * Messages API requires strict user/assistant alternation and returns a 400
+ * ("roles must alternate") otherwise — so merge same-role neighbors into one
+ * message before this history reaches either provider.
+ */
+function mergeConsecutiveSameRole(messages: Message[]): Message[] {
+  const merged: Message[] = [];
+  for (const msg of messages) {
+    const prev = merged[merged.length - 1];
+    if (prev && prev.role === msg.role && (prev.role === 'user' || prev.role === 'assistant')) {
+      prev.content = `${prev.content || ''}\n\n${msg.content || ''}`;
+    } else {
+      merged.push({ ...msg });
+    }
+  }
+  return merged;
 }
 
 export function searchConversations(query: string): ConversationMeta[] {
