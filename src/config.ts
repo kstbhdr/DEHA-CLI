@@ -31,6 +31,7 @@ export interface RoleConfig {
   maxTokens?: number;
   temperature?: number;
   openrouterProvider?: string;  // OpenRouter sub-provider (e.g. "DeepInfra", "Chutes")
+  openrouterZdr?: boolean;      // true ise yalnız Zero Data Retention provider'lara route eder
 }
 
 // ─── Pipeline Konfigürasyonu ────────────────────────────────────────────────
@@ -75,6 +76,8 @@ export interface DehaConfig {
 
   // OpenRouter sub-provider routing (global default)
   openrouterProvider?: string;
+  // true ise yalnız Zero Data Retention (veri saklamayan) provider'lara route eder
+  openrouterZdr?: boolean;
 
   // Vision
   visionProvider: string;
@@ -152,6 +155,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     customApiUrl: process.env.CUSTOM_API_URL || 'http://localhost:8080/v1',
 
     openrouterProvider: process.env.OPENROUTER_PROVIDER || undefined,
+    openrouterZdr: process.env.OPENROUTER_ZDR === 'true',
 
     visionProvider: normalizeVisionProvider(process.env.VISION_PROVIDER),
     visionModel:    normalizeVisionModel(process.env.VISION_MODEL),

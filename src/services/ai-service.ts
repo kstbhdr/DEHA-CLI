@@ -398,6 +398,31 @@ function isAnthropicViaOpenRouter(provider: Provider, model: string): boolean {
   return provider === 'openrouter' && model.toLowerCase().replace(/^~/, '').startsWith('anthropic/');
 }
 
+/**
+ * Builds the OpenRouter-specific `provider` request field (sub-provider pin +
+ * Zero Data Retention routing). Gated on `provider === 'openrouter'` — these
+ * fields are meaningless to every other OpenAI-compatible API this codebase
+ * talks to (DeepSeek, OpenAI, xAI, custom).
+ * https://openrouter.ai/docs/features/provider-routing — `provider.zdr: true`
+ * restricts routing to endpoints with a zero data retention policy.
+ */
+function buildOpenRouterProviderOptions(
+  provider: Provider,
+  config: DehaConfig,
+  openrouterProvider?: string,
+): Record<string, unknown> | undefined {
+  if (provider !== 'openrouter') return undefined;
+
+  const opts: Record<string, unknown> = {};
+  if (openrouterProvider) {
+    opts.only = [openrouterProvider];
+    opts.allow_fallbacks = false;
+  }
+  if (config.openrouterZdr) opts.zdr = true;
+
+  return Object.keys(opts).length > 0 ? opts : undefined;
+}
+
 function withCacheBreakpoint(content: unknown): unknown {
   if (typeof content !== 'string') return content;
   return [
@@ -469,9 +494,8 @@ export async function sendWithToolsOpenAICompat(
     temperature: config.temperature,
   };
 
-  if (config.openrouterProvider) {
-    body.provider = { only: [config.openrouterProvider], allow_fallbacks: false };
-  }
+  const openrouterOpts = buildOpenRouterProviderOptions(role.provider, config, config.openrouterProvider);
+  if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, role.provider, config);
 
   // DeepSeek non-reasoning models hard-cap at 8192 output tokens
@@ -846,9 +870,8 @@ async function sendOpenAICompat(
     max_tokens: maxTokens,
     temperature,
   };
-  if (openrouterProvider) {
-    body.provider = { only: [openrouterProvider], allow_fallbacks: false };
-  }
+  const openrouterOpts = buildOpenRouterProviderOptions(provider, config, openrouterProvider);
+  if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, provider, config);
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -891,9 +914,8 @@ async function streamOpenAICompat(
     stream: true,
     stream_options: { include_usage: true },
   };
-  if (openrouterProvider) {
-    body.provider = { only: [openrouterProvider], allow_fallbacks: false };
-  }
+  const openrouterOpts = buildOpenRouterProviderOptions(provider, config, openrouterProvider);
+  if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, provider, config);
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },

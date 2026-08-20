@@ -79,7 +79,10 @@ export async function generateImage(
     if (opts.quality) body.quality = opts.quality;
     if (opts.outputFormat) body.output_format = opts.outputFormat;
     const subProvider = opts.openrouterProvider ?? config.openrouterProvider;
-    if (subProvider) body.provider = { only: [subProvider], allow_fallbacks: false };
+    const providerOpts: Record<string, unknown> = {};
+    if (subProvider) { providerOpts.only = [subProvider]; providerOpts.allow_fallbacks = false; }
+    if (config.openrouterZdr) providerOpts.zdr = true;
+    if (Object.keys(providerOpts).length > 0) body.provider = providerOpts;
   } else {
     url = `${baseUrl}/images/generations`;
     // gpt-image-1 always returns base64 and rejects response_format; dall-e-3/2 and xAI accept it.
