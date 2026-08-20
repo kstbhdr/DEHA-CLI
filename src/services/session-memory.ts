@@ -179,7 +179,13 @@ export function buildStaticContextMessages(): Message[] {
   }
 
   // 2. PROJECT STRUCTURE
-  if (_state.workDir) {
+  // Skip when workDir is the user's home directory — it isn't "a project",
+  // it's the whole profile (IDE extension caches, Android AVDs, dotfiles for
+  // every tool installed). Walking it produces a multi-KB dump of unrelated
+  // noise that gets re-sent on every single turn, and combined with the
+  // system prompt's "stay focused on this project" framing, pushes small
+  // local models to ramble about random folder names even for a bare "hi".
+  if (_state.workDir && !isHomeDirectory(_state.workDir)) {
     const repoMap = generateRepoMap(_state.workDir, { maxDepth: 2 });
     if (repoMap) {
       result.push({
@@ -317,6 +323,15 @@ export function setWorkDir(dir: string): void {
 
 export function getWorkDir(): string {
   return _state.workDir;
+}
+
+/** True when `dir` resolves to the OS home directory — see the repo-map skip above. */
+export function isHomeDirectory(dir: string): boolean {
+  try {
+    return path.resolve(dir) === path.resolve(os.homedir());
+  } catch {
+    return false;
+  }
 }
 
 export function getContextStats(maxContextTokens: number): {

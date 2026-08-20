@@ -3,7 +3,7 @@ import { DehaConfig } from '../config';
 import { Message, OAIMessage, ToolCall, sendWithTools, sendWithToolsOpenAICompat, sanitizeHistoryForOpenAI } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
-import { getWorkDir } from '../services/session-memory';
+import { getWorkDir, isHomeDirectory } from '../services/session-memory';
 import { logger } from '../services/logger';
 import { safeSlice } from '../services/text-utils';
 
@@ -11,9 +11,20 @@ import { safeSlice } from '../services/text-utils';
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
   const workDir = getWorkDir();
   const basePrompt = customSystemPrompt ?? config.systemPrompt;
-  const workDirNote = workDir
-    ? `\n\n[PROJECT CONTEXT]\n- ACTIVE WORKING DIRECTORY: ${workDir}\n- CRITICAL RULE: You are currently working in this project. All file operations (read, write, list, search) and shell commands MUST be performed within this directory by default.\n- If the user explicitly asks for another absolute path or says "root dizini", "/root", "VPS root", or similar, use that requested path exactly. In that case, "/root" means the server root user's home directory, NOT the project root.\n- Do NOT look at C:\\Users\\BAHADIR or other parent directories unless the user explicitly asks for a different project/path.\n- FOCUS: Stay within the project context unless the user explicitly names another path. If you need to list files without a specific path, list ${workDir} first.`
-    : '';
+
+  // The home directory isn't "a project" — it's the whole user profile
+  // (IDE caches, dotfiles, unrelated repos side by side). Telling the model
+  // to "stay focused on this project" when workDir === home directory makes
+  // it treat the entire profile as one project and volunteer unsolicited
+  // commentary about random sibling folders even for a plain greeting.
+  const isHome = workDir && isHomeDirectory(workDir);
+
+  const workDirNote = !workDir
+    ? ''
+    : isHome
+      ? `\n\n[PROJECT CONTEXT]\n- CURRENT DIRECTORY: ${workDir} (this is the user's HOME directory, not a specific project)\n- No specific project is selected yet. Do NOT list, scan, or comment on unrelated folders here unless the user explicitly asks about one.\n- If the user's request implies a specific project, ask which one or navigate there first (e.g. via a path they mention). Do not guess.`
+      : `\n\n[PROJECT CONTEXT]\n- ACTIVE WORKING DIRECTORY: ${workDir}\n- CRITICAL RULE: You are currently working in this project. All file operations (read, write, list, search) and shell commands MUST be performed within this directory by default.\n- If the user explicitly asks for another absolute path or says "root dizini", "/root", "VPS root", or similar, use that requested path exactly. In that case, "/root" means the server root user's home directory, NOT the project root.\n- Do NOT look at parent or sibling directories unless the user explicitly asks for a different project/path.\n- FOCUS: Stay within the project context unless the user explicitly names another path. If you need to list files without a specific path, list ${workDir} first.`;
+
   return {
     ...config,
     systemPrompt: basePrompt + workDirNote,
