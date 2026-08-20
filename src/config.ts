@@ -310,9 +310,9 @@ export function resolveApiKey(role: RoleConfig, global: DehaConfig): string | un
 /** Bir RoleConfig için geçerli API URL'ini döner */
 export function resolveApiUrl(role: RoleConfig, global: DehaConfig): string {
   // role-özgü URL varsa onu kullan
-  if (role.apiUrl) return role.apiUrl;
+  if (role.apiUrl) return normalizeApiBaseUrl(role.apiUrl);
   // custom provider için global CUSTOM_API_URL
-  if (role.provider === 'custom') return global.customApiUrl;
+  if (role.provider === 'custom') return normalizeApiBaseUrl(global.customApiUrl);
   // diğer providerlar için sabit URL'ler
   const urls: Partial<Record<Provider, string>> = {
     openai:     'https://api.openai.com/v1',
@@ -321,5 +321,19 @@ export function resolveApiUrl(role: RoleConfig, global: DehaConfig): string {
     xai:        'https://api.x.ai/v1',
     ollama:     global.ollamaHost,
   };
-  return urls[role.provider] ?? global.customApiUrl;
+  return urls[role.provider] ?? normalizeApiBaseUrl(global.customApiUrl);
+}
+
+/**
+ * Every OpenAI-compat call site appends `/chat/completions` itself. For
+ * built-in providers the base URL is a hardcoded constant so this never
+ * matters, but a self-hosted endpoint (LM Studio, llama.cpp server, ...)
+ * is user-typed — pasting the full endpoint including `/chat/completions`
+ * (or a trailing slash) is a very natural mistake, and produced a doubled
+ * path (`/chat/completions/chat/completions`) that the server correctly
+ * rejected with a 404-shaped error nobody could interpret at a glance.
+ * Strip both so either form works.
+ */
+function normalizeApiBaseUrl(url: string): string {
+  return url.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
 }
