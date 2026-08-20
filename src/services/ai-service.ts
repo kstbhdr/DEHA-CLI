@@ -530,8 +530,8 @@ export async function sendWithToolsOpenAICompat(
     }
   }
 
-  const choice = response.data.choices[0];
-  const msg = choice.message as OAIMessage;
+  const choice = extractFirstChoice(`${apiUrl}/chat/completions`, response.data);
+  const msg = choice.message;
   const finishReason: string | null = choice.finish_reason ?? null;
   const agentUsage = extractUsageTokens(response.data.usage, msg);
   if (agentUsage.input > 0 || agentUsage.output > 0) {
@@ -683,6 +683,29 @@ function shouldRetryWithAutoToolChoice(err: unknown, toolChoice: 'auto' | 'requi
     || normalized.includes('required')
     || normalized.includes('tool use')
     || normalized.includes('tool_calls');
+}
+
+/**
+ * Local/self-hosted OpenAI-compatible servers (LM Studio, text-generation-webui,
+ * llama.cpp server, ...) frequently return HTTP 200 with a body that doesn't
+ * match the OpenAI schema — e.g. `{"error": "No models loaded"}`, an empty
+ * object, or (if the base URL is wrong / no route matched) an HTML error page
+ * that still gets parsed as a string. Blindly indexing `.choices[0]` on that
+ * throws a generic "Cannot read properties of undefined (reading '0')" with
+ * no hint of what actually went wrong. Validate the shape and surface the raw
+ * response body instead.
+ */
+function extractFirstChoice(url: string, data: unknown): { message: OAIMessage; finish_reason?: string } {
+  const choices = (data as { choices?: unknown } | null)?.choices;
+  if (Array.isArray(choices) && choices.length > 0 && choices[0] && typeof choices[0] === 'object') {
+    return choices[0] as { message: OAIMessage; finish_reason?: string };
+  }
+
+  const raw = typeof data === 'string' ? data : JSON.stringify(data ?? null);
+  throw new Error(
+    `${url} beklenen OpenAI formatında yanıt vermedi (choices dizisi yok). ` +
+    `Sunucu şunu döndürdü: ${safeSlice(raw, 0, 500)}`,
+  );
 }
 
 function normalizeAxiosError(err: unknown): Error {
@@ -877,7 +900,7 @@ async function sendOpenAICompat(
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     timeout: REQUEST_TIMEOUT_MS,
   });
-  const msg = response.data.choices[0].message as OAIMessage;
+  const msg = extractFirstChoice(`${baseUrl}/chat/completions`, response.data).message;
   const usage = extractUsageTokens(response.data.usage, msg);
   if (usage.input > 0 || usage.output > 0) track?.(usage.input, usage.output, usage.reasoning, usage.cache);
   return typeof msg.content === 'string' ? msg.content : '';
