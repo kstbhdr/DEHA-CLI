@@ -611,8 +611,18 @@ function parseInlineXmlToolCalls(text: string, tools: typeof DEHA_TOOLS): ToolCa
     if (dsmlCalls.length > 0) return dsmlCalls;
   }
 
-  // 3. XML-style: <tool_name>...</tool_name>
   if (!text.includes('<')) return [];
+
+  // 3. Claude-style <invoke name="tool"><parameter name="key">value</parameter></invoke>
+  // Some models (especially local ones fine-tuned/prompted on Claude-style tool-call
+  // examples) emit this literally as plain text instead of using structured
+  // tool_calls — without this, those calls silently never execute.
+  if (text.includes('<invoke')) {
+    const invokeCalls = parseInlineInvokeToolCalls(text, toolNames);
+    if (invokeCalls.length > 0) return invokeCalls;
+  }
+
+  // 4. XML-style: <tool_name>...</tool_name>
 
   const calls: ToolCall[] = [];
 
@@ -667,6 +677,45 @@ function parseInlineMarkdownToolCalls(text: string, toolNames: Set<string>): Too
       const input = JSON.parse(match[2]) as Record<string, unknown>;
       calls.push({ name, input, id: `md_${name}_${calls.length}_${Date.now()}` });
     } catch { /* JSON parse failed, skip */ }
+  }
+
+  return calls.slice(0, 8);
+}
+
+/**
+ * Parse Claude/Anthropic-style inline tool calls:
+ *   <invoke name="read_file">
+ *   <parameter name="path">C:\project\file.ts</parameter>
+ *   <parameter name="start_line">1</parameter>
+ *   </invoke>
+ * Seen from models that were fine-tuned on (or whose system prompt example
+ * shows) Claude-style function-calling XML and reproduce it as literal text
+ * instead of emitting a real tool_calls entry.
+ */
+function parseInlineInvokeToolCalls(text: string, toolNames: Set<string>): ToolCall[] {
+  const calls: ToolCall[] = [];
+
+  const invokePattern = /<invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/invoke>/gi;
+  let invokeMatch: RegExpExecArray | null;
+
+  while ((invokeMatch = invokePattern.exec(text)) !== null) {
+    const name = invokeMatch[1].trim();
+    if (!toolNames.has(name)) continue;
+
+    const body = invokeMatch[2];
+    const input: Record<string, unknown> = {};
+
+    const paramPattern = /<parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/parameter>/gi;
+    let paramMatch: RegExpExecArray | null;
+    while ((paramMatch = paramPattern.exec(body)) !== null) {
+      const key = paramMatch[1].trim();
+      const val = decodeXmlEntities(paramMatch[2].trim());
+      input[key] = coerceInlineXmlValue(val);
+    }
+
+    if (Object.keys(input).length > 0) {
+      calls.push({ name, input, id: `invoke_${name}_${calls.length}_${Date.now()}` });
+    }
   }
 
   return calls.slice(0, 8);
