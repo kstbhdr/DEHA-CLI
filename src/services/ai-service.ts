@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import { DehaConfig, Provider, RoleConfig, resolveApiKey, resolveApiUrl } from '../config';
 import { recordUsage, RoleLabel } from './usage-tracker';
 import { getCached, setCache } from './cache';
-import { sanitizeLoneSurrogates, safeSlice } from './text-utils';
+import { sanitizeLoneSurrogates, safeSlice, safeJsonParse } from './text-utils';
 
 export interface Message {
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -558,7 +558,7 @@ export async function sendWithToolsOpenAICompat(
       }
 
       try {
-        const input = JSON.parse(rawArguments) as Record<string, unknown>;
+        const input = safeJsonParse(rawArguments) as Record<string, unknown>;
         return { name, input, id: tc.id as string };
       } catch {
         return null;

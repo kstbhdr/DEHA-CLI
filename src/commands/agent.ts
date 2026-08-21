@@ -5,7 +5,7 @@ import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../too
 import { mcpManager } from '../mcp/manager';
 import { getWorkDir, isHomeDirectory } from '../services/session-memory';
 import { logger } from '../services/logger';
-import { safeSlice } from '../services/text-utils';
+import { safeSlice, safeJsonParse } from '../services/text-utils';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
@@ -661,7 +661,7 @@ function parseInlineMarkdownToolCalls(text: string, toolNames: Set<string>): Too
     const name = match[1].trim();
     if (!toolNames.has(name)) continue;
     try {
-      const input = JSON.parse(match[2]) as Record<string, unknown>;
+      const input = safeJsonParse(match[2]) as Record<string, unknown>;
       calls.push({ name, input, id: `md_${name}_${calls.length}_${Date.now()}` });
     } catch { /* JSON parse failed, skip */ }
   }
@@ -674,7 +674,7 @@ function parseInlineMarkdownToolCalls(text: string, toolNames: Set<string>): Too
     const name = match[1].trim();
     if (!toolNames.has(name)) continue;
     try {
-      const input = JSON.parse(match[2]) as Record<string, unknown>;
+      const input = safeJsonParse(match[2]) as Record<string, unknown>;
       calls.push({ name, input, id: `md_${name}_${calls.length}_${Date.now()}` });
     } catch { /* JSON parse failed, skip */ }
   }
@@ -803,7 +803,7 @@ function coerceInlineXmlValue(value: string): unknown {
   const jsonCandidate = extractJsonObject(value) ?? (value.startsWith('[') && value.endsWith(']') ? value : null);
   if (jsonCandidate) {
     try {
-      return JSON.parse(jsonCandidate);
+      return safeJsonParse(jsonCandidate);
     } catch {
       return value;
     }
