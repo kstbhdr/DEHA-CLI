@@ -70,6 +70,26 @@ const MAX_TOOL_ROUNDS = 200;
 const MAX_AUTO_CONTINUE_ROUNDS = 6;
 const MAX_POST_TOOL_COMPLETION_ROUNDS = 8;
 const MAX_TOOL_RESULT_CHARS = 32_000;
+const MAX_INLINE_RETRY_ROUNDS = 2;
+
+/**
+ * Some models (usually local/fine-tuned ones without real function-calling
+ * support) write a tool call as literal text — `[Tool Call: **x**({...})]`,
+ * `<invoke name="x">`, DSML, `**x**({...})` — instead of a structured
+ * tool_calls entry. `parseInlineXmlToolCalls` catches the well-formed cases,
+ * but if the model's output got cut off mid-call (e.g. hit max_tokens while
+ * writing a long shell command), the bracket/JSON is left unbalanced and no
+ * parser can recover it. Left unchecked, that broken fragment gets shown to
+ * the user as if it were the actual answer — this detects the attempt so the
+ * caller can retry instead of displaying raw tool-call syntax as a response.
+ */
+function looksLikeUnexecutedToolCallAttempt(text: string): boolean {
+  if (!text) return false;
+  return /\[Tool\s*Call:/i.test(text) ||
+    /<invoke\s+name=/i.test(text) ||
+    /DSML[^]*?invoke/i.test(text) ||
+    /\*{2}\w+\*{2}\s*\(\s*\{/.test(text);
+}
 
 // ─── Claude agent döngüsü ────────────────────────────────────────────────────
 
@@ -94,6 +114,7 @@ async function runAgentClaude(
   let consecutiveToolFailures = 0;
 
   let lastStopReason: string | null = null;
+  let inlineRetryRounds = 0;
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
   // persisted until the full multi-round loop returned). Persisting each
@@ -117,6 +138,13 @@ async function runAgentClaude(
       : parseInlineXmlToolCalls(text, allTools);
 
     if (effectiveToolCalls.length === 0) {
+      if (looksLikeUnexecutedToolCallAttempt(text) && inlineRetryRounds < MAX_INLINE_RETRY_ROUNDS) {
+        inlineRetryRounds++;
+        forceToolUse = true;
+        await pushMessage({ role: 'assistant', content: text });
+        await pushMessage({ role: 'user', content: MALFORMED_TOOL_CALL_PROMPT });
+        continue;
+      }
       finalText = text;
       const shouldContinue = hadToolActivity
         ? await shouldContinueAfterToolPhase(
@@ -150,7 +178,11 @@ async function runAgentClaude(
         }
         continue;
       }
-      if (text && !isSilentInterimOutput(text)) {
+      if (looksLikeUnexecutedToolCallAttempt(text)) {
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(chalk.red('[DEHA: Model bir araç çağrısını düz metin olarak yazmaya çalıştı ama tamamlayamadı (muhtemelen yanıt token limitine takıldı) — araç gerçekten çalıştırılmadı. İsteği tekrar edin veya daha küçük bir adım isteyin.]'));
+        logger.raw('\n');
+      } else if (text && !isSilentInterimOutput(text)) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         logger.raw(roundText);
         logger.raw('\n');
@@ -255,6 +287,7 @@ async function runAgentOpenAI(
   let consecutiveToolFailures = 0;
 
   let lastFinishReason: string | null = null;
+  let inlineRetryRounds = 0;
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
   // persisted until the full multi-round loop returned) — a resumed session
@@ -305,6 +338,14 @@ async function runAgentOpenAI(
       continue;
     }
 
+    if (effectiveToolCalls.length === 0 && looksLikeUnexecutedToolCallAttempt(text) && inlineRetryRounds < MAX_INLINE_RETRY_ROUNDS) {
+      inlineRetryRounds++;
+      forceToolUse = true;
+      await pushMessage(rawAssistantMsg);
+      await pushMessage({ role: 'user', content: MALFORMED_TOOL_CALL_PROMPT });
+      continue;
+    }
+
     if (effectiveToolCalls.length === 0) {
       finalText = text;
       const shouldContinue = hadToolActivity
@@ -345,7 +386,11 @@ async function runAgentOpenAI(
         
       const hasVisibleOutput = (text && !isSilentInterimOutput(text)) || reasoningText;
 
-      if (hasVisibleOutput) {
+      if (looksLikeUnexecutedToolCallAttempt(text)) {
+        logger.write('\n' + chalk.bold.cyan('DEHA:'));
+        logger.raw(chalk.red('[DEHA: Model bir araç çağrısını düz metin olarak yazmaya çalıştı ama tamamlayamadı (muhtemelen yanıt token limitine takıldı) — araç gerçekten çalıştırılmadı. İsteği tekrar edin veya daha küçük bir adım isteyin.]'));
+        logger.raw('\n');
+      } else if (hasVisibleOutput) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         if (reasoningText) logger.raw(reasoningText);
         if (text && !isSilentInterimOutput(text)) logger.raw(roundText);
