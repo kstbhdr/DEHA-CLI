@@ -98,6 +98,8 @@ export async function callRole(
 
   const openrouterProvider =
     role.openrouterProvider ?? globalConfig.openrouterProvider ?? undefined;
+  const openrouterIgnoreProviders =
+    role.openrouterIgnoreProviders ?? globalConfig.openrouterIgnoreProviders ?? undefined;
 
   const track = (inp: number, out: number, reasoning = 0, cache = 0) =>
     recordUsage(role.provider, role.model, roleLabel, inp, out, globalConfig, reasoning, cache);
@@ -119,8 +121,8 @@ export async function callRole(
     case 'xai':
     case 'custom':
       return onChunk
-        ? streamOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, onChunk, track, openrouterProvider)
-        : sendOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, track, openrouterProvider);
+        ? streamOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, onChunk, track, openrouterProvider, undefined, openrouterIgnoreProviders)
+        : sendOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, track, openrouterProvider, openrouterIgnoreProviders);
 
     default:
       throw new Error(`Unknown provider: ${role.provider}`);
@@ -398,26 +400,40 @@ function isAnthropicViaOpenRouter(provider: Provider, model: string): boolean {
   return provider === 'openrouter' && model.toLowerCase().replace(/^~/, '').startsWith('anthropic/');
 }
 
+function splitProviderList(value?: string): string[] {
+  if (!value) return [];
+  return value.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
 /**
- * Builds the OpenRouter-specific `provider` request field (sub-provider pin +
- * Zero Data Retention routing). Gated on `provider === 'openrouter'` — these
- * fields are meaningless to every other OpenAI-compatible API this codebase
- * talks to (DeepSeek, OpenAI, xAI, custom).
- * https://openrouter.ai/docs/features/provider-routing — `provider.zdr: true`
- * restricts routing to endpoints with a zero data retention policy.
+ * Builds the OpenRouter-specific `provider` request field (sub-provider
+ * whitelist/blacklist + Zero Data Retention routing). Gated on
+ * `provider === 'openrouter'` — these fields are meaningless to every other
+ * OpenAI-compatible API this codebase talks to (DeepSeek, OpenAI, xAI, custom).
+ * https://openrouter.ai/docs/features/provider-routing
+ *   - `only` (whitelist): pins to exactly these sub-providers, disables
+ *     fallback — use when you want ONE known-good provider and nothing else.
+ *   - `ignore` (blacklist): excludes specific bad sub-providers (e.g. one
+ *     that returns malformed/truncated tool-call JSON) while keeping normal
+ *     load-balancing and automatic fallback among the rest.
+ *   - `zdr: true` restricts routing to endpoints with a zero data retention policy.
  */
 function buildOpenRouterProviderOptions(
   provider: Provider,
   config: DehaConfig,
   openrouterProvider?: string,
+  openrouterIgnoreProviders?: string,
 ): Record<string, unknown> | undefined {
   if (provider !== 'openrouter') return undefined;
 
   const opts: Record<string, unknown> = {};
-  if (openrouterProvider) {
-    opts.only = [openrouterProvider];
+  const only = splitProviderList(openrouterProvider);
+  if (only.length > 0) {
+    opts.only = only;
     opts.allow_fallbacks = false;
   }
+  const ignore = splitProviderList(openrouterIgnoreProviders);
+  if (ignore.length > 0) opts.ignore = ignore;
   if (config.openrouterZdr) opts.zdr = true;
 
   return Object.keys(opts).length > 0 ? opts : undefined;
@@ -494,7 +510,7 @@ export async function sendWithToolsOpenAICompat(
     temperature: config.temperature,
   };
 
-  const openrouterOpts = buildOpenRouterProviderOptions(role.provider, config, config.openrouterProvider);
+  const openrouterOpts = buildOpenRouterProviderOptions(role.provider, config, config.openrouterProvider, config.openrouterIgnoreProviders);
   if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, role.provider, config);
 
@@ -878,6 +894,7 @@ async function sendOpenAICompat(
   config: DehaConfig,
   track?: TrackFn,
   openrouterProvider?: string,
+  openrouterIgnoreProviders?: string,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   let oaiMessages: OAIMessage[] = [
@@ -893,7 +910,7 @@ async function sendOpenAICompat(
     max_tokens: maxTokens,
     temperature,
   };
-  const openrouterOpts = buildOpenRouterProviderOptions(provider, config, openrouterProvider);
+  const openrouterOpts = buildOpenRouterProviderOptions(provider, config, openrouterProvider, openrouterIgnoreProviders);
   if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, provider, config);
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
@@ -920,6 +937,7 @@ async function streamOpenAICompat(
   track?: TrackFn,
   openrouterProvider?: string,
   onReasoning?: (chunk: string) => void,
+  openrouterIgnoreProviders?: string,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   let oaiMessages: OAIMessage[] = [
@@ -937,7 +955,7 @@ async function streamOpenAICompat(
     stream: true,
     stream_options: { include_usage: true },
   };
-  const openrouterOpts = buildOpenRouterProviderOptions(provider, config, openrouterProvider);
+  const openrouterOpts = buildOpenRouterProviderOptions(provider, config, openrouterProvider, openrouterIgnoreProviders);
   if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, provider, config);
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {

@@ -30,7 +30,8 @@ export interface RoleConfig {
   apiUrl?: string;      // custom provider için endpoint URL'i
   maxTokens?: number;
   temperature?: number;
-  openrouterProvider?: string;  // OpenRouter sub-provider (e.g. "DeepInfra", "Chutes")
+  openrouterProvider?: string;  // OpenRouter sub-provider whitelist (e.g. "DeepInfra" or "DeepInfra,Chutes") — pins to only these, no fallback
+  openrouterIgnoreProviders?: string;  // OpenRouter sub-provider blacklist (e.g. "DeepInfra,Novita") — excludes these, fallback among the rest still works
   openrouterZdr?: boolean;      // true ise yalnız Zero Data Retention provider'lara route eder
 }
 
@@ -76,6 +77,7 @@ export interface DehaConfig {
 
   // OpenRouter sub-provider routing (global default)
   openrouterProvider?: string;
+  openrouterIgnoreProviders?: string;
   // true ise yalnız Zero Data Retention (veri saklamayan) provider'lara route eder
   openrouterZdr?: boolean;
 
@@ -155,6 +157,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     customApiUrl: process.env.CUSTOM_API_URL || 'http://localhost:8080/v1',
 
     openrouterProvider: process.env.OPENROUTER_PROVIDER || undefined,
+    openrouterIgnoreProviders: process.env.OPENROUTER_IGNORE_PROVIDERS || undefined,
     openrouterZdr: process.env.OPENROUTER_ZDR === 'true',
 
     visionProvider: normalizeVisionProvider(process.env.VISION_PROVIDER),
@@ -207,6 +210,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         maxTokens:          safeParseInt(process.env.PLANNER_MAX_TOKENS,   4096),
         temperature:        safeParseFloat(process.env.PLANNER_TEMPERATURE, 0.3),
         openrouterProvider: process.env.PLANNER_OPENROUTER_PROVIDER || undefined,
+        openrouterIgnoreProviders: process.env.PLANNER_OPENROUTER_IGNORE_PROVIDERS || undefined,
       },
       coder: {
         provider:           ((process.env.CODER_PROVIDER || 'deepseek').toLowerCase() as Provider),
@@ -216,6 +220,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         maxTokens:          safeParseInt(process.env.CODER_MAX_TOKENS,   8192),
         temperature:        safeParseFloat(process.env.CODER_TEMPERATURE, 0.2),
         openrouterProvider: process.env.CODER_OPENROUTER_PROVIDER || undefined,
+        openrouterIgnoreProviders: process.env.CODER_OPENROUTER_IGNORE_PROVIDERS || undefined,
       },
       judge: {
         provider:           ((process.env.JUDGE_PROVIDER || 'xai').toLowerCase() as Provider),
@@ -225,6 +230,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         maxTokens:          safeParseInt(process.env.JUDGE_MAX_TOKENS,   2048),
         temperature:        safeParseFloat(process.env.JUDGE_TEMPERATURE, 0.1),
         openrouterProvider: process.env.JUDGE_OPENROUTER_PROVIDER || undefined,
+        openrouterIgnoreProviders: process.env.JUDGE_OPENROUTER_IGNORE_PROVIDERS || undefined,
       },
       maxIterations: safeParseMaxIterations(process.env.PIPELINE_MAX_ITERATIONS),
     },

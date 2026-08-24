@@ -81,6 +81,9 @@ export async function generateImage(
     const subProvider = opts.openrouterProvider ?? config.openrouterProvider;
     const providerOpts: Record<string, unknown> = {};
     if (subProvider) { providerOpts.only = [subProvider]; providerOpts.allow_fallbacks = false; }
+    if (config.openrouterIgnoreProviders) {
+      providerOpts.ignore = config.openrouterIgnoreProviders.split(',').map((s) => s.trim()).filter(Boolean);
+    }
     if (config.openrouterZdr) providerOpts.zdr = true;
     if (Object.keys(providerOpts).length > 0) body.provider = providerOpts;
   } else {
