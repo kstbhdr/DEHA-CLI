@@ -121,6 +121,20 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
       default: config.customApiUrl,
       when: (ans: { provider: Provider }) => ans.provider === 'custom' || ans.provider === 'ollama',
     },
+    {
+      type: 'input',
+      name: 'openrouterProvider',
+      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik, örn: DeepInfra,Chutes):',
+      default: config.openrouterProvider ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
+    },
+    {
+      type: 'input',
+      name: 'openrouterIgnoreProviders',
+      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut, fallback bozulmaz — örn: DeepInfra,Novita):',
+      default: config.openrouterIgnoreProviders ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
+    },
   ]);
 
   // ── 2. Planner ─────────────────────────────────────────────────────────────
@@ -165,6 +179,20 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
       name: 'temperature',
       message: 'Temperature (0-1):',
       default: config.pipeline.planner.temperature ?? 0.3,
+    },
+    {
+      type: 'input',
+      name: 'openrouterProvider',
+      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik):',
+      default: config.pipeline.planner.openrouterProvider ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
+    },
+    {
+      type: 'input',
+      name: 'openrouterIgnoreProviders',
+      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut):',
+      default: config.pipeline.planner.openrouterIgnoreProviders ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
   ]);
 
@@ -211,6 +239,20 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
       message: 'Temperature (0-1):',
       default: config.pipeline.coder.temperature ?? 0.2,
     },
+    {
+      type: 'input',
+      name: 'openrouterProvider',
+      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik):',
+      default: config.pipeline.coder.openrouterProvider ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
+    },
+    {
+      type: 'input',
+      name: 'openrouterIgnoreProviders',
+      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut):',
+      default: config.pipeline.coder.openrouterIgnoreProviders ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
+    },
   ]);
 
   // ── 4. Judge ───────────────────────────────────────────────────────────────
@@ -255,6 +297,20 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
       name: 'temperature',
       message: 'Temperature (0-1):',
       default: config.pipeline.judge.temperature ?? 0.1,
+    },
+    {
+      type: 'input',
+      name: 'openrouterProvider',
+      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik):',
+      default: config.pipeline.judge.openrouterProvider ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
+    },
+    {
+      type: 'input',
+      name: 'openrouterIgnoreProviders',
+      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut):',
+      default: config.pipeline.judge.openrouterIgnoreProviders ?? '',
+      when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
   ]);
 
@@ -344,8 +400,8 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     },
   ]);
 
-  type ChatAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string };
-  type RoleAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number };
+  type ChatAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string; openrouterProvider?: string; openrouterIgnoreProviders?: string };
+  type RoleAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
   type VisionAns  = { provider: string;   model: string; apiKey?: string; apiUrl?: string };
   type ImageAns   = { provider: string;   model: string; apiKey?: string; apiUrl?: string };
   type PipeAns    = { maxIterations: number };
@@ -369,10 +425,22 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
   const row = (label: string, color: chalk.Chalk, p: string, m: string) =>
     logger.write(`  ${color(label.padEnd(10))}  ${chalk.dim('provider=')}${chalk.green(p)}  ${chalk.dim('model=')}${chalk.yellow(m)}`);
 
+  const subProviderRow = (provider: string, only?: string, ignore?: string) => {
+    if (provider !== 'openrouter' || (!only && !ignore)) return;
+    const parts: string[] = [];
+    if (only) parts.push(`${chalk.dim('only=')}${chalk.cyan(only)}`);
+    if (ignore) parts.push(`${chalk.dim('ignore=')}${chalk.red(ignore)}`);
+    logger.write(`  ${' '.repeat(10)}  ${chalk.dim('openrouter sub-provider:')} ${parts.join('  ')}`);
+  };
+
   row('Chat',    chalk.bold.yellow,   config.provider,                   getModelFromConfig(config, config.provider));
+  subProviderRow(config.provider, config.openrouterProvider, config.openrouterIgnoreProviders);
   row('Planner', chalk.bold.blue,     config.pipeline.planner.provider,  config.pipeline.planner.model);
+  subProviderRow(config.pipeline.planner.provider, config.pipeline.planner.openrouterProvider, config.pipeline.planner.openrouterIgnoreProviders);
   row('Coder',   chalk.bold.green,    config.pipeline.coder.provider,    config.pipeline.coder.model);
+  subProviderRow(config.pipeline.coder.provider, config.pipeline.coder.openrouterProvider, config.pipeline.coder.openrouterIgnoreProviders);
   row('Judge',   chalk.bold.red,      config.pipeline.judge.provider,    config.pipeline.judge.model);
+  subProviderRow(config.pipeline.judge.provider, config.pipeline.judge.openrouterProvider, config.pipeline.judge.openrouterIgnoreProviders);
   row('Vision',  chalk.bold.magenta,  (vision as VisionAns).provider,    (vision as VisionAns).model);
   row('Image',   chalk.bold.hex('#FF69B4'), (image as ImageAns).provider, (image as ImageAns).model);
   logger.write('');
@@ -383,10 +451,10 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
 function applyToConfig(
   config: DehaConfig,
   answers: {
-    chat:     { provider: Provider; model: string; apiKey?: string; apiUrl?: string };
-    planner:  { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number };
-    coder:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number };
-    judge:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number };
+    chat:     { provider: Provider; model: string; apiKey?: string; apiUrl?: string; openrouterProvider?: string; openrouterIgnoreProviders?: string };
+    planner:  { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
+    coder:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
+    judge:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
     vision:   { provider: string;   model: string; apiKey?: string; apiUrl?: string };
     image:    { provider: string;   model: string; apiKey?: string; apiUrl?: string };
     pipeline: { maxIterations: number };
@@ -399,6 +467,8 @@ function applyToConfig(
   setModel(config, chat.provider, chat.model);
   if (chat.apiKey) setKey(config, chat.provider, chat.apiKey);
   if (chat.apiUrl) config.customApiUrl = chat.apiUrl;
+  if (chat.openrouterProvider) config.openrouterProvider = chat.openrouterProvider;
+  if (chat.openrouterIgnoreProviders) config.openrouterIgnoreProviders = chat.openrouterIgnoreProviders;
 
   // Planner
   config.pipeline.planner.provider    = planner.provider;
@@ -407,6 +477,8 @@ function applyToConfig(
   if (planner.apiUrl)      config.pipeline.planner.apiUrl      = planner.apiUrl;
   if (planner.maxTokens)   config.pipeline.planner.maxTokens   = planner.maxTokens;
   if (planner.temperature !== undefined) config.pipeline.planner.temperature = planner.temperature;
+  if (planner.openrouterProvider) config.pipeline.planner.openrouterProvider = planner.openrouterProvider;
+  if (planner.openrouterIgnoreProviders) config.pipeline.planner.openrouterIgnoreProviders = planner.openrouterIgnoreProviders;
 
   // Coder
   config.pipeline.coder.provider    = coder.provider;
@@ -415,6 +487,8 @@ function applyToConfig(
   if (coder.apiUrl)      config.pipeline.coder.apiUrl      = coder.apiUrl;
   if (coder.maxTokens)   config.pipeline.coder.maxTokens   = coder.maxTokens;
   if (coder.temperature !== undefined) config.pipeline.coder.temperature = coder.temperature;
+  if (coder.openrouterProvider) config.pipeline.coder.openrouterProvider = coder.openrouterProvider;
+  if (coder.openrouterIgnoreProviders) config.pipeline.coder.openrouterIgnoreProviders = coder.openrouterIgnoreProviders;
 
   // Judge
   config.pipeline.judge.provider    = judge.provider;
@@ -423,6 +497,8 @@ function applyToConfig(
   if (judge.apiUrl)      config.pipeline.judge.apiUrl      = judge.apiUrl;
   if (judge.maxTokens)   config.pipeline.judge.maxTokens   = judge.maxTokens;
   if (judge.temperature !== undefined) config.pipeline.judge.temperature = judge.temperature;
+  if (judge.openrouterProvider) config.pipeline.judge.openrouterProvider = judge.openrouterProvider;
+  if (judge.openrouterIgnoreProviders) config.pipeline.judge.openrouterIgnoreProviders = judge.openrouterIgnoreProviders;
 
   // Vision — config'deki vision alanlarına yaz
   config.visionProvider = vision.provider;
@@ -497,24 +573,32 @@ function persistConfig(config: DehaConfig): void {
     OPENROUTER_API_KEY: config.openrouterApiKey ?? '',
     XAI_API_KEY: config.xaiApiKey ?? '',
     CUSTOM_API_KEY: config.customApiKey ?? '',
+    OPENROUTER_PROVIDER: config.openrouterProvider ?? '',
+    OPENROUTER_IGNORE_PROVIDERS: config.openrouterIgnoreProviders ?? '',
     PLANNER_PROVIDER: config.pipeline.planner.provider,
     PLANNER_MODEL: config.pipeline.planner.model,
     PLANNER_API_KEY: config.pipeline.planner.apiKey ?? '',
     PLANNER_API_URL: config.pipeline.planner.apiUrl ?? '',
     PLANNER_MAX_TOKENS: String(config.pipeline.planner.maxTokens ?? ''),
     PLANNER_TEMPERATURE: String(config.pipeline.planner.temperature ?? ''),
+    PLANNER_OPENROUTER_PROVIDER: config.pipeline.planner.openrouterProvider ?? '',
+    PLANNER_OPENROUTER_IGNORE_PROVIDERS: config.pipeline.planner.openrouterIgnoreProviders ?? '',
     CODER_PROVIDER: config.pipeline.coder.provider,
     CODER_MODEL: config.pipeline.coder.model,
     CODER_API_KEY: config.pipeline.coder.apiKey ?? '',
     CODER_API_URL: config.pipeline.coder.apiUrl ?? '',
     CODER_MAX_TOKENS: String(config.pipeline.coder.maxTokens ?? ''),
     CODER_TEMPERATURE: String(config.pipeline.coder.temperature ?? ''),
+    CODER_OPENROUTER_PROVIDER: config.pipeline.coder.openrouterProvider ?? '',
+    CODER_OPENROUTER_IGNORE_PROVIDERS: config.pipeline.coder.openrouterIgnoreProviders ?? '',
     JUDGE_PROVIDER: config.pipeline.judge.provider,
     JUDGE_MODEL: config.pipeline.judge.model,
     JUDGE_API_KEY: config.pipeline.judge.apiKey ?? '',
     JUDGE_API_URL: config.pipeline.judge.apiUrl ?? '',
     JUDGE_MAX_TOKENS: String(config.pipeline.judge.maxTokens ?? ''),
     JUDGE_TEMPERATURE: String(config.pipeline.judge.temperature ?? ''),
+    JUDGE_OPENROUTER_PROVIDER: config.pipeline.judge.openrouterProvider ?? '',
+    JUDGE_OPENROUTER_IGNORE_PROVIDERS: config.pipeline.judge.openrouterIgnoreProviders ?? '',
     VISION_PROVIDER: config.visionProvider,
     VISION_MODEL: config.visionModel,
     VISION_API_KEY: config.visionApiKey ?? '',
