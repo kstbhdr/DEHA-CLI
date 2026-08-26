@@ -180,7 +180,7 @@ async function runAgentClaude(
       }
       if (looksLikeUnexecutedToolCallAttempt(text)) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
-        logger.raw(chalk.red('[DEHA: Model bir araç çağrısını düz metin olarak yazmaya çalıştı ama tamamlayamadı (muhtemelen yanıt token limitine takıldı) — araç gerçekten çalıştırılmadı. İsteği tekrar edin veya daha küçük bir adım isteyin.]'));
+        logger.raw(chalk.red(describeUnexecutedToolCall(lastStopReason)));
         logger.raw('\n');
       } else if (text && !isSilentInterimOutput(text)) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
@@ -388,7 +388,7 @@ async function runAgentOpenAI(
 
       if (looksLikeUnexecutedToolCallAttempt(text)) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
-        logger.raw(chalk.red('[DEHA: Model bir araç çağrısını düz metin olarak yazmaya çalıştı ama tamamlayamadı (muhtemelen yanıt token limitine takıldı) — araç gerçekten çalıştırılmadı. İsteği tekrar edin veya daha küçük bir adım isteyin.]'));
+        logger.raw(chalk.red(describeUnexecutedToolCall(lastFinishReason)));
         logger.raw('\n');
       } else if (hasVisibleOutput) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
@@ -1007,6 +1007,26 @@ function isSilentInterimOutput(text: string): boolean {
 }
 
 /** Model hiç metin/tool_call üretmeden turu bitirdiğinde kullanıcıya gösterilecek teşhis mesajı. */
+/**
+ * The "attempted but unexecuted inline tool call" diagnostic used to always
+ * blame max_tokens truncation, even though we already capture the real
+ * stop_reason/finish_reason for the round. Two genuinely different failures
+ * were being reported identically:
+ *   - actually truncated (max_tokens/length): the JSON is *incomplete* — no
+ *     amount of parser improvement can recover data that was never written,
+ *     the model needs a bigger tool-call token budget or a smaller step.
+ *   - stopped normally (stop/end_turn) but still unrecognized: the model
+ *     finished writing a *complete* pseudo tool-call in a format none of the
+ *     inline parsers matches — this is an actual parser gap worth reporting/fixing.
+ */
+function describeUnexecutedToolCall(stopReason: string | null): string {
+  const isTruncated = stopReason === 'max_tokens' || stopReason === 'length';
+  if (isTruncated) {
+    return '[DEHA: Model bir araç çağrısını düz metin olarak yazmaya başladı ama yanıt token limitine (max_tokens) takıldığı için tamamlayamadı — çağrı eksik kaldığından çalıştırılamadı. DEHA_TOOL_MAX_TOKENS değerini artırın veya isteği daha küçük adımlara bölün.]';
+  }
+  return `[DEHA: Model bir araç çağrısını düz metin olarak yazdı ama hiçbir formatla eşleşmedi (stop_reason: ${stopReason ?? 'bilinmiyor'}) — araç çalıştırılmadı. Bu muhtemelen tanınmayan bir tool-call formatı, lütfen bildirin.]`;
+}
+
 function describeEmptyResponse(stopReason: string | null): string {
   const isTruncated = stopReason === 'max_tokens' || stopReason === 'length';
   if (isTruncated) {

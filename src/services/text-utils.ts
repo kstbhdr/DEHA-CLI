@@ -94,13 +94,96 @@ const CONTROL_CHAR_ESCAPES: Record<string, string> = {
   '\f': '\\f',
 };
 
-/** `JSON.parse`, falling back to `repairJsonControlChars` for model-emitted JSON with raw control chars in strings. */
-export function safeJsonParse(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return JSON.parse(repairJsonControlChars(text));
+/**
+ * Local models writing an inline pseudo tool-call (`[Tool Call: **x**({...})]`
+ * etc.) don't always emit strict JSON even when the call itself is complete
+ * (not truncated) — the three next most common deviations, roughly in order
+ * of how often they show up:
+ *   - trailing commas: `{"a": 1,}` (fine in JS/Python, invalid JSON)
+ *   - unquoted object keys: `{a: 1}` (JS-object style)
+ *   - single-quoted strings: `{'a': 'b'}` (Python-dict style)
+ * These are applied as a widening chain of best-effort repairs, each tried
+ * only after the stricter one fails, so a request that's already valid JSON
+ * (the hosted-provider common case) never pays for any of this.
+ */
+function stripTrailingCommas(text: string): string {
+  return text.replace(/,(\s*[}\]])/g, '$1');
+}
+
+function quoteUnquotedKeys(text: string): string {
+  return text.replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3');
+}
+
+/**
+ * Converts Python-dict-style single-quoted strings to JSON double-quoted
+ * strings. Walks the text tracking whether it's inside a single- or
+ * double-quoted string (respecting backslash escapes in both), so it doesn't
+ * touch already-valid JSON string content and correctly escapes any literal
+ * `"` that ends up inside a converted string.
+ */
+function convertSingleQuotesToJson(text: string): string {
+  let out = '';
+  let state: 'none' | 'double' | 'single' = 'none';
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (state === 'none') {
+      if (ch === '"') { state = 'double'; out += ch; continue; }
+      if (ch === "'") { state = 'single'; out += '"'; continue; }
+      out += ch;
+      continue;
+    }
+
+    if (state === 'double') {
+      if (ch === '\\') { out += ch + (text[i + 1] ?? ''); i++; continue; }
+      if (ch === '"') { state = 'none'; out += ch; continue; }
+      out += ch;
+      continue;
+    }
+
+    // state === 'single'
+    if (ch === '\\') {
+      const next = text[i + 1];
+      out += next === "'" ? "'" : ch + (next ?? '');
+      i++;
+      continue;
+    }
+    if (ch === "'") { state = 'none'; out += '"'; continue; }
+    if (ch === '"') { out += '\\"'; continue; }
+    out += ch;
   }
+
+  return out;
+}
+
+/**
+ * `JSON.parse`, falling back through a chain of increasingly-lenient repairs
+ * for model-emitted JSON: raw control chars in strings, trailing commas,
+ * unquoted keys, and single-quoted (Python-dict style) strings. Each repair
+ * is tried only after the stricter attempt fails, so valid JSON is returned
+ * unmodified. Throws the original strict-parse error if nothing works.
+ */
+export function safeJsonParse(text: string): unknown {
+  const repaired = repairJsonControlChars(text);
+  const noTrailingCommas = stripTrailingCommas(repaired);
+  const attempts = [
+    text,
+    repaired,
+    noTrailingCommas,
+    quoteUnquotedKeys(noTrailingCommas),
+    quoteUnquotedKeys(stripTrailingCommas(convertSingleQuotesToJson(repaired))),
+  ];
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    try {
+      return JSON.parse(attempt);
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError;
 }
 
 /**
