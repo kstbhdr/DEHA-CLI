@@ -52,10 +52,12 @@ export async function handleHistoryCommand(args: string): Promise<HistorySelecti
 // ─── Liste ───────────────────────────────────────────────────────────────────
 
 /**
- * Varsayılan olarak sadece mevcut proje dizininde (process.cwd()) başlatılmış
- * sohbetleri gösterir — farklı, ilgisiz projelerin geçmişi karışıp yanlışlıkla
- * `deha resume` ile açılmasın diye. `all=true` (`/oldconversations all`) tüm
- * projelerdeki sohbetleri gösterir.
+ * Varsayılan olarak, başka bir projeye ait olduğu bilinen (etiketli ve farklı)
+ * sohbetleri listeden çıkarır — farklı, ilgisiz projelerin geçmişi karışıp
+ * yanlışlıkla `deha resume` ile açılmasın diye. Etiketsiz eski sohbetler
+ * (hangi projeden geldiği bilinmiyor) her zaman görünür kalır, aksi halde
+ * geçmişin neredeyse tamamı gizlenmiş olurdu. `all=true`
+ * (`/oldconversations all`) hiçbir filtre uygulamadan hepsini gösterir.
  */
 function showList(all: boolean): void {
   const convs = all ? listConversations(100) : listConversations(100, process.cwd());
@@ -63,7 +65,7 @@ function showList(all: boolean): void {
   logger.write('\n' + chalk.bold.cyan('═══ Sohbet Geçmişi ═══'));
   logger.write(chalk.dim(`  Konum: ${getConvDir()}\n`));
   if (!all) {
-    logger.write(chalk.dim(`  Proje: ${process.cwd()}  (sadece bu proje — tüm projeler için: /oldconversations all)\n`));
+    logger.write(chalk.dim(`  Proje: ${process.cwd()}  (başka projeye ait olduğu bilinenler gizli — hepsi için: /oldconversations all)\n`));
   }
 
   if (convs.length === 0) {

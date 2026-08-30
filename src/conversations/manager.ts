@@ -59,11 +59,13 @@ export function saveConversation(
 // ─── Listele ────────────────────────────────────────────────────────────────
 
 /**
- * `workDir` filtresi verildiğinde sadece o projeden kaydedilmiş sohbetleri
- * döndürür — farklı (ilgisiz) projelerin geçmişinin karışıp yanlışlıkla
- * `deha resume` ile açılmasını önlemek için. `workDir` alanı olmayan eski
- * kayıtlar (bu alan eklenmeden önce kaydedilmiş) hangi projeye ait olduğu
- * bilinmediğinden filtrelenmiş listede gösterilmez.
+ * `workDir` filtresi verildiğinde, **başka bir projeye ait olduğu bilinen**
+ * (etiketli ve mevcut dizinden farklı) sohbetleri listeden çıkarır — farklı,
+ * ilgisiz projelerin geçmişinin karışıp yanlışlıkla `deha resume` ile
+ * açılmasını önlemek için. `workDir` alanı olmayan eski kayıtlar (bu alan
+ * eklenmeden önce kaydedilmiş) hangi projeye ait olduğu bilinmediğinden
+ * dışlanmaz — aksi halde (bu alan yeni eklendiği için) neredeyse tüm geçmiş
+ * "bilinmiyor" sayılıp gizlenmiş olurdu.
  */
 export function listConversations(limit = 200, workDir?: string): ConversationMeta[] {
   const dir = getConvDir();
@@ -81,7 +83,7 @@ export function listConversations(limit = 200, workDir?: string): ConversationMe
   });
 
   const filtered = resolvedFilter
-    ? all.filter((c) => c.workDir && path.resolve(c.workDir) === resolvedFilter)
+    ? all.filter((c) => !c.workDir || path.resolve(c.workDir) === resolvedFilter)
     : all;
 
   return filtered.slice(0, limit);
