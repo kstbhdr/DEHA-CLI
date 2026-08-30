@@ -16,7 +16,8 @@ import { screenshotAndAnalyze } from './tools/vision';
 import { doctor } from './commands/doctor';
 import { initCommand } from './commands/init';
 import { runSystemTest } from './commands/test-runner';
-import { loadConversationMessages } from './conversations/manager';
+import { loadConversationMessages, getConversationMeta } from './conversations/manager';
+import * as path from 'path';
 import { DEHA_VERSION_LABEL } from './version';
 import { logger } from './services/logger';
 import { createShoppingCommand } from './commands/shopping-command';
@@ -275,6 +276,14 @@ export class DehaCLI {
         if (!messages) {
           logger.error(`Sohbet bulunamadı: ${id}`);
           process.exit(1);
+        }
+        const meta = getConversationMeta(id);
+        if (meta?.workDir && path.resolve(meta.workDir) !== path.resolve(process.cwd())) {
+          logger.write(
+            chalk.yellow(`\n  ⚠ Bu sohbet farklı bir projede başlatılmış: ${meta.workDir}\n`) +
+            chalk.yellow(`    Şu anki dizin: ${process.cwd()}\n`) +
+            chalk.dim('    Yine de yükleniyor — context başka bir projeye ait olabilir.\n'),
+          );
         }
         await interactive(config, messages, id);
       });

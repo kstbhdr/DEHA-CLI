@@ -22,7 +22,11 @@ export async function handleHistoryCommand(args: string): Promise<HistorySelecti
   switch (sub) {
     case 'list':
     case '':
-      showList();
+      showList(false);
+      return null;
+
+    case 'all':
+      showList(true);
       return null;
 
     case 'search':
@@ -39,7 +43,7 @@ export async function handleHistoryCommand(args: string): Promise<HistorySelecti
 
     default:
       if (/^\d+$/.test(sub)) {
-        return showByIndex(parseInt(sub, 10) - 1);
+        return showByIndex(parseInt(sub, 10) - 1, false);
       }
       return showConversation(sub);
   }
@@ -47,15 +51,29 @@ export async function handleHistoryCommand(args: string): Promise<HistorySelecti
 
 // ─── Liste ───────────────────────────────────────────────────────────────────
 
-function showList(): void {
-  const convs = listConversations(100);
+/**
+ * Varsayılan olarak sadece mevcut proje dizininde (process.cwd()) başlatılmış
+ * sohbetleri gösterir — farklı, ilgisiz projelerin geçmişi karışıp yanlışlıkla
+ * `deha resume` ile açılmasın diye. `all=true` (`/oldconversations all`) tüm
+ * projelerdeki sohbetleri gösterir.
+ */
+function showList(all: boolean): void {
+  const convs = all ? listConversations(100) : listConversations(100, process.cwd());
 
   logger.write('\n' + chalk.bold.cyan('═══ Sohbet Geçmişi ═══'));
   logger.write(chalk.dim(`  Konum: ${getConvDir()}\n`));
+  if (!all) {
+    logger.write(chalk.dim(`  Proje: ${process.cwd()}  (sadece bu proje — tüm projeler için: /oldconversations all)\n`));
+  }
 
   if (convs.length === 0) {
-    logger.write(chalk.dim('  Henüz kayıtlı sohbet yok.\n'));
-    logger.write(chalk.dim('  Sohbet bittiğinde otomatik kaydedilir.\n'));
+    if (all) {
+      logger.write(chalk.dim('  Henüz kayıtlı sohbet yok.\n'));
+      logger.write(chalk.dim('  Sohbet bittiğinde otomatik kaydedilir.\n'));
+    } else {
+      logger.write(chalk.dim('  Bu projede henüz kayıtlı sohbet yok.\n'));
+      logger.write(chalk.dim('  Tüm projelerdeki sohbetler için: /oldconversations all\n'));
+    }
     return;
   }
 
@@ -67,7 +85,7 @@ function showList(): void {
     const msgs   = chalk.dim(`${conv.messageCount} mesaj`);
 
     logger.write(`  ${num} ${date}  ${chalk.white(title)}`);
-    logger.write(`       ${badge}  ${msgs}`);
+    logger.write(`       ${badge}  ${msgs}${all && conv.workDir ? chalk.dim(`  ${conv.workDir}`) : ''}`);
   });
 
   logger.write('');
@@ -105,8 +123,8 @@ function showSearch(query: string): void {
 
 // ─── Sohbet görüntüle (index ile) ────────────────────────────────────────────
 
-function showByIndex(index: number): HistorySelection | null {
-  const convs = listConversations(100);
+function showByIndex(index: number, all: boolean): HistorySelection | null {
+  const convs = all ? listConversations(100) : listConversations(100, process.cwd());
   if (index < 0 || index >= convs.length) {
     logger.write(chalk.red(`\n  Geçersiz numara. 1-${convs.length} arasında gir.\n`));
     return null;

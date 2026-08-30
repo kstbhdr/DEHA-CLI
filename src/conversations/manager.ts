@@ -11,6 +11,7 @@ export interface ConversationMeta {
   model: string;
   messageCount: number;
   filePath: string;
+  workDir: string;      // sohbetin başlatıldığı proje dizini ('' = eski kayıt, dizin bilinmiyor)
 }
 
 const CONV_DIR = path.join(os.homedir(), '.deha', 'conversations');
@@ -49,7 +50,7 @@ export function saveConversation(
   const id      = options.conversationId || createConversationId(title);
   const filePath = path.join(getConvDir(), `${id}.md`);
 
-  const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model });
+  const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model, workDir: process.cwd() });
   fs.writeFileSync(filePath, md, 'utf-8');
 
   return filePath;
@@ -57,19 +58,33 @@ export function saveConversation(
 
 // ─── Listele ────────────────────────────────────────────────────────────────
 
-export function listConversations(limit = 200): ConversationMeta[] {
+/**
+ * `workDir` filtresi verildiğinde sadece o projeden kaydedilmiş sohbetleri
+ * döndürür — farklı (ilgisiz) projelerin geçmişinin karışıp yanlışlıkla
+ * `deha resume` ile açılmasını önlemek için. `workDir` alanı olmayan eski
+ * kayıtlar (bu alan eklenmeden önce kaydedilmiş) hangi projeye ait olduğu
+ * bilinmediğinden filtrelenmiş listede gösterilmez.
+ */
+export function listConversations(limit = 200, workDir?: string): ConversationMeta[] {
   const dir = getConvDir();
   const files = fs.readdirSync(dir)
     .filter((f) => f.endsWith('.md'))
     .sort()
-    .reverse()
-    .slice(0, limit);
+    .reverse();
 
-  return files.map((file) => {
+  const resolvedFilter = workDir ? path.resolve(workDir) : undefined;
+
+  const all = files.map((file) => {
     const filePath = path.join(dir, file);
     const raw = fs.readFileSync(filePath, 'utf-8');
     return parseMeta(raw, file.replace('.md', ''), filePath);
   });
+
+  const filtered = resolvedFilter
+    ? all.filter((c) => c.workDir && path.resolve(c.workDir) === resolvedFilter)
+    : all;
+
+  return filtered.slice(0, limit);
 }
 
 // ─── Oku ────────────────────────────────────────────────────────────────────
@@ -78,6 +93,12 @@ export function readConversation(id: string): string | null {
   const filePath = path.join(getConvDir(), `${id}.md`);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath, 'utf-8');
+}
+
+export function getConversationMeta(id: string): ConversationMeta | null {
+  const raw = readConversation(id);
+  if (!raw) return null;
+  return parseMeta(raw, id, path.join(getConvDir(), `${id}.md`));
 }
 
 export function loadConversationMessages(id: string): Message[] | null {
@@ -180,7 +201,7 @@ export function searchConversations(query: string): ConversationMeta[] {
 
 function buildMarkdown(
   messages: Message[],
-  meta: { date: string; title: string; provider: string; model: string },
+  meta: { date: string; title: string; provider: string; model: string; workDir: string },
 ): string {
   const lines: string[] = [
     '---',
@@ -189,6 +210,7 @@ function buildMarkdown(
     `provider: ${meta.provider}`,
     `model: ${meta.model}`,
     `messages: ${messages.length}`,
+    `workdir: "${meta.workDir.replace(/"/g, "'")}"`,
     '---',
     '',
     `# ${meta.title}`,
@@ -252,6 +274,7 @@ function parseMeta(raw: string, id: string, filePath: string): ConversationMeta 
     model:        get('model') || '?',
     messageCount: parseInt(get('messages') || '0', 10),
     filePath,
+    workDir:      get('workdir') || '',
   };
 }
 
