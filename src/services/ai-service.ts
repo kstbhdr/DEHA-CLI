@@ -694,11 +694,13 @@ function shouldRetryWithAutoToolChoice(err: unknown, toolChoice: 'auto' | 'requi
     ? err.response.data
     : JSON.stringify(err.response?.data ?? {});
 
-  const normalized = payload.toLowerCase();
-  return normalized.includes('tool_choice')
+  // Normalize underscores/hyphens to spaces so `tool_choice` and `Tool choice`
+  // (seen from Z.AI/GLM via OpenRouter: "Tool choice must be auto") both match.
+  const normalized = payload.toLowerCase().replace(/[_-]/g, ' ');
+  return normalized.includes('tool choice')
     || normalized.includes('required')
     || normalized.includes('tool use')
-    || normalized.includes('tool_calls');
+    || normalized.includes('tool calls');
 }
 
 /**
