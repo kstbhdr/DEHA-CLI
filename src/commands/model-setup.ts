@@ -467,8 +467,8 @@ function applyToConfig(
   setModel(config, chat.provider, chat.model);
   if (chat.apiKey) setKey(config, chat.provider, chat.apiKey);
   if (chat.apiUrl) config.customApiUrl = chat.apiUrl;
-  if (chat.openrouterProvider) config.openrouterProvider = chat.openrouterProvider;
-  if (chat.openrouterIgnoreProviders) config.openrouterIgnoreProviders = chat.openrouterIgnoreProviders;
+  if (chat.openrouterProvider !== undefined) config.openrouterProvider = chat.openrouterProvider;
+  if (chat.openrouterIgnoreProviders !== undefined) config.openrouterIgnoreProviders = chat.openrouterIgnoreProviders;
 
   // Planner
   config.pipeline.planner.provider    = planner.provider;
@@ -477,8 +477,8 @@ function applyToConfig(
   if (planner.apiUrl)      config.pipeline.planner.apiUrl      = planner.apiUrl;
   if (planner.maxTokens)   config.pipeline.planner.maxTokens   = planner.maxTokens;
   if (planner.temperature !== undefined) config.pipeline.planner.temperature = planner.temperature;
-  if (planner.openrouterProvider) config.pipeline.planner.openrouterProvider = planner.openrouterProvider;
-  if (planner.openrouterIgnoreProviders) config.pipeline.planner.openrouterIgnoreProviders = planner.openrouterIgnoreProviders;
+  if (planner.openrouterProvider !== undefined) config.pipeline.planner.openrouterProvider = planner.openrouterProvider;
+  if (planner.openrouterIgnoreProviders !== undefined) config.pipeline.planner.openrouterIgnoreProviders = planner.openrouterIgnoreProviders;
 
   // Coder
   config.pipeline.coder.provider    = coder.provider;
@@ -487,8 +487,8 @@ function applyToConfig(
   if (coder.apiUrl)      config.pipeline.coder.apiUrl      = coder.apiUrl;
   if (coder.maxTokens)   config.pipeline.coder.maxTokens   = coder.maxTokens;
   if (coder.temperature !== undefined) config.pipeline.coder.temperature = coder.temperature;
-  if (coder.openrouterProvider) config.pipeline.coder.openrouterProvider = coder.openrouterProvider;
-  if (coder.openrouterIgnoreProviders) config.pipeline.coder.openrouterIgnoreProviders = coder.openrouterIgnoreProviders;
+  if (coder.openrouterProvider !== undefined) config.pipeline.coder.openrouterProvider = coder.openrouterProvider;
+  if (coder.openrouterIgnoreProviders !== undefined) config.pipeline.coder.openrouterIgnoreProviders = coder.openrouterIgnoreProviders;
 
   // Judge
   config.pipeline.judge.provider    = judge.provider;
@@ -497,8 +497,8 @@ function applyToConfig(
   if (judge.apiUrl)      config.pipeline.judge.apiUrl      = judge.apiUrl;
   if (judge.maxTokens)   config.pipeline.judge.maxTokens   = judge.maxTokens;
   if (judge.temperature !== undefined) config.pipeline.judge.temperature = judge.temperature;
-  if (judge.openrouterProvider) config.pipeline.judge.openrouterProvider = judge.openrouterProvider;
-  if (judge.openrouterIgnoreProviders) config.pipeline.judge.openrouterIgnoreProviders = judge.openrouterIgnoreProviders;
+  if (judge.openrouterProvider !== undefined) config.pipeline.judge.openrouterProvider = judge.openrouterProvider;
+  if (judge.openrouterIgnoreProviders !== undefined) config.pipeline.judge.openrouterIgnoreProviders = judge.openrouterIgnoreProviders;
 
   // Vision — config'deki vision alanlarına yaz
   config.visionProvider = vision.provider;
