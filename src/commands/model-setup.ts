@@ -124,15 +124,15 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     {
       type: 'input',
       name: 'openrouterProvider',
-      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik, örn: DeepInfra,Chutes):',
-      default: config.openrouterProvider ?? '',
+      message: `OpenRouter sub-provider whitelist (virgülle, boş=otomatik, örn: DeepInfra,Chutes) [mevcut: ${config.openrouterProvider || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
     {
       type: 'input',
       name: 'openrouterIgnoreProviders',
-      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut, fallback bozulmaz — örn: DeepInfra,Novita):',
-      default: config.openrouterIgnoreProviders ?? '',
+      message: `OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut, fallback bozulmaz — örn: DeepInfra,Novita) [mevcut: ${config.openrouterIgnoreProviders || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
   ]);
@@ -183,15 +183,15 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     {
       type: 'input',
       name: 'openrouterProvider',
-      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik):',
-      default: config.pipeline.planner.openrouterProvider ?? '',
+      message: `OpenRouter sub-provider whitelist (virgülle, boş=otomatik) [mevcut: ${config.pipeline.planner.openrouterProvider || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
     {
       type: 'input',
       name: 'openrouterIgnoreProviders',
-      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut):',
-      default: config.pipeline.planner.openrouterIgnoreProviders ?? '',
+      message: `OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut) [mevcut: ${config.pipeline.planner.openrouterIgnoreProviders || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
   ]);
@@ -242,15 +242,15 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     {
       type: 'input',
       name: 'openrouterProvider',
-      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik):',
-      default: config.pipeline.coder.openrouterProvider ?? '',
+      message: `OpenRouter sub-provider whitelist (virgülle, boş=otomatik) [mevcut: ${config.pipeline.coder.openrouterProvider || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
     {
       type: 'input',
       name: 'openrouterIgnoreProviders',
-      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut):',
-      default: config.pipeline.coder.openrouterIgnoreProviders ?? '',
+      message: `OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut) [mevcut: ${config.pipeline.coder.openrouterIgnoreProviders || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
   ]);
@@ -301,15 +301,15 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     {
       type: 'input',
       name: 'openrouterProvider',
-      message: 'OpenRouter sub-provider whitelist (virgülle, boş=otomatik):',
-      default: config.pipeline.judge.openrouterProvider ?? '',
+      message: `OpenRouter sub-provider whitelist (virgülle, boş=otomatik) [mevcut: ${config.pipeline.judge.openrouterProvider || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
     {
       type: 'input',
       name: 'openrouterIgnoreProviders',
-      message: 'OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut):',
-      default: config.pipeline.judge.openrouterIgnoreProviders ?? '',
+      message: `OpenRouter sub-provider blacklist (virgülle, kötü gideni hariç tut) [mevcut: ${config.pipeline.judge.openrouterIgnoreProviders || 'yok'}]:`,
+      default: '',
       when: (ans: { provider: Provider }) => ans.provider === 'openrouter',
     },
   ]);
