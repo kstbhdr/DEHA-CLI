@@ -147,7 +147,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     claudeModel:      process.env.CLAUDE_MODEL      || 'claude-opus-4-6',
     openaiModel:      process.env.OPENAI_MODEL      || 'gpt-4o',
     deepseekModel:    process.env.DEEPSEEK_MODEL    || 'deepseek-v4-flash',
-    openrouterModel:  process.env.OPENROUTER_MODEL  || 'anthropic/claude-opus-4',
+    openrouterModel:  process.env.OPENROUTER_MODEL  || 'deepseek/deepseek-v4-flash-0731',
     xaiModel:         process.env.XAI_MODEL         || 'grok-4.3',
     customModel:      process.env.CUSTOM_MODEL      || 'local-model',
 
