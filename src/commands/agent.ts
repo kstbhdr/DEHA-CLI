@@ -509,48 +509,52 @@ function compactToolResultForModel(toolName: string, result: string): string {
 
 /** 
  * Geçmişteki devasa tool çıktılarını özetler.
- * Mesaj geçmişinde 5 turdan eski olan tool sonuçlarını 
- * "[TOOL: name -> OKUNDU/ÇALIŞTIRILDI]" formatına indirger.
+ * 
+ * ÖNEMLİ — PROMPT CACHE UYUMLULUĞU:
+ * Bu fonksiyon orijinal history dizisini IN-PLACE (yerinde) değiştirir.
+ * Böylece bir kez kırpılan mesaj sonraki çağrılarda aynı kalır ve
+ * mesaj dizisinin başındaki prefix sabitleşir. Bu da OpenRouter/provider
+ * tarafındaki prompt cache mekanizmasının düzgün çalışmasını sağlar.
+ * (Eski davranış: her çağrıda kayan pencere ile prefix değişiyordu
+ *  → cache hiçbir zaman hit edemiyordu → çağrı başı ~$0.33 harcama.)
  */
 export function summarizeOldToolResults(history: Message[], keepCount = 10): Message[] {
   const pairedToolCallIds = collectAssistantToolCallIds(history);
-  const result: Message[] = [];
   const keepThreshold = history.length - keepCount;
 
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
+
+    // Yetim (orphan) tool sonuçları — hem eski hem yeni pencerede dönüştür
     if (msg.role === 'tool' && (!msg.tool_call_id || !pairedToolCallIds.has(msg.tool_call_id))) {
-      result.push(asPreviousToolResultContext(msg));
+      history[i] = asPreviousToolResultContext(msg);
       continue;
     }
 
-    if (i < keepThreshold && msg.role === 'tool') {
+    // Son keepCount mesajını olduğu gibi bırak (detay lazım)
+    if (i >= keepThreshold) continue;
+
+    // Eski tool sonuçlarını kırp — IN-PLACE mutasyon
+    if (msg.role === 'tool') {
        const content = (msg.content || '').trim();
        
-       // Kısa sonuçları olduğu gibi bırak
-       if (content.length <= 500) {
-         result.push(msg);
-         continue;
-       }
+       // Kısa sonuçları olduğu gibi bırak (zaten kırpılmışlar da buraya düşer → idempotent)
+       if (content.length <= 500) continue;
        
-       // Hata mesajlarını asla kırpma
+       // Hata mesajlarını daha fazla bağlamla koru
        const lower = content.toLowerCase();
        if (lower.includes('error') || lower.includes('hata') || lower.includes('failed') || lower.includes('exception')) {
-         const summary = content.length <= 1500
-           ? content
-           : safeSlice(content, 0, 800) + `\n[... ${content.length - 1100} karakter kırpıldı ...]\n` + safeSlice(content, -300);
-         result.push({ ...msg, content: summary });
+         if (content.length <= 1500) continue;
+         history[i] = { ...msg, content: safeSlice(content, 0, 800) + `\n[... ${content.length - 1100} karakter kırpıldı ...]\n` + safeSlice(content, -300) };
          continue;
        }
 
-       // Büyük sonuçlar: head + tail koru
-       const summary = safeSlice(content, 0, 300) + `\n[... tool sonucu kırpıldı: ${content.length} karakter → 450 karakter ...]\n` + safeSlice(content, -150);
-       result.push({ ...msg, content: summary });
-    } else {
-       result.push(msg);
+       // Büyük sonuçlar: head + tail koru (~450 char → bir sonraki çağrıda <= 500 kontrolüne takılır, tekrar kırpılmaz)
+       history[i] = { ...msg, content: safeSlice(content, 0, 300) + `\n[... tool sonucu kırpıldı: ${content.length} karakter → 450 karakter ...]\n` + safeSlice(content, -150) };
     }
   }
-  return result;
+
+  return history;
 }
 
 function collectAssistantToolCallIds(history: Message[]): Set<string> {
