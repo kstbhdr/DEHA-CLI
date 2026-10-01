@@ -551,7 +551,7 @@ export async function sendWithToolsOpenAICompat(
   const finishReason: string | null = choice.finish_reason ?? null;
   const agentUsage = extractUsageTokens(response.data.usage, msg);
   if (agentUsage.input > 0 || agentUsage.output > 0) {
-    recordUsage(role.provider, role.model, 'agent', agentUsage.input, agentUsage.output, config, agentUsage.reasoning);
+    recordUsage(role.provider, role.model, 'agent', agentUsage.input, agentUsage.output, config, agentUsage.reasoning, agentUsage.cache);
   }
   writeOpenAICompatDebugFile('last-openai-tool-message.json', msg);
   const sanitizedAssistantMsg = sanitizeOpenAICompatAssistantMessage(
