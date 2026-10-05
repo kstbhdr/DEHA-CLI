@@ -68,12 +68,12 @@ async function postWithRetry(url: string, data: any, config: any, retries = 2): 
                              err.code === 'ENOTFOUND' ||
                              err.code === 'EAI_AGAIN';
 
-      if (isNetworkError && attempt < retries) {
-        if (config.responseType !== 'stream') {
-          // Sleep for 2 seconds before retry
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          continue;
-        }
+      const status = err.response?.status;
+      const isRateLimit = status === 429;
+      if ((isNetworkError || isRateLimit) && attempt < retries) {
+        const delay = isRateLimit ? 2500 * (attempt + 1) : 2000;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
       }
       throw err;
     }
@@ -427,10 +427,10 @@ function buildOpenRouterProviderOptions(
   if (provider !== 'openrouter') return undefined;
 
   const opts: Record<string, unknown> = {};
-  const only = splitProviderList(openrouterProvider);
-  if (only.length > 0) {
-    opts.only = only;
-    opts.allow_fallbacks = false;
+  const list = splitProviderList(openrouterProvider);
+  if (list.length > 0) {
+    opts.order = list;
+    opts.allow_fallbacks = true;
   }
   const ignore = splitProviderList(openrouterIgnoreProviders);
   if (ignore.length > 0) opts.ignore = ignore;
