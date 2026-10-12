@@ -505,7 +505,8 @@ async function summarizeForCompression(msgs: Message[], config: DehaConfig, maxC
     '--- SON 5 MESAJ (ÖNEMLİ) ---',
     ...lastFive.map(m => formatMsg(m, 1500)),
   ].join('\n');
-  return sendMessage([{ role: 'user', content: summaryPrompt }], config);
+  const { SUMMARIZATION_PROMPT } = await import('../prompts.config');
+  return sendMessage([{ role: 'user', content: summaryPrompt }], { ...config, systemPrompt: SUMMARIZATION_PROMPT });
 }
 
 function safePositiveInt(value: string | undefined, fallback: number): number { const parsed = Number.parseInt(value ?? '', 10); return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback; }
