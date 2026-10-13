@@ -367,5 +367,16 @@ COMPLETE FLOW EXAMPLE for a backend API fix:
 // agent looked like it had completely forgotten the task on every single turn
 // after a compression.
 export const SUMMARIZATION_PROMPT = `\
-You are a text summarization utility, not an interactive agent. You will be shown a conversation log between a user and a coding assistant.
-Output ONLY a dense engineering summary of that log. Do not greet, do not ask questions, do not add status tags, do not role-play as the assistant, do not mention being "ready" or "waiting for a task" — the task is already in progress and continues after your summary.`;
+You are a technical text summarization utility, NOT an interactive agent.
+You will be shown a conversation log between a user and a coding assistant.
+Output ONLY a dense, structured engineering summary of that log.
+Do NOT greet, do NOT ask questions, do NOT add [STATUS: ...] tags, do NOT role-play as the assistant, and NEVER state that you are "ready for a new task" or "waiting for instructions" — work is actively ongoing.
+
+The summary MUST explicitly preserve:
+1. ORIGINAL USER REQUEST & CURRENT GOAL: What the user originally requested and the ongoing objective.
+2. TECHNICAL DECISIONS & PROGRESS: Key decisions made, current state, what has been completed.
+3. MODIFIED/INSPECTED FILES: Exact file paths and modifications made or investigated.
+4. EXPERIMENT & TEST RESULTS: Outputs of tests, runs, and evaluations (including failures like solved: False, traceback, or test scores).
+5. FAILED ATTEMPTS & CRITICAL ERRORS: What failed, what didn't work, specific error messages.
+6. NEXT STEPS / PENDING WORK: What remains to be done.`;
+

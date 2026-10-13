@@ -33,6 +33,11 @@ import {
   buildStaticContextMessages,
   autoCompress,
   getContextStats,
+  getSessionStats,
+  loadSession,
+  getSessionMessages,
+  getActiveTask,
+  clearActiveTask,
   flushOnExit,
   hydrateSession,
   resetSession,
@@ -185,8 +190,20 @@ export async function interactive(
     await hydrateSession(initialHistory, { workDir: process.cwd(), preserveSummary: true }).catch(() => {});
     logger.write(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
   } else {
-    conversationId = createConversationId();
-    await resetSession(process.cwd()).catch(() => {});
+    // Terminal yeniden açıldığında önceki oturumu ve aktif görevi geri yükle
+    await loadSession().catch(() => {});
+    const savedMessages = getSessionMessages();
+    if (savedMessages.length > 0) {
+      history.push(...savedMessages);
+      const stats = getSessionStats();
+      logger.write(chalk.dim(`  ↩ Önceki oturumdan ${savedMessages.length} mesaj geri yüklendi\n`));
+      if (stats.activeTask && stats.activeTask.taskState === 'ACTIVE') {
+        logger.write(chalk.yellow(`  ⚡ Devam eden aktif görev: ${stats.activeTask.originalUserRequest}\n`));
+      }
+    } else {
+      conversationId = createConversationId();
+      await resetSession(process.cwd()).catch(() => {});
+    }
   }
 
   // DEHA_SECOND_BRAIN_PATH env varı tanımlıysa otomatik yükle
@@ -238,6 +255,7 @@ export async function interactive(
         history.length = 0;
         conversationId = createConversationId();
         await resetSession(process.cwd()).catch(() => {});
+        clearActiveTask();
         setWorkDir(process.cwd());
         logger.write(chalk.green('✓ Yeni sohbet başlatıldı. ID: ') + chalk.cyan(conversationId) + '\n');
         prompt(); return;
@@ -247,6 +265,7 @@ export async function interactive(
         history.length = 0;
         conversationId = createConversationId();
         await resetSession(process.cwd()).catch(() => {});
+        clearActiveTask();
         console.clear();
         logger.write(BANNER);
         logger.write(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));

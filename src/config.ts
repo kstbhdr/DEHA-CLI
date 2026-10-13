@@ -183,11 +183,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     agentInputPrice:    safeParseFloat(process.env.AGENT_INPUT_PRICE,    3.00),
     agentOutputPrice:   safeParseFloat(process.env.AGENT_OUTPUT_PRICE,   15.00),
 
-    systemPrompt: process.env.DEHA_SYSTEM_PROMPT || (() => {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { CHAT_PROMPT } = require('./prompts.config');
-      return CHAT_PROMPT as string;
-    })(),
+    systemPrompt: process.env.DEHA_SYSTEM_PROMPT || CHAT_PROMPT,
 
     maxToolRounds: safeParseInt(process.env.DEHA_MAX_TOOL_ROUNDS, 200),
     toolMaxTokens: safeParseInt(process.env.DEHA_TOOL_MAX_TOKENS, 48 * 1024),

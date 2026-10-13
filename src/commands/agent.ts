@@ -3,7 +3,7 @@ import { DehaConfig } from '../config';
 import { Message, OAIMessage, ToolCall, sendWithTools, sendWithToolsOpenAICompat, sanitizeHistoryForOpenAI } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
-import { getWorkDir, isHomeDirectory } from '../services/session-memory';
+import { getWorkDir, isHomeDirectory, getActiveTask, setActiveTask, updateActiveTask, completeActiveTask } from '../services/session-memory';
 import { logger } from '../services/logger';
 import { safeSlice, safeJsonParse } from '../services/text-utils';
 
@@ -54,6 +54,12 @@ export async function runAgent(
     logger.write(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
   }
 
+  // Aktif görevi kontrol et / başlat
+  let currentTask = getActiveTask();
+  if (!currentTask || currentTask.taskState !== 'ACTIVE') {
+    setActiveTask(userMessage, userMessage);
+  }
+
   // WorkDir'i system prompt'a enjekte et
   const enrichedConfig = injectWorkDir(config, customSystemPrompt);
 
@@ -71,6 +77,35 @@ const MAX_AUTO_CONTINUE_ROUNDS = 6;
 const MAX_POST_TOOL_COMPLETION_ROUNDS = 8;
 const MAX_TOOL_RESULT_CHARS = 32_000;
 const MAX_INLINE_RETRY_ROUNDS = 2;
+const MAX_CONTEXT_RECOVERY_ATTEMPTS = 3;
+
+/**
+ * Modelin aktif bir görev varken bağlamı unutup karşılama veya görev bekleme
+ * moduna geçip geçmediğini (context-loss) tespit eder.
+ */
+export function isContextLossGreeting(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase().trim();
+  const patterns = [
+    /henüz (bir )?görev (tanımı )?yapılmadı/i,
+    /henüz (bir )?görev vermediniz/i,
+    /görev tanımı yapılmadı/i,
+    /ne yapmamı istersiniz/i,
+    /nasıl yardımcı olabilirim/i,
+    /size nasıl yardımcı olabilirim/i,
+    /hazır bekliyorum/i,
+    /herhangi bir görev/i,
+    /görev belirtilmedi/i,
+    /bir talimat bekliyorum/i,
+    /yeni bir görev/i,
+    /no task (has been )?(defined|specified|provided)/i,
+    /how can i help (you )?today/i,
+    /what would you like me to do/i,
+    /waiting for (a|your) task/i,
+    /ready for your command/i,
+  ];
+  return patterns.some(p => p.test(lower));
+}
 
 /**
  * Some models (usually local/fine-tuned ones without real function-calling
@@ -145,7 +180,37 @@ async function runAgentClaude(
         await pushMessage({ role: 'user', content: MALFORMED_TOOL_CALL_PROMPT });
         continue;
       }
+
+      // Context-loss kontrolü: Aktif görev varken model "Henüz görev vermediniz" dediğinde kurtar
+      const activeTask = getActiveTask();
+      const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text);
+      if (isContextLoss) {
+        if (inlineRetryRounds < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
+          inlineRetryRounds++;
+          updateActiveTask({ recoveryAttemptCount: inlineRetryRounds });
+          forceToolUse = true;
+          await pushMessage({ role: 'assistant', content: text });
+          const recoveryPrompt = `[SİSTEM UYARISI: Görev zaten aktif ve devam ediyor. Karşılama veya görev bekleme mesajı üretme.\nOrijinal Kullanıcı İsteği: "${activeTask.originalUserRequest}"\n${activeTask.lastMeaningfulToolResult ? `Son Araç Çıktısı: ${activeTask.lastMeaningfulToolResult}\n` : ''}Lütfen göreve odaklan ve gerekli adımları/araçları çalıştırarak devam et.]`;
+          await pushMessage({ role: 'user', content: recoveryPrompt });
+          continue;
+        } else {
+          logger.write('\n' + chalk.bold.cyan('DEHA:'));
+          logger.raw(chalk.red(`\n[DEHA: Aktif göreve ("${activeTask.originalUserRequest}") odaklanırken kurtarma sınırına (${MAX_CONTEXT_RECOVERY_ATTEMPTS}) ulaşıldı. Model yeni görev bekliyor. [STATUS: BLOCKED]]\n`));
+          updateActiveTask({ taskState: 'BLOCKED' });
+          finalText = text || `[Kurtarma sınırına ulaşıldı: ${activeTask.originalUserRequest}]`;
+          await pushMessage({ role: 'assistant', content: finalText });
+          break;
+        }
+      }
+
       finalText = text;
+      const status = parseStatusTag(text);
+      if (status === 'COMPLETE') {
+        completeActiveTask();
+      } else if (status === 'BLOCKED') {
+        updateActiveTask({ taskState: 'BLOCKED' });
+      }
+
       const shouldContinue = hadToolActivity
         ? await shouldContinueAfterToolPhase(
             userMessage,
@@ -178,6 +243,15 @@ async function runAgentClaude(
         }
         continue;
       }
+
+      // Final asistan mesajını mutlaka kalıcılaştır
+      const finalContent = text?.trim()
+        ? text
+        : hadToolActivity
+          ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
+          : describeEmptyResponse(lastStopReason);
+      await pushMessage({ role: 'assistant', content: finalContent });
+
       if (looksLikeUnexecutedToolCallAttempt(text)) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
         logger.raw(chalk.red(describeUnexecutedToolCall(lastStopReason)));
@@ -223,6 +297,10 @@ async function runAgentClaude(
       logger.write(chalk.dim('    → ') + preview);
       toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${compactedResult}\n</tool_result>`);
       finalText = text;
+
+      if (previewText.length > 0 && !isSilentInterimOutput(previewText)) {
+        updateActiveTask({ lastMeaningfulToolResult: `[${tc.name}]: ${safeSlice(previewText, 0, 400)}` });
+      }
 
       // Error tracking
       if (isToolError(compactedResult)) {
@@ -347,7 +425,40 @@ async function runAgentOpenAI(
     }
 
     if (effectiveToolCalls.length === 0) {
+      // Context-loss kontrolü: Aktif görev varken model "Henüz görev vermediniz" dediğinde kurtar
+      const activeTask = getActiveTask();
+      const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text);
+      if (isContextLoss) {
+        if (inlineRetryRounds < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
+          inlineRetryRounds++;
+          updateActiveTask({ recoveryAttemptCount: inlineRetryRounds });
+          forceToolUse = true;
+          await pushMessage(effectiveAssistantMsg);
+          const recoveryPrompt = `[SİSTEM UYARISI: Görev zaten aktif ve devam ediyor. Karşılama veya görev bekleme mesajı üretme.\nOrijinal Kullanıcı İsteği: "${activeTask.originalUserRequest}"\n${activeTask.lastMeaningfulToolResult ? `Son Araç Çıktısı: ${activeTask.lastMeaningfulToolResult}\n` : ''}Lütfen göreve odaklan ve gerekli adımları/araçları çalıştırarak devam et.]`;
+          await pushMessage({ role: 'user', content: recoveryPrompt });
+          continue;
+        } else {
+          logger.write('\n' + chalk.bold.cyan('DEHA:'));
+          logger.raw(chalk.red(`\n[DEHA: Aktif göreve ("${activeTask.originalUserRequest}") odaklanırken kurtarma sınırına (${MAX_CONTEXT_RECOVERY_ATTEMPTS}) ulaşıldı. Model yeni görev bekliyor. [STATUS: BLOCKED]]\n`));
+          updateActiveTask({ taskState: 'BLOCKED' });
+          finalText = text || `[Kurtarma sınırına ulaşıldı: ${activeTask.originalUserRequest}]`;
+          const finalMsg: OAIMessage = {
+            ...effectiveAssistantMsg,
+            content: finalText,
+          };
+          await pushMessage(finalMsg);
+          break;
+        }
+      }
+
       finalText = text;
+      const status = parseStatusTag(text);
+      if (status === 'COMPLETE') {
+        completeActiveTask();
+      } else if (status === 'BLOCKED') {
+        updateActiveTask({ taskState: 'BLOCKED' });
+      }
+
       const shouldContinue = hadToolActivity
         ? await shouldContinueAfterToolPhase(
             userMessage,
@@ -380,6 +491,19 @@ async function runAgentOpenAI(
         }
         continue;
       }
+
+      // Final asistan mesajını mutlaka kalıcılaştır
+      const finalContent = text?.trim()
+        ? text
+        : hadToolActivity
+          ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
+          : describeEmptyResponse(lastFinishReason);
+      const finalAssistantMsg: OAIMessage = {
+        ...effectiveAssistantMsg,
+        content: finalContent,
+      };
+      await pushMessage(finalAssistantMsg);
+
       const reasoningText = rawAssistantMsg.reasoning_content 
         ? chalk.dim(chalk.gray(`\n<think>\n${rawAssistantMsg.reasoning_content}\n</think>\n`))
         : '';
@@ -438,6 +562,10 @@ async function runAgentOpenAI(
         ? chalk.red('(boş sonuç — timeout veya bağlantı hatası olabilir)')
         : chalk.gray(previewText.length > 200 ? previewText.slice(0, 200) + '…' : previewText);
       logger.write(chalk.dim('    → ') + preview);
+
+      if (previewText.length > 0 && !isSilentInterimOutput(previewText)) {
+        updateActiveTask({ lastMeaningfulToolResult: `[${tc.name}]: ${safeSlice(previewText, 0, 400)}` });
+      }
 
       // Error tracking
       if (isToolError(compactedResult)) {
@@ -1058,7 +1186,10 @@ async function shouldContinueAfterNoToolResponse(
   // Önce structured STATUS tag kontrolü
   const status = parseStatusTag(assistantText);
   if (status === 'COMPLETE') return false;
-  if (status === 'BLOCKED') return false;
+  if (status === 'BLOCKED') {
+    if (isContextLossGreeting(assistantText)) return false;
+    return false;
+  }
   if (status === 'CONTINUE') return autoContinueRounds < MAX_AUTO_CONTINUE_ROUNDS;
 
   // Fallback: regex heuristics
@@ -1090,7 +1221,10 @@ async function shouldContinueAfterToolPhase(
   // Önce structured STATUS tag kontrolü
   const status = parseStatusTag(assistantText);
   if (status === 'COMPLETE') return false;
-  if (status === 'BLOCKED') return false;
+  if (status === 'BLOCKED') {
+    if (isContextLossGreeting(assistantText)) return false;
+    return false;
+  }
   if (status === 'CONTINUE') return true;
 
   const normalized = assistantText.toLowerCase().trim();
