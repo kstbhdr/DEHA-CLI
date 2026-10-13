@@ -30,7 +30,7 @@ afterEach(() => {
 describe('getConfig', () => {
   it('varsayılan değerlerle config döndürür', () => {
     const cfg = getConfig();
-    expect(cfg.provider).toBe('claude');
+    expect(cfg.provider).toBe('deepseek');
     expect(cfg.claudeModel).toBe('claude-opus-4-6');
     expect(cfg.maxTokens).toBe(4096);
     expect(cfg.temperature).toBe(0.7);
@@ -81,7 +81,7 @@ describe('getConfig', () => {
 
   it('pipeline yapılandırması doğru', () => {
     const cfg = getConfig();
-    expect(cfg.pipeline.planner.provider).toBe('claude');
+    expect(cfg.pipeline.planner.provider).toBe('deepseek');
     expect(cfg.pipeline.coder.provider).toBe('deepseek');
     expect(cfg.pipeline.judge.provider).toBe('xai');
     expect(cfg.pipeline.maxIterations).toBe(5);

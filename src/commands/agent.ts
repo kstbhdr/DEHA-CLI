@@ -3,7 +3,7 @@ import { DehaConfig } from '../config';
 import { Message, OAIMessage, ToolCall, sendWithTools, sendWithToolsOpenAICompat, sanitizeHistoryForOpenAI } from '../services/ai-service';
 import { DEHA_TOOLS, executeTool, executeToolAsync, printToolCall } from '../tools';
 import { mcpManager } from '../mcp/manager';
-import { getWorkDir, isHomeDirectory, getActiveTask, setActiveTask, updateActiveTask, completeActiveTask } from '../services/session-memory';
+import { getWorkDir, isHomeDirectory, getActiveTask, setActiveTask, updateActiveTask, completeActiveTask, cancelActiveTask, getPreviousTask, ActiveTaskContext } from '../services/session-memory';
 import { logger } from '../services/logger';
 import { safeSlice, safeJsonParse } from '../services/text-utils';
 
@@ -54,11 +54,8 @@ export async function runAgent(
     logger.write(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
   }
 
-  // Aktif görevi kontrol et / başlat
-  let currentTask = getActiveTask();
-  if (!currentTask || currentTask.taskState !== 'ACTIVE') {
-    setActiveTask(userMessage, userMessage);
-  }
+  // Aktif görevi açık semantiklerle yönet
+  resolveTaskForUserMessage(userMessage);
 
   // WorkDir'i system prompt'a enjekte et
   const enrichedConfig = injectWorkDir(config, customSystemPrompt);
@@ -79,31 +76,154 @@ const MAX_TOOL_RESULT_CHARS = 32_000;
 const MAX_INLINE_RETRY_ROUNDS = 2;
 const MAX_CONTEXT_RECOVERY_ATTEMPTS = 3;
 
-/**
- * Modelin aktif bir görev varken bağlamı unutup karşılama veya görev bekleme
- * moduna geçip geçmediğini (context-loss) tespit eder.
- */
-export function isContextLossGreeting(text: string): boolean {
+export function isExplicitCancellation(text: string): boolean {
   if (!text) return false;
   const lower = text.toLowerCase().trim();
   const patterns = [
-    /henüz (bir )?görev (tanımı )?yapılmadı/i,
-    /henüz (bir )?görev vermediniz/i,
+    /^(iptal|iptal et|vazge[cç]|cancel|stop|abort)$/i,
+    /^(g[oö]revi (iptal et|durdur|b[iı]rak))$/i,
+  ];
+  return patterns.some(p => p.test(lower));
+}
+
+export function isExplicitContinuation(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase().trim();
+  const patterns = [
+    /^(devam|devam et|s[uü]rd[uü]r|continue|go on|proceed|keep going)$/i,
+    /^(kald[iı][gğ][iı]n yerden devam( et)?|kald[iı][gğ][iı]m[iı]z yerden devam( et)?)$/i,
+  ];
+  return patterns.some(p => p.test(lower));
+}
+
+export function isFollowUpOrInspection(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase().trim();
+  const patterns = [
+    /hangi (dosya|test|komut|kod|de[gğ]i[sş]iklik)/i,
+    /which (files?|tests?|command|changes?)/i,
+    /ne (yapt[iı]n|oldu|de[gğ]i[sş]ti|sonu[cç]land[iı])/i,
+    /what (did you do|happened|changed|passed|failed)/i,
+    /son durum( ne)?/i,
+    /^(current )?status\??$/i,
+    /(neden|why did you) (durdun|stop|block)/i,
+    /([oö]nceki|[oö]nceki testi|hatay[iı]) (d[uü]zelt|fix)/i,
+    /(fix|repair) (the )?(previous|failing )?test/i,
+    /(testi|testleri) (tekrar |yeniden )?[cç]al[iı][sş]t[iı]r/i,
+    /run (the )?tests? again/i,
+    /hata veriyor/i,
+    /diff(i|i g[oö]ster)?/i,
+  ];
+  return patterns.some(p => p.test(lower));
+}
+
+export function resolveTaskForUserMessage(userMessage: string): ActiveTaskContext {
+  const currentTask = getActiveTask();
+  const trimmed = userMessage.trim();
+
+  // 1. Açık iptal
+  if (isExplicitCancellation(trimmed)) {
+    if (currentTask && currentTask.taskState === 'ACTIVE') {
+      cancelActiveTask();
+      return currentTask;
+    }
+    return setActiveTask(userMessage, userMessage);
+  }
+
+  // 2. Açık devam etme
+  if (isExplicitContinuation(trimmed)) {
+    if (currentTask) {
+      if (currentTask.taskState !== 'ACTIVE') {
+        return updateActiveTask({ taskState: 'ACTIVE', recoveryAttemptCount: 0 }) || currentTask;
+      }
+      return currentTask;
+    }
+    return setActiveTask(userMessage, userMessage);
+  }
+
+  // 3. Mevcut görev yoksa yeni başlat
+  if (!currentTask) {
+    return setActiveTask(userMessage, userMessage);
+  }
+
+  // 4. Önceki veya mevcut görev üzerine takip / soru / hata düzeltme
+  if (isFollowUpOrInspection(trimmed)) {
+    return updateActiveTask({
+      currentObjective: userMessage,
+      taskState: 'ACTIVE',
+      recoveryAttemptCount: 0,
+    }) || currentTask;
+  }
+
+  // 5. Eski görev ister ACTIVE ister COMPLETE/BLOCKED olsun, yeni bir üst-düzey talimat geldiğinde
+  // DEHA eski göreve takılıp kalmamalı, yeni göreve geçmeli:
+  return setActiveTask(userMessage, userMessage);
+}
+
+export interface ContextLossCheckOptions {
+  userMessage?: string;
+  hadToolActivity?: boolean;
+}
+
+/**
+ * Modelin aktif bir görev varken bağlamı unutup karşılama veya görev bekleme
+ * moduna geçip geçmediğini (context-loss) tespit eder.
+ *
+ * False-positive koruması:
+ * - Markdown kod blokları (```) içeren yanıtlar asla karşılama sayılmaz.
+ * - Kullanıcı bizzat karşılama veya çeviri istediyse kurtarma tetiklenmez.
+ * - Sadece STATUS etiketleri temizlendikten sonra baskın olarak karşılama/amnezi
+ *   kalıpları içeren kısa yanıtlar tespit edilir.
+ */
+export function isContextLossGreeting(text: string, options: ContextLossCheckOptions = {}): boolean {
+  if (!text) return false;
+  const rawTrimmed = text.trim();
+
+  // 1. Kod bloğu içeriyorsa bu gerçek bir cevaptır, karşılama sayılmaz
+  if (rawTrimmed.includes('```')) return false;
+
+  // 2. Kullanıcı açıkça bir karşılama metni veya çeviri istediyse false-positive üretme
+  if (options.userMessage) {
+    const userLower = options.userMessage.toLowerCase();
+    const isExplicitGreetingRequest =
+      userLower.includes('çevir') ||
+      userLower.includes('translate') ||
+      userLower.includes('karşılama') ||
+      userLower.includes('greeting') ||
+      userLower.includes('ben deha') ||
+      userLower.includes('nasıl yardımcı');
+    if (isExplicitGreetingRequest) return false;
+  }
+
+  // 3. STATUS etiketlerini temizle
+  const cleanText = rawTrimmed.replace(/\[STATUS:\s*(?:COMPLETE|BLOCKED|CONTINUE)\]/gi, '').trim();
+  if (!cleanText) return false;
+
+  // 4. Gerçek amnezi karşılama mesajları kısa boşta bekleme metinleridir
+  if (cleanText.length > 300) return false;
+
+  // 5. Tırnak içindeki karşılama örnekleri (örn. "Merhaba! Ben DEHA...")
+  if (/^["'`«].*["'`»]$/.test(cleanText) && options.userMessage && options.userMessage.includes('"')) {
+    return false;
+  }
+
+  const lower = cleanText.toLowerCase();
+  const patterns = [
+    /henüz (bir )?görev (tanımı )?(yapılmadı|bulunmuyor)/i,
+    /henüz (bir )?görev (vermediniz|belirtilmedi|atanmadı|tanımlanmadı)/i,
     /görev tanımı yapılmadı/i,
     /ne yapmamı istersiniz/i,
-    /nasıl yardımcı olabilirim/i,
-    /size nasıl yardımcı olabilirim/i,
     /hazır bekliyorum/i,
-    /herhangi bir görev/i,
-    /görev belirtilmedi/i,
-    /bir talimat bekliyorum/i,
-    /yeni bir görev/i,
+    /yeni (bir )?görev (bekliyorum|verebilirsiniz)/i,
+    /ben deha[.,! ]+(henüz|size nasıl|ne yapmamı|nasıl yardımcı)/i,
+    /merhaba!? ben deha[.,! ]*(henüz|nasıl yardımcı|ne yapmak|size nasıl)?/i,
     /no task (has been )?(defined|specified|provided)/i,
-    /how can i help (you )?today/i,
-    /what would you like me to do/i,
+    /how can i help (you )?today\??$/i,
+    /what would you like me to do\??$/i,
     /waiting for (a|your) task/i,
     /ready for your command/i,
   ];
+
   return patterns.some(p => p.test(lower));
 }
 
@@ -161,6 +281,14 @@ async function runAgentClaude(
   };
 
   while (round < maxRounds) {
+    if (abortSignal?.aborted) {
+      updateActiveTask({ taskState: 'INTERRUPTED' });
+      const abortContent = '[İşlem kullanıcı tarafından durduruldu]';
+      await pushMessage({ role: 'assistant', content: abortContent });
+      finalText = abortContent;
+      break;
+    }
+
     round++;
     let roundText = '';
 
@@ -183,7 +311,7 @@ async function runAgentClaude(
 
       // Context-loss kontrolü: Aktif görev varken model "Henüz görev vermediniz" dediğinde kurtar
       const activeTask = getActiveTask();
-      const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text);
+      const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text, { userMessage, hadToolActivity });
       if (isContextLoss) {
         if (inlineRetryRounds < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
           inlineRetryRounds++;
@@ -333,6 +461,15 @@ async function runAgentClaude(
     });
   }
 
+  if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
+    const finalContent = finalText?.trim()
+      ? finalText
+      : hadToolActivity
+        ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
+        : describeEmptyResponse(lastStopReason);
+    await pushMessage({ role: 'assistant', content: finalContent });
+  }
+
   return { response: finalText, messages: messages.slice(startIdx) };
 }
 
@@ -349,6 +486,7 @@ async function runAgentOpenAI(
   // Geçmiş mesajları OpenAI formatına dönüştür + mutual-pairing ile orphan tool mesajlarını temizle
   const startIdx = history.length;
   const sanitizedHistory = sanitizeHistoryForOpenAI(history);
+  const initialMessageCount = 1 + sanitizedHistory.length;
   const messages: OAIMessage[] = [
     { role: 'system', content: config.systemPrompt },
     ...sanitizedHistory,
@@ -379,6 +517,18 @@ async function runAgentOpenAI(
   };
 
   while (round < maxRounds) {
+    if (abortSignal?.aborted) {
+      updateActiveTask({ taskState: 'INTERRUPTED' });
+      const abortContent = '[İşlem kullanıcı tarafından durduruldu]';
+      const finalMsg: OAIMessage = {
+        role: 'assistant',
+        content: abortContent,
+      };
+      await pushMessage(finalMsg);
+      finalText = abortContent;
+      break;
+    }
+
     round++;
     let roundText = '';
 
@@ -427,7 +577,7 @@ async function runAgentOpenAI(
     if (effectiveToolCalls.length === 0) {
       // Context-loss kontrolü: Aktif görev varken model "Henüz görev vermediniz" dediğinde kurtar
       const activeTask = getActiveTask();
-      const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text);
+      const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text, { userMessage, hadToolActivity });
       if (isContextLoss) {
         if (inlineRetryRounds < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
           inlineRetryRounds++;
@@ -599,10 +749,23 @@ async function runAgentOpenAI(
     }
   }
 
+  if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
+    const finalContent = finalText?.trim()
+      ? finalText
+      : hadToolActivity
+        ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
+        : describeEmptyResponse(lastFinishReason);
+    const finalAssistantMsg: OAIMessage = {
+      role: 'assistant',
+      content: finalContent,
+    };
+    await pushMessage(finalAssistantMsg);
+  }
+
   // Convert internal OAIMessage back to Message[] for history
   const resultHistory: Message[] = messages
+    .slice(initialMessageCount)
     .filter(m => m.role !== 'system')
-    .slice(startIdx) // Take only the new messages from this turn
     .map(toHistoryMessage);
 
   return { response: finalText, messages: resultHistory };

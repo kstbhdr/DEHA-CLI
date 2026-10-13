@@ -5,12 +5,35 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import type { Message } from './ai-service';
 import { estimateTokens, estimateMessagesTokens } from './token-counter';
 import { generateRepoMap } from './repo-map';
 import { safeSlice } from './text-utils';
 
-// ─── Sabitler ────────────────────────────────────────────────────────────────
+// ─── Sabitler & Yollar ────────────────────────────────────────────────────────
+
+export function getSessionBufferDir(workDir: string = _state?.workDir || process.cwd()): string {
+  return path.join(path.resolve(workDir), '.deha');
+}
+
+export function getSessionBufferFile(workDir: string = _state?.workDir || process.cwd()): string {
+  return path.join(getSessionBufferDir(workDir), 'session-buffer.json');
+}
+
+export function getProjectDirectoryKey(dir: string = _state?.workDir || process.cwd()): string {
+  try {
+    const normalized = path.resolve(dir).toLowerCase();
+    return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+  } catch {
+    return 'default';
+  }
+}
+
+export function getProjectRedisKey(dir: string = _state?.workDir || process.cwd()): string {
+  const projectKey = getProjectDirectoryKey(dir);
+  return `deha:session:project:${projectKey}`;
+}
 
 const SESSION_BUFFER_DIR = path.join(process.cwd(), '.deha');
 const SESSION_BUFFER_FILE = path.join(SESSION_BUFFER_DIR, 'session-buffer.json');
@@ -51,10 +74,11 @@ async function getRedis(): Promise<RedisLike | null> {
 
 // ─── Task & Conversation Lifecycle ──────────────────────────────────────────
 
-export type TaskState = 'ACTIVE' | 'COMPLETE' | 'BLOCKED' | 'CANCELLED';
+export type TaskState = 'ACTIVE' | 'COMPLETE' | 'BLOCKED' | 'CANCELLED' | 'INTERRUPTED';
 export type ConversationLifecycle = 'CREATED' | 'ACTIVE' | 'ARCHIVED' | 'EXPLICITLY CLEARED';
 
 export interface ActiveTaskContext {
+  id?: string;
   originalUserRequest: string;
   currentObjective: string;
   lastMeaningfulToolResult?: string;
@@ -62,6 +86,7 @@ export interface ActiveTaskContext {
   recoveryAttemptCount: number;
   startedAt?: string;
   updatedAt?: string;
+  completedAt?: string;
 }
 
 // ─── Session state ────────────────────────────────────────────────────────────
@@ -70,6 +95,7 @@ interface SessionState {
   sessionId: string;
   conversationLifecycle: ConversationLifecycle;
   activeTask?: ActiveTaskContext | null;
+  previousTask?: ActiveTaskContext | null;
   messages: Message[];
   summary: string;        
   pinnedContext: string[]; // Pinli talimatlar
@@ -83,6 +109,7 @@ let _state: SessionState = {
   sessionId: Date.now().toString(36),
   conversationLifecycle: 'CREATED',
   activeTask: null,
+  previousTask: null,
   messages: [],
   summary: '',
   pinnedContext: [],
@@ -94,15 +121,17 @@ let _state: SessionState = {
 
 // ─── Core Logic ──────────────────────────────────────────────────────────────
 
-export async function loadSession(): Promise<void> {
+export async function loadSession(targetDir: string = process.cwd()): Promise<void> {
+  const resolvedDir = path.resolve(targetDir);
   const redis = await getRedis();
   if (redis) {
-    const raw = await redis.get('deha:session:latest');
+    const projectKey = getProjectRedisKey(resolvedDir);
+    const raw = await redis.get(projectKey) || await redis.get('deha:session:latest');
     if (raw) {
       try {
         const saved = JSON.parse(raw) as Partial<SessionState>;
-        if (shouldLoadSessionForCurrentDir(saved)) {
-          _state = { ..._state, ...saved };
+        if (shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
+          _state = { ..._state, ...saved, workDir: resolvedDir };
           if (_state.messages.length > 0 && _state.conversationLifecycle !== 'EXPLICITLY CLEARED') {
             _state.conversationLifecycle = 'ACTIVE';
           }
@@ -112,12 +141,13 @@ export async function loadSession(): Promise<void> {
     }
   }
 
-  if (fs.existsSync(SESSION_BUFFER_FILE)) {
+  const bufferFile = getSessionBufferFile(resolvedDir);
+  if (fs.existsSync(bufferFile)) {
     try {
-      const raw = fs.readFileSync(SESSION_BUFFER_FILE, 'utf-8');
+      const raw = fs.readFileSync(bufferFile, 'utf-8');
       const saved = JSON.parse(raw) as Partial<SessionState>;
-      if (shouldLoadSessionForCurrentDir(saved)) {
-        _state = { ..._state, ...saved };
+      if (shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
+        _state = { ..._state, ...saved, workDir: resolvedDir };
         if (_state.messages.length > 0 && _state.conversationLifecycle !== 'EXPLICITLY CLEARED') {
           _state.conversationLifecycle = 'ACTIVE';
         }
@@ -126,10 +156,10 @@ export async function loadSession(): Promise<void> {
   }
 }
 
-function shouldLoadSessionForCurrentDir(saved: Partial<SessionState>): boolean {
+export function shouldLoadSessionForCurrentDir(saved: Partial<SessionState>, targetDir: string = process.cwd()): boolean {
   if (!saved.workDir) return true;
   try {
-    return path.resolve(saved.workDir) === path.resolve(process.cwd());
+    return path.resolve(saved.workDir).toLowerCase() === path.resolve(targetDir).toLowerCase();
   } catch {
     return false;
   }
@@ -226,11 +256,7 @@ export function buildStaticContextMessages(): Message[] {
   // 2.5 ACTIVE TASK CONTEXT (if task is ACTIVE, keep in static context for caching & continuity)
   if (_state.activeTask && _state.activeTask.taskState === 'ACTIVE') {
     const task = _state.activeTask;
-    let taskBlock = `ORIGINAL USER REQUEST: ${task.originalUserRequest}\nCURRENT OBJECTIVE: ${task.currentObjective || task.originalUserRequest}\nTASK STATE: ${task.taskState}`;
-    if (task.lastMeaningfulToolResult) {
-      taskBlock += `\nLAST MEANINGFUL TOOL RESULT: ${task.lastMeaningfulToolResult}`;
-    }
-    taskBlock += `\nCRITICAL: Do NOT output greeting or ask for a new task. The task is actively running. Continue working toward completing this task.`;
+    const taskBlock = `ORIGINAL USER REQUEST: ${task.originalUserRequest}\nCURRENT OBJECTIVE: ${task.currentObjective || task.originalUserRequest}\nTASK STATE: ${task.taskState}\nCRITICAL: Do NOT output greeting or ask for a new task. The task is actively running. Continue working toward completing this task.`;
     result.push({
       role: 'user',
       content: `<active_task>\n${taskBlock}\n</active_task>`,
@@ -311,9 +337,17 @@ export function getSessionMessages(): Message[] {
 
 // ─── Active Task & Lifecycle Management ─────────────────────────────────────
 
+export function getPreviousTask(): ActiveTaskContext | null {
+  return _state.previousTask || null;
+}
+
 export function setActiveTask(originalUserRequest: string, objective?: string): ActiveTaskContext {
   const now = new Date().toISOString();
+  if (_state.activeTask) {
+    _state.previousTask = { ..._state.activeTask };
+  }
   const task: ActiveTaskContext = {
+    id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36),
     originalUserRequest,
     currentObjective: objective || originalUserRequest,
     taskState: 'ACTIVE',
@@ -347,13 +381,28 @@ export function getActiveTask(): ActiveTaskContext | null {
 export function completeActiveTask(): void {
   if (_state.activeTask) {
     _state.activeTask.taskState = 'COMPLETE';
+    _state.activeTask.completedAt = new Date().toISOString();
     _state.activeTask.updatedAt = new Date().toISOString();
+    _state.previousTask = { ..._state.activeTask };
+    _writeWarmBuffer();
+    _writeRedis().catch(() => {});
+  }
+}
+
+export function cancelActiveTask(): void {
+  if (_state.activeTask) {
+    _state.activeTask.taskState = 'CANCELLED';
+    _state.activeTask.updatedAt = new Date().toISOString();
+    _state.previousTask = { ..._state.activeTask };
     _writeWarmBuffer();
     _writeRedis().catch(() => {});
   }
 }
 
 export function clearActiveTask(): void {
+  if (_state.activeTask) {
+    _state.previousTask = { ..._state.activeTask };
+  }
   _state.activeTask = null;
   _writeWarmBuffer();
   _writeRedis().catch(() => {});
@@ -371,7 +420,7 @@ export function getConversationLifecycle(): ConversationLifecycle {
 
 export async function hydrateSession(
   messages: Message[],
-  options: { workDir?: string; preserveSummary?: boolean; activeTask?: ActiveTaskContext | null } = {},
+  options: { workDir?: string; preserveSummary?: boolean; activeTask?: ActiveTaskContext | null; previousTask?: ActiveTaskContext | null } = {},
 ): Promise<void> {
   _state.messages = [...messages];
   _state.flushedCount = 0;
@@ -380,6 +429,9 @@ export async function hydrateSession(
   if (options.activeTask !== undefined) {
     _state.activeTask = options.activeTask;
   }
+  if (options.previousTask !== undefined) {
+    _state.previousTask = options.previousTask;
+  }
   if (!options.preserveSummary) _state.summary = '';
   if (options.workDir) _state.workDir = options.workDir;
   _writeWarmBuffer();
@@ -387,21 +439,27 @@ export async function hydrateSession(
 }
 
 export async function resetSession(workDir = process.cwd()): Promise<void> {
+  const resolvedDir = path.resolve(workDir);
   _state = {
     sessionId: Date.now().toString(36),
     conversationLifecycle: 'EXPLICITLY CLEARED',
     activeTask: null,
+    previousTask: null,
     messages: [],
     summary: '',
     pinnedContext: [],
     architectureFiles: [],
-    workDir,
+    workDir: resolvedDir,
     flushedCount: 0,
     compressCount: 0,
   };
   _writeWarmBuffer();
   const redis = await getRedis();
-  if (redis) await redis.del('deha:session:latest').catch(() => {});
+  if (redis) {
+    const projectKey = getProjectRedisKey(resolvedDir);
+    await redis.del(projectKey).catch(() => {});
+    await redis.del('deha:session:latest').catch(() => {});
+  }
 }
 
 export function addPinnedMessage(text: string): void {
@@ -472,6 +530,7 @@ export function getSessionStats(): {
   compressCount: number;
   conversationLifecycle: ConversationLifecycle;
   activeTask: ActiveTaskContext | null;
+  previousTask: ActiveTaskContext | null;
 } {
   return {
     messages: _state.messages.length,
@@ -481,6 +540,7 @@ export function getSessionStats(): {
     compressCount: _state.compressCount,
     conversationLifecycle: _state.conversationLifecycle,
     activeTask: _state.activeTask ?? null,
+    previousTask: _state.previousTask ?? null,
   };
 }
 
@@ -517,8 +577,12 @@ export async function summarizeOld(
 
     const newSummary = await summarizeFn(toSummarize);
     let activeTaskInfo = '';
-    if (_state.activeTask && _state.activeTask.taskState === 'ACTIVE') {
-      activeTaskInfo = `- ACTIVE TASK: ${_state.activeTask.originalUserRequest}\n- CURRENT OBJECTIVE: ${_state.activeTask.currentObjective}\n`;
+    const taskToRecord = _state.activeTask || _state.previousTask;
+    if (taskToRecord) {
+      activeTaskInfo = `- ACTIVE TASK: ${taskToRecord.originalUserRequest}\n- CURRENT OBJECTIVE: ${taskToRecord.currentObjective}\n- TASK STATE: ${taskToRecord.taskState}\n`;
+      if (taskToRecord.lastMeaningfulToolResult) {
+        activeTaskInfo += `- LAST MEANINGFUL TOOL RESULT: ${taskToRecord.lastMeaningfulToolResult}\n`;
+      }
     }
     const stickyContext = `[STICKY CONTEXT]\n- ACTIVE WORKDIR: ${_state.workDir}\n${activeTaskInfo}- SUMMARY VERSION: ${_state.compressCount + 1}\n\n`;
     _state.summary = _state.summary 
@@ -543,7 +607,11 @@ export async function summarizeOld(
 export async function flushOnExit(): Promise<void> {
   const redis = await getRedis();
   if (redis) {
-    await redis.set('deha:session:latest', JSON.stringify(_state)).catch(() => {});
+    const projectKey = getProjectRedisKey(_state.workDir);
+    const data = JSON.stringify(_state);
+    await redis.set(projectKey, data).catch(() => {});
+    await redis.set(`deha:session:id:${_state.sessionId}`, data).catch(() => {});
+    await redis.set('deha:session:latest', data).catch(() => {});
     await redis.quit().catch(() => {});
   }
   _writeWarmBuffer();
@@ -552,14 +620,22 @@ export async function flushOnExit(): Promise<void> {
 
 function _writeWarmBuffer(): void {
   try {
-    if (!fs.existsSync(SESSION_BUFFER_DIR)) fs.mkdirSync(SESSION_BUFFER_DIR, { recursive: true });
-    fs.writeFileSync(SESSION_BUFFER_FILE, JSON.stringify(_state), 'utf-8');
+    const bufferFile = getSessionBufferFile(_state.workDir);
+    const bufferDir = path.dirname(bufferFile);
+    if (!fs.existsSync(bufferDir)) fs.mkdirSync(bufferDir, { recursive: true });
+    fs.writeFileSync(bufferFile, JSON.stringify(_state), 'utf-8');
   } catch { }
 }
 
 async function _writeRedis(): Promise<void> {
   const redis = await getRedis();
-  if (redis) await redis.set('deha:session:latest', JSON.stringify(_state));
+  if (redis) {
+    const projectKey = getProjectRedisKey(_state.workDir);
+    const data = JSON.stringify(_state);
+    await redis.set(projectKey, data).catch(() => {});
+    await redis.set(`deha:session:id:${_state.sessionId}`, data).catch(() => {});
+    await redis.set('deha:session:latest', data).catch(() => {});
+  }
 }
 
 async function _flushCold(isFinal: boolean): Promise<void> {

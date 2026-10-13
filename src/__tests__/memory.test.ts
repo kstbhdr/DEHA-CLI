@@ -25,6 +25,22 @@ vi.mock('chromadb', () => ({
   })),
 }));
 
+// Vector Store mock (disk ve ağ çağrılarını izole eder)
+vi.mock('../services/vector-store', () => {
+  class MockVectorStore {
+    async add() {}
+    async search() { return []; }
+    async clear() {}
+    async count() { return 0; }
+    async close() {}
+  }
+  return {
+    getVectorStore: vi.fn().mockResolvedValue(new MockVectorStore()),
+    resetVectorStore: vi.fn(),
+    JsonVectorStore: MockVectorStore,
+  };
+});
+
 vi.mock('axios');
 
 const ORIGINAL_ENV = { ...process.env };

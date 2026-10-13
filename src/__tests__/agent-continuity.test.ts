@@ -7,6 +7,7 @@ import * as tools from '../tools';
 import {
   setActiveTask,
   getActiveTask,
+  updateActiveTask,
   completeActiveTask,
   clearActiveTask,
   resetSession,
@@ -302,5 +303,222 @@ describe('Agent Continuity & Persistent Memory', () => {
     expect(getActiveTask()).toBeNull();
     const stats = getSessionStats();
     expect(stats.conversationLifecycle).toBe('EXPLICITLY CLEARED');
+  });
+
+  // ─── Test 10: Genuine BLOCKED case (Gerçek engellenme durumu) ────────────────
+  it('10. Gerçek bir BLOCKED durumunda (örn. yetki hatası) context-loss kurtarması tetiklenmez ve kullanıcıya raporlanır', async () => {
+    let callCount = 0;
+
+    vi.spyOn(aiService, 'sendWithToolsOpenAICompat').mockImplementation(async () => {
+      callCount++;
+      return {
+        text: 'Erişim yetkisi reddedildi: /etc/hosts dosyasına yazma yetkisi yok. [STATUS: BLOCKED]',
+        toolCalls: [],
+        rawAssistantMsg: {
+          role: 'assistant',
+          content: 'Erişim yetkisi reddedildi: /etc/hosts dosyasına yazma yetkisi yok. [STATUS: BLOCKED]',
+        },
+        malformedToolCalls: 0,
+        finishReason: 'stop',
+      };
+    });
+
+    const result = await runAgent(
+      'Hosts dosyasını güncelle',
+      dummyConfig,
+      [{ role: 'user', content: 'Hosts dosyasını güncelle' }],
+    );
+
+    // Gerçek BLOCKED durumunda kurtarma döngüsüne girilmemeli, tam 1 çağrı olmalı
+    expect(callCount).toBe(1);
+    expect(result.response).toContain('Erişim yetkisi reddedildi');
+    const task = getActiveTask();
+    expect(task?.taskState).toBe('BLOCKED');
+  });
+
+  // ─── Test 11: Eski görev ACTIVE iken yeni bir istek gelmesi ──────────────────
+  it('11. Eski bir görev ACTIVE iken kullanıcı bağımsız yeni bir istek gönderdiğinde DEHA yeni göreve geçer', async () => {
+    // 1. Önceki görev başlatılır ve ACTIVE kalır
+    setActiveTask('Eski Görev: Python veri analizi');
+    const taskBefore = getActiveTask();
+    expect(taskBefore?.originalUserRequest).toBe('Eski Görev: Python veri analizi');
+    expect(taskBefore?.taskState).toBe('ACTIVE');
+
+    // 2. Kullanıcı tamamen yeni bir istek gönderir
+    vi.spyOn(aiService, 'sendWithToolsOpenAICompat').mockResolvedValueOnce({
+      text: 'Next.js blog projesi oluşturuldu. [STATUS: COMPLETE]',
+      toolCalls: [],
+      rawAssistantMsg: { role: 'assistant', content: 'Next.js blog projesi oluşturuldu. [STATUS: COMPLETE]' },
+      malformedToolCalls: 0,
+      finishReason: 'stop',
+    });
+
+    await runAgent(
+      'Next.js ile blog sitesi kur',
+      dummyConfig,
+      [{ role: 'user', content: 'Next.js ile blog sitesi kur' }],
+    );
+
+    // DEHA eski göreve hapsolmamalı, yeni görevi aktif yapmalı
+    const currentTask = getActiveTask();
+    expect(currentTask?.originalUserRequest).toBe('Next.js ile blog sitesi kur');
+  });
+
+  // ─── Test 12: Quoted greeting text false recovery üretmemeli ─────────────────
+  it('12. Kullanıcı karşılama metnini çevirmesini istediğinde isContextLossGreeting false döner ve döngüye girmez', async () => {
+    const userPrompt = 'Translate this greeting to English: "Merhaba! Ben DEHA, nasıl yardımcı olabilirim?"';
+    const assistantOutput = '"Merhaba! Ben DEHA, nasıl yardımcı olabilirim?" is translated as "Hello! I am DEHA, how can I help you?"';
+
+    // isContextLossGreeting false dönmeli çünkü kullanıcı bizzat bunu istedi
+    const isLoss = isContextLossGreeting(assistantOutput, { userMessage: userPrompt });
+    expect(isLoss).toBe(false);
+
+    let callCount = 0;
+    vi.spyOn(aiService, 'sendWithToolsOpenAICompat').mockImplementation(async () => {
+      callCount++;
+      return {
+        text: assistantOutput,
+        toolCalls: [],
+        rawAssistantMsg: { role: 'assistant', content: assistantOutput },
+        malformedToolCalls: 0,
+        finishReason: 'stop',
+      };
+    });
+
+    const result = await runAgent(
+      userPrompt,
+      dummyConfig,
+      [{ role: 'user', content: userPrompt }],
+    );
+
+    // Yanlış kurtarma döngüsüne girmeden tek seferde tamamlanmalı
+    expect(callCount).toBe(1);
+    expect(result.response).toContain('Hello! I am DEHA');
+  });
+
+  // ─── Test 13: Farklı çalışma dizinleri (Multiple working directories) ────────
+  it('13. Farklı çalışma dizinlerindeki oturumlar ve aktif görevler birbirine karışmaz', async () => {
+    const projectADir = path.resolve('C:/test-projects/project-alpha');
+    const projectBDir = path.resolve('C:/test-projects/project-beta');
+
+    // Project A oturumu
+    await resetSession(projectADir);
+    setActiveTask('Project Alpha Görevi');
+    await appendMessage({ role: 'user', content: 'Alpha mesajı' });
+
+    const statsA = getSessionStats();
+    expect(statsA.activeTask?.originalUserRequest).toBe('Project Alpha Görevi');
+    expect(statsA.workDir).toBe(projectADir);
+
+    // Project B oturumu
+    await resetSession(projectBDir);
+    setActiveTask('Project Beta Görevi');
+    await appendMessage({ role: 'user', content: 'Beta mesajı' });
+
+    const statsB = getSessionStats();
+    expect(statsB.activeTask?.originalUserRequest).toBe('Project Beta Görevi');
+    expect(statsB.workDir).toBe(projectBDir);
+
+    // Project A ve B farklı Redis key ve buffer yollarına sahiptir
+    const { getProjectRedisKey, getSessionBufferFile } = await import('../services/session-memory');
+    expect(getProjectRedisKey(projectADir)).not.toBe(getProjectRedisKey(projectBDir));
+    expect(getSessionBufferFile(projectADir)).not.toBe(getSessionBufferFile(projectBDir));
+  });
+
+  // ─── Test 14: Çoklu eşzamanlı CLI oturumları (Concurrent sessions) ───────────
+  it('14. Çoklu eşzamanlı CLI oturumları bağımsız session ID ile izole kalır', async () => {
+    const stats = getSessionStats();
+    expect(stats.conversationLifecycle).toBeDefined();
+
+    const { getProjectDirectoryKey } = await import('../services/session-memory');
+    const key1 = getProjectDirectoryKey('C:/repo1');
+    const key2 = getProjectDirectoryKey('C:/repo2');
+    expect(key1).not.toBe(key2);
+  });
+
+  // ─── Test 15: Claude Agent Yolu (runAgentClaude) ────────────────────────────
+  it('15. Claude agent yolunda context-loss tespiti ve final asistan mesajı kalıcılığı çalışır', async () => {
+    const claudeConfig = getConfig({ provider: 'claude', anthropicApiKey: 'sk-ant-test-key' });
+    let callCount = 0;
+
+    vi.spyOn(aiService, 'sendWithTools').mockImplementation(async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          text: 'Merhaba! Ben DEHA. Henüz bir görev tanımı yapılmadı. Ne yapmamı istersiniz? [STATUS: BLOCKED]',
+          toolCalls: [],
+          stopReason: 'stop',
+        };
+      }
+      return {
+        text: 'Claude ile analiz tamamlandı. [STATUS: COMPLETE]',
+        toolCalls: [],
+        stopReason: 'stop',
+      };
+    });
+
+    const recorded: aiService.Message[] = [];
+    const result = await runAgent(
+      'Kritik Claude analizi',
+      claudeConfig,
+      [{ role: 'user', content: 'Kritik Claude analizi' }],
+      undefined,
+      undefined,
+      (msg) => { recorded.push(msg); },
+    );
+
+    // Context loss algılanıp kurtarıldığı için 2 çağrı olmalı
+    expect(callCount).toBe(2);
+    expect(result.response).toContain('Claude ile analiz tamamlandı');
+
+    // Final asistan mesajı kaydedilmiş olmalı
+    const finalAsst = recorded.filter(m => m.role === 'assistant');
+    expect(finalAsst.length).toBeGreaterThanOrEqual(1);
+    expect(finalAsst[finalAsst.length - 1].content).toContain('Claude ile analiz tamamlandı');
+  });
+
+  // ─── Test 16: Tool-call ID'leri persistence ve compression sonrasında korunur ──
+  it('16. Tool-call ID eşleşmeleri session buffer yazımı ve özetleme sonrasında korunur', async () => {
+    const toolCallMsg: aiService.Message = {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'tc_999', type: 'function', function: { name: 'run_shell', arguments: '{"command":"ls"}' } }],
+    };
+    const toolResultMsg: aiService.Message = {
+      role: 'tool',
+      content: 'file1.ts\nfile2.ts',
+      tool_call_id: 'tc_999',
+    };
+
+    await appendMessage(toolCallMsg);
+    await appendMessage(toolResultMsg);
+
+    const msgs = getSessionMessages();
+    expect(msgs.find(m => m.tool_call_id === 'tc_999')).toBeDefined();
+
+    const sanitized = aiService.sanitizeHistoryForOpenAI(msgs);
+    const validToolResult = sanitized.find(m => m.role === 'tool' && m.tool_call_id === 'tc_999');
+    expect(validToolResult).toBeDefined();
+  });
+
+  // ─── Test 17: Tamamlanan görevi takip eden soru context'i korur ──────────────
+  it('17. COMPLETE sonrasında "hangi dosyaları değiştirdin?" gibi bir soru eski görevi ve çıktıyı korur', async () => {
+    setActiveTask('Test görevi', 'Hedef');
+    updateActiveTask({ lastMeaningfulToolResult: '[edit_file]: src/index.ts güncellendi' });
+    completeActiveTask();
+
+    const task = getActiveTask();
+    expect(task?.taskState).toBe('COMPLETE');
+
+    // Kullanıcı takip sorusu sorar
+    const followUp = 'Hangi dosyaları değiştirdin ve hangi testler geçti?';
+    const { resolveTaskForUserMessage, isFollowUpOrInspection } = await import('../commands/agent');
+
+    expect(isFollowUpOrInspection(followUp)).toBe(true);
+
+    const resolved = resolveTaskForUserMessage(followUp);
+    expect(resolved.originalUserRequest).toBe('Test görevi');
+    expect(resolved.currentObjective).toBe(followUp);
+    expect(resolved.taskState).toBe('ACTIVE');
   });
 });
