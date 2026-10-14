@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { runAgent, isContextLossGreeting } from '../commands/agent';
+import { runAgent, isContextLossGreeting, isFollowUpOrInspection } from '../commands/agent';
 import * as aiService from '../services/ai-service';
 import * as tools from '../tools';
 import {
@@ -107,6 +107,65 @@ describe('Agent Continuity & Persistent Memory', () => {
     expect(isContextLossGreeting('I am ready and waiting for your task. How can I help you today?')).toBe(true);
     expect(isContextLossGreeting('Dosya izin hatası aldım, devam etmek için sudo yetkisi gerekiyor. [STATUS: BLOCKED]')).toBe(false);
     expect(isContextLossGreeting('Görev başarıyla tamamlandı. [STATUS: COMPLETE]')).toBe(false);
+  });
+
+  // ─── Test 2b: "Mesajın boş geldi" amnezisi ───────────────────────────────────
+  it('2b. Tool sonrası "your message came through empty" yanıtını (uzun yetenek listesiyle bile) context-loss sayar', () => {
+    const reply = `It looks like your message came through empty — I don't see a question or task yet.\n\nWhat would you like help with? I can assist with things like:\n\n- **Code**: writing, debugging, reviewing, or explaining code in your project\n- **Files**: reading, editing, or analyzing files\n- **Shell**: running commands, builds, tests, or git operations\n- **Research**: searching the web for up-to-date information\n- **Images**: generating visuals or mockups\n\nJust let me know what you need!`;
+    expect(isContextLossGreeting(reply, { userMessage: 'solver sonuçlarını kontrol et', hadToolActivity: true })).toBe(true);
+    // Kullanıcı gerçekten boş mesaj gönderdiyse false-positive üretme
+    expect(isContextLossGreeting(reply, { userMessage: '   ' })).toBe(false);
+  });
+
+  it('2c. "different"/"diffusion" içeren yeni istekler eski görevin takibi sayılmaz', () => {
+    expect(isFollowUpOrInspection('Train a diffusion model on the new dataset')).toBe(false);
+    expect(isFollowUpOrInspection('try a different approach for the parser')).toBe(false);
+    expect(isFollowUpOrInspection('diffi göster')).toBe(true);
+  });
+
+  // ─── Test 2d: Uzun tool döngüsünde görev isteği bağlamdan düşmemeli ──────────
+  it('2d. Çok sayıda büyük tool sonucundan sonra bile kullanıcının ARC görevi her istekte modele gider', async () => {
+    const prevBudget = process.env.DEHA_TURN_BUDGET_TOKENS;
+    process.env.DEHA_TURN_BUDGET_TOKENS = '12000';
+    const task = 'ARC-AGI-2 görevlerini solver_v8 ile çöz ve skorları raporla';
+    const bigOutput = 'x'.repeat(20_000);
+    vi.spyOn(tools, 'executeTool').mockReturnValue(bigOutput);
+    vi.spyOn(tools, 'executeToolAsync').mockResolvedValue(bigOutput);
+
+    let call = 0;
+    const seenTask: boolean[] = [];
+    const seenTokens: number[] = [];
+    vi.spyOn(aiService, 'sendWithToolsOpenAICompat').mockImplementation(async (messages: any[]) => {
+      call++;
+      seenTask.push(messages.some(m => typeof m.content === 'string' && m.content.includes(task)));
+      seenTokens.push(Math.ceil(messages.reduce((n, m) => n + String(m.content ?? '').length, 0) / 3.5));
+      // tool_call / tool_result eşleşmesi asla bozulmamalı
+      const callIds = new Set(messages.flatMap(m => (m.tool_calls ?? []).map((tc: any) => tc.id)));
+      for (const m of messages) if (m.role === 'tool') expect(callIds.has(m.tool_call_id)).toBe(true);
+
+      if (call <= 15) {
+        return {
+          text: '',
+          toolCalls: [{ id: `c${call}`, name: 'run_shell', input: { command: `python solver_v8.py --step ${call}` } }],
+          rawAssistantMsg: { role: 'assistant', content: '', tool_calls: [{ id: `c${call}`, type: 'function', function: { name: 'run_shell', arguments: `{"command":"python solver_v8.py --step ${call}"}` } }] },
+          malformedToolCalls: 0,
+          finishReason: 'tool_calls',
+        };
+      }
+      return { text: 'Skorlar: 12/120 çözüldü. [STATUS: COMPLETE]', toolCalls: [], rawAssistantMsg: { role: 'assistant', content: 'Skorlar: 12/120 çözüldü. [STATUS: COMPLETE]' }, malformedToolCalls: 0, finishReason: 'stop' };
+    });
+
+    try {
+      await runAgent(task, dummyConfig, [{ role: 'user', content: task }]);
+    } finally {
+      if (prevBudget === undefined) delete process.env.DEHA_TURN_BUDGET_TOKENS; else process.env.DEHA_TURN_BUDGET_TOKENS = prevBudget;
+    }
+
+    expect(call).toBeGreaterThanOrEqual(16);
+    expect(seenTask.every(Boolean)).toBe(true);
+    // Bağlam sınırsız büyümemeli (bütçe + son birkaç büyük mesaj payı)
+    expect(Math.max(...seenTokens)).toBeLessThan(12000 + 8 * 20_000 / 3.5);
+    expect(seenTokens[seenTokens.length - 1]).toBeLessThan(seenTokens.reduce((a, b) => a + b, 0));
   });
 
   // ─── Test 3: BLOCKED kurtarma sınırına ulaşılması ────────────────────────────

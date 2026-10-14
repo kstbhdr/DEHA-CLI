@@ -256,7 +256,7 @@ export function buildStaticContextMessages(): Message[] {
   // 2.5 ACTIVE TASK CONTEXT (if task is ACTIVE, keep in static context for caching & continuity)
   if (_state.activeTask && _state.activeTask.taskState === 'ACTIVE') {
     const task = _state.activeTask;
-    const taskBlock = `ORIGINAL USER REQUEST: ${task.originalUserRequest}\nCURRENT OBJECTIVE: ${task.currentObjective || task.originalUserRequest}\nTASK STATE: ${task.taskState}\nCRITICAL: Do NOT output greeting or ask for a new task. The task is actively running. Continue working toward completing this task.`;
+    const taskBlock = `ORIGINAL USER REQUEST: ${task.originalUserRequest}\nCURRENT OBJECTIVE: ${task.currentObjective || task.originalUserRequest}\nTASK STATE: ${task.taskState}\nCRITICAL: This task is actively running — keep working until it is complete. Never output a greeting, never claim the user's message is empty, never ask what to do. Only switch tasks if the user explicitly writes a NEW, different request.`;
     result.push({
       role: 'user',
       content: `<active_task>\n${taskBlock}\n</active_task>`,

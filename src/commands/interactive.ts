@@ -7,7 +7,7 @@ import { DehaConfig, getProviderLabel } from '../config';
 import { Message, sendMessage } from '../services/ai-service';
 import { safeSlice } from '../services/text-utils';
 import { formatResponse } from './chat';
-import { runAgent, summarizeOldToolResults } from './agent';
+import { runAgent, summarizeOldToolResults, resolveTaskForUserMessage } from './agent';
 import { mcpManager } from '../mcp/manager';
 import { handleMcpCommand } from '../mcp/commands';
 import { checkForUpdates } from './update';
@@ -439,6 +439,12 @@ export async function interactive(
         await appendMessage(userMsgObj);
         addMessage(userMsgObj).catch(() => {});
 
+        // Görevi context'i kurmadan ÖNCE çöz: buildContextMessages <active_task>
+        // bloğunu state'ten okur. Eskiden bu runAgent içinde (context kurulduktan
+        // SONRA) yapılıyordu — model yeni mesaj yerine bir önceki görevi
+        // "CRITICAL: devam et" talimatıyla görüp alakasız tool'lar çalıştırıyordu.
+        resolveTaskForUserMessage(userMessage);
+
         const contextHistory = buildContextMessages(undefined, { maxTokens: contextBudget, minHotMessages });
         const summarizedHistory = summarizeOldToolResults(contextHistory, 25);
 
@@ -450,7 +456,7 @@ export async function interactive(
           history.push(msg);
           await appendMessage(msg);
           addMessage(msg).catch(() => {});
-        });
+        }, { taskAlreadyResolved: true });
 
         saveConversation(history, config.provider, getActiveModel(config), { conversationId: conversationId ?? undefined });
         const compressed = await autoCompress((msgs) => summarizeForCompression(msgs, config, maxCtxTokens), maxCtxTokens, config.compressThreshold, minHotMessages);

@@ -6,6 +6,7 @@ import { mcpManager } from '../mcp/manager';
 import { getWorkDir, isHomeDirectory, getActiveTask, setActiveTask, updateActiveTask, completeActiveTask, cancelActiveTask, getPreviousTask, ActiveTaskContext } from '../services/session-memory';
 import { logger } from '../services/logger';
 import { safeSlice, safeJsonParse } from '../services/text-utils';
+import { getMaxContextTokens } from '../services/token-counter';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
@@ -46,6 +47,7 @@ export async function runAgent(
   abortSignal?: AbortSignal,
   customSystemPrompt?: string,
   onMessage?: OnMessage,
+  options: { taskAlreadyResolved?: boolean } = {},
 ): Promise<AgentResult> {
   const mcpTools = mcpManager.getAnthropicTools();
   const allTools = [...DEHA_TOOLS, ...mcpTools];
@@ -54,8 +56,12 @@ export async function runAgent(
     logger.write(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
   }
 
-  // Aktif görevi açık semantiklerle yönet
-  resolveTaskForUserMessage(userMessage);
+  // Aktif görevi açık semantiklerle yönet.
+  // Çağıran taraf (interactive) bunu context'i kurmadan ÖNCE yapmışsa tekrar etme —
+  // aksi halde history'deki <active_task> bloğu bir önceki (bayat) görevi gösterir.
+  if (!options.taskAlreadyResolved) {
+    resolveTaskForUserMessage(userMessage);
+  }
 
   // WorkDir'i system prompt'a enjekte et
   const enrichedConfig = injectWorkDir(config, customSystemPrompt);
@@ -75,6 +81,141 @@ const MAX_POST_TOOL_COMPLETION_ROUNDS = 8;
 const MAX_TOOL_RESULT_CHARS = 32_000;
 const MAX_INLINE_RETRY_ROUNDS = 2;
 const MAX_CONTEXT_RECOVERY_ATTEMPTS = 3;
+const TURN_KEEP_RECENT_MESSAGES = 8;
+const TURN_SHRINK_MIN_CHARS = 600;
+const TURN_ANCHOR_MARKER = '[DEHA BAĞLAM NOTU]';
+
+type TurnMessage = { role?: unknown; content?: unknown; tool_calls?: unknown; [k: string]: unknown };
+
+function contentLength(content: unknown): number {
+  if (typeof content === 'string') return content.length;
+  if (Array.isArray(content)) {
+    return content.reduce((n, b: any) => n + (typeof b?.text === 'string' ? b.text.length : 0), 0);
+  }
+  return 0;
+}
+
+function estimateTurnTokens(messages: TurnMessage[]): number {
+  let chars = 0;
+  for (const m of messages) {
+    chars += contentLength(m.content) + 16;
+    if (Array.isArray(m.tool_calls)) {
+      for (const tc of m.tool_calls as any[]) {
+        chars += (tc?.function?.name?.length ?? 0) + (typeof tc?.function?.arguments === 'string' ? tc.function.arguments.length : 0) + 32;
+      }
+    }
+  }
+  return Math.ceil(chars / 3.5);
+}
+
+/**
+ * Tek bir agent turu içinde gönderilecek toplam bağlamın bütçesini hesaplar.
+ * Çıktı rezervi + tool şemaları düşülür, tahmin hatası için %10 pay bırakılır.
+ */
+export function computeTurnBudgetTokens(config: DehaConfig, tools: unknown[]): number {
+  const override = readPositiveInt(process.env.DEHA_TURN_BUDGET_TOKENS, 0);
+  if (override > 0) return override;
+  const model = activeModelName(config);
+  const maxCtx = config.maxContextTokens > 0 ? config.maxContextTokens : getMaxContextTokens(config.provider, model);
+  const outputReserve = Math.min(config.toolMaxTokens || config.maxTokens || 8_192, Math.floor(maxCtx / 4));
+  const toolSchemaTokens = Math.ceil(JSON.stringify(tools ?? []).length / 3.5);
+  return Math.max(6_000, Math.floor((maxCtx - outputReserve - toolSchemaTokens - 2_048) * 0.9));
+}
+
+function activeModelName(config: DehaConfig): string {
+  switch (config.provider) {
+    case 'claude': return config.claudeModel || '';
+    case 'openai': return config.openaiModel || '';
+    case 'deepseek': return config.deepseekModel || '';
+    case 'ollama': return config.ollamaModel || '';
+    case 'openrouter': return config.openrouterModel || '';
+    case 'xai': return config.xaiModel || '';
+    default: return '';
+  }
+}
+
+function isToolResultMessage(m: TurnMessage): boolean {
+  if (m.role === 'tool') return true;
+  return m.role === 'user' && typeof m.content === 'string' && m.content.includes('<tool_result');
+}
+
+/**
+ * Uzun tool döngülerinde bağlamı bütçe içinde tutar (IN-PLACE).
+ *
+ * Eskiden tur içi mesajlar sınırsız büyüyordu; bağlam penceresi dolunca
+ * provider/sunucu (Ollama, vLLM, bazı OpenRouter endpoint'leri) EN BAŞTAKİ
+ * mesajları — system prompt ve kullanıcının görev isteğini — sessizce kesiyordu.
+ * Model sadece tool çıktılarını görüp "mesajın boş geldi" diyerek görevi
+ * yarıda bırakıyordu.
+ *
+ * Kurallar:
+ *  - `protectedCount` öncesi (system + geçmiş + kullanıcının isteği) ASLA silinmez.
+ *  - Son TURN_KEEP_RECENT_MESSAGES mesaj olduğu gibi kalır.
+ *  - 1. aşama: eski tool sonuçları head+tail olarak kısaltılır (idempotent).
+ *  - 2. aşama: hâlâ sığmıyorsa en eski tur-içi round'lar (assistant + tool
+ *    sonuçları birlikte, eşleşme bozulmadan) çıkarılır ve görevi yeniden
+ *    hatırlatan tek bir çapa notu eklenir/güncellenir.
+ */
+export function fitTurnToBudget(
+  messages: TurnMessage[],
+  protectedCount: number,
+  budgetTokens: number,
+  taskReminder: string,
+): { shrunk: number; dropped: number } {
+  let shrunk = 0;
+  let dropped = 0;
+  if (estimateTurnTokens(messages) <= budgetTokens) return { shrunk, dropped };
+
+  // 1. aşama: eski tool sonuçlarını kısalt
+  const recentStart = Math.max(protectedCount, messages.length - TURN_KEEP_RECENT_MESSAGES);
+  for (let i = protectedCount; i < recentStart; i++) {
+    const m = messages[i];
+    if (!isToolResultMessage(m) || typeof m.content !== 'string') continue;
+    const c = m.content;
+    if (c.length <= TURN_SHRINK_MIN_CHARS) continue;
+    messages[i] = {
+      ...m,
+      content: safeSlice(c, 0, 300) + `\n[... bağlam limiti için kırpıldı: ${c.length} karakter ...]\n` + safeSlice(c, -150),
+    };
+    shrunk++;
+  }
+  if (estimateTurnTokens(messages) <= budgetTokens) return { shrunk, dropped };
+
+  // 2. aşama: en eski round'ları çıkar (çapa notu korunur)
+  let anchorIdx = messages.findIndex((m, i) => i >= protectedCount && typeof m.content === 'string' && m.content.startsWith(TURN_ANCHOR_MARKER));
+  let start = anchorIdx >= 0 ? anchorIdx + 1 : protectedCount;
+
+  while (estimateTurnTokens(messages) > budgetTokens && messages.length - start > TURN_KEEP_RECENT_MESSAGES) {
+    // Bir grup: [assistant (+tool_calls)] + ardından gelen tool/user mesajları, bir sonraki assistant'a kadar
+    let end = start + 1;
+    if (messages[start].role === 'assistant') {
+      while (end < messages.length && messages[end].role !== 'assistant') end++;
+    }
+    if (messages.length - end < TURN_KEEP_RECENT_MESSAGES) break;
+    messages.splice(start, end - start);
+    dropped += end - start;
+  }
+
+  if (dropped > 0) {
+    const prevDropped = anchorIdx >= 0 ? Number((/çıkarılan: (\d+)/.exec(String(messages[anchorIdx].content)) || [])[1] || 0) : 0;
+    const note: TurnMessage = {
+      role: 'user',
+      content: `${TURN_ANCHOR_MARKER} Bağlam limiti nedeniyle bu turdaki eski araç adımları çıkarıldı (toplam çıkarılan: ${prevDropped + dropped} mesaj). GÖREV DEVAM EDİYOR — kullanıcı mesajı boş DEĞİL.\n${taskReminder}\nKaldığın yerden devam et; zaten yaptığın adımları gereksiz tekrarlama.`,
+    };
+    if (anchorIdx >= 0) messages[anchorIdx] = note;
+    else messages.splice(protectedCount, 0, note);
+  }
+  return { shrunk, dropped };
+}
+
+function buildTaskReminder(userMessage: string): string {
+  const task = getActiveTask();
+  const original = task?.originalUserRequest || userMessage;
+  const lines = [`Orijinal kullanıcı isteği: "${safeSlice(original, 0, 2_000)}"`];
+  if (task?.currentObjective && task.currentObjective !== original) lines.push(`Mevcut hedef: "${safeSlice(task.currentObjective, 0, 1_000)}"`);
+  if (task?.lastMeaningfulToolResult) lines.push(`Son anlamlı araç çıktısı: ${task.lastMeaningfulToolResult}`);
+  return lines.join('\n');
+}
 
 export function isExplicitCancellation(text: string): boolean {
   if (!text) return false;
@@ -112,7 +253,9 @@ export function isFollowUpOrInspection(text: string): boolean {
     /(testi|testleri) (tekrar |yeniden )?[cç]al[iı][sş]t[iı]r/i,
     /run (the )?tests? again/i,
     /hata veriyor/i,
-    /diff(i|i g[oö]ster)?/i,
+    // \b şart: aksi halde "different", "diffusion" vb. her mesaj takip sayılıp
+    // eski görev hiç değişmiyordu.
+    /\bdiff(i|i g[oö]ster)?\b/i,
   ];
   return patterns.some(p => p.test(lower));
 }
@@ -199,6 +342,18 @@ export function isContextLossGreeting(text: string, options: ContextLossCheckOpt
   const cleanText = rawTrimmed.replace(/\[STATUS:\s*(?:COMPLETE|BLOCKED|CONTINUE)\]/gi, '').trim();
   if (!cleanText) return false;
 
+  // 3.5 "Mesajın boş geldi" tipi amnezi: kullanıcı mesajı gerçekten boş değilse bu
+  // kesin bir context-loss sinyalidir. Bu yanıtlar genelde yetenek listesi içerdiği
+  // için 300 karakter sınırına takılmasın diye uzunluk kontrolünden önce bakılır.
+  if (options.userMessage && options.userMessage.trim().length > 0 && cleanText.length <= 1200) {
+    const emptyMessagePatterns = [
+      /(your )?message (came through|was|is|appears( to be)?|seems( to be)?) empty/i,
+      /i don'?t see (a|any) (question|task|request|message)/i,
+      /mesaj(ın|iniz)? boş (geldi|görünüyor|ulaştı)/i,
+    ];
+    if (emptyMessagePatterns.some(p => p.test(cleanText))) return true;
+  }
+
   // 4. Gerçek amnezi karşılama mesajları kısa boşta bekleme metinleridir
   if (cleanText.length > 300) return false;
 
@@ -270,6 +425,7 @@ async function runAgentClaude(
 
   let lastStopReason: string | null = null;
   let inlineRetryRounds = 0;
+  const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
   // persisted until the full multi-round loop returned). Persisting each
@@ -291,6 +447,9 @@ async function runAgentClaude(
 
     round++;
     let roundText = '';
+
+    const fit = fitTurnToBudget(messages as TurnMessage[], startIdx, turnBudget, buildTaskReminder(userMessage));
+    if (fit.dropped > 0) logger.write(chalk.dim(`  ✂ Bağlam limiti: ${fit.dropped} eski araç mesajı çıkarıldı, görev çapası korundu\n`));
 
     const { text, toolCalls, stopReason } = await sendWithTools(messages, config, allTools, (chunk) => {
       roundText += chunk;
@@ -504,6 +663,7 @@ async function runAgentOpenAI(
 
   let lastFinishReason: string | null = null;
   let inlineRetryRounds = 0;
+  const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
   // persisted until the full multi-round loop returned) — a resumed session
@@ -531,6 +691,9 @@ async function runAgentOpenAI(
 
     round++;
     let roundText = '';
+
+    const fit = fitTurnToBudget(messages as TurnMessage[], initialMessageCount, turnBudget, buildTaskReminder(userMessage));
+    if (fit.dropped > 0) logger.write(chalk.dim(`  ✂ Bağlam limiti: ${fit.dropped} eski araç mesajı çıkarıldı, görev çapası korundu\n`));
 
     const { text, toolCalls, rawAssistantMsg, malformedToolCalls, finishReason } = await sendWithToolsOpenAICompat(
       messages,
