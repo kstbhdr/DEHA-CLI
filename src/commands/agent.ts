@@ -361,6 +361,12 @@ export function isContextLossGreeting(text: string, options: ContextLossCheckOpt
   const cleanText = rawTrimmed.replace(/\[STATUS:\s*(?:COMPLETE|BLOCKED|CONTINUE)\]/gi, '').trim();
   if (!cleanText) return false;
 
+  // Uzun onboarding yanıtları da görevi unutabilir: yetenek listesi nedeniyle
+  // 300 karakter sınırını aşan, yeniden görev isteyen yanıtları yakala.
+  const introducesDeha = /^merhaba[!,.\s]*ben deha\b/i.test(cleanText);
+  const asksForTask = /bana hangi görevde yardımcı olabilirim|lütfen yapmak istediğiniz işi|görevi başlatmak için (?:sizin )?(?:talebinizi|isteğinizi|görevinizi) bekliyorum/i.test(cleanText);
+  if (introducesDeha && asksForTask && options.userMessage?.trim()) return true;
+
   // 3.5 "Mesajın boş geldi" tipi amnezi: kullanıcı mesajı gerçekten boş değilse bu
   // kesin bir context-loss sinyalidir. Bu yanıtlar genelde yetenek listesi içerdiği
   // için 300 karakter sınırına takılmasın diye uzunluk kontrolünden önce bakılır.
@@ -445,6 +451,7 @@ async function runAgentClaude(
 
   let lastStopReason: string | null = null;
   let inlineRetryRounds = 0;
+  let contextRecoveryAttempts = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -499,9 +506,9 @@ async function runAgentClaude(
       const activeTask = getActiveTask();
       const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text, { userMessage, hadToolActivity });
       if (isContextLoss) {
-        if (inlineRetryRounds < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
-          inlineRetryRounds++;
-          updateActiveTask({ recoveryAttemptCount: inlineRetryRounds });
+        if (contextRecoveryAttempts < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
+          contextRecoveryAttempts++;
+          updateActiveTask({ recoveryAttemptCount: contextRecoveryAttempts });
           forceToolUse = true;
           await pushMessage({ role: 'assistant', content: text });
           const recoveryPrompt = `[SİSTEM UYARISI: Görev zaten aktif ve devam ediyor. Karşılama veya görev bekleme mesajı üretme.\nOrijinal Kullanıcı İsteği: "${activeTask.originalUserRequest}"\n${activeTask.lastMeaningfulToolResult ? `Son Araç Çıktısı: ${activeTask.lastMeaningfulToolResult}\n` : ''}Lütfen göreve odaklan ve gerekli adımları/araçları çalıştırarak devam et.]`;
@@ -509,9 +516,9 @@ async function runAgentClaude(
           continue;
         } else {
           logger.write('\n' + chalk.bold.cyan('DEHA:'));
-          logger.raw(chalk.red(`\n[DEHA: Aktif göreve ("${activeTask.originalUserRequest}") odaklanırken kurtarma sınırına (${MAX_CONTEXT_RECOVERY_ATTEMPTS}) ulaşıldı. Model yeni görev bekliyor. [STATUS: BLOCKED]]\n`));
-          updateActiveTask({ taskState: 'BLOCKED' });
-          finalText = text || `[Kurtarma sınırına ulaşıldı: ${activeTask.originalUserRequest}]`;
+          finalText = describeContextRecoveryFailure(activeTask.originalUserRequest);
+          logger.raw(chalk.red(`\n${finalText}\n`));
+          updateActiveTask({ taskState: 'INTERRUPTED' });
           await pushMessage({ role: 'assistant', content: finalText });
           break;
         }
@@ -697,6 +704,7 @@ async function runAgentOpenAI(
 
   let lastFinishReason: string | null = null;
   let inlineRetryRounds = 0;
+  let contextRecoveryAttempts = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -783,9 +791,9 @@ async function runAgentOpenAI(
       const activeTask = getActiveTask();
       const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text, { userMessage, hadToolActivity });
       if (isContextLoss) {
-        if (inlineRetryRounds < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
-          inlineRetryRounds++;
-          updateActiveTask({ recoveryAttemptCount: inlineRetryRounds });
+        if (contextRecoveryAttempts < MAX_CONTEXT_RECOVERY_ATTEMPTS) {
+          contextRecoveryAttempts++;
+          updateActiveTask({ recoveryAttemptCount: contextRecoveryAttempts });
           forceToolUse = true;
           await pushMessage(effectiveAssistantMsg);
           const recoveryPrompt = `[SİSTEM UYARISI: Görev zaten aktif ve devam ediyor. Karşılama veya görev bekleme mesajı üretme.\nOrijinal Kullanıcı İsteği: "${activeTask.originalUserRequest}"\n${activeTask.lastMeaningfulToolResult ? `Son Araç Çıktısı: ${activeTask.lastMeaningfulToolResult}\n` : ''}Lütfen göreve odaklan ve gerekli adımları/araçları çalıştırarak devam et.]`;
@@ -793,9 +801,9 @@ async function runAgentOpenAI(
           continue;
         } else {
           logger.write('\n' + chalk.bold.cyan('DEHA:'));
-          logger.raw(chalk.red(`\n[DEHA: Aktif göreve ("${activeTask.originalUserRequest}") odaklanırken kurtarma sınırına (${MAX_CONTEXT_RECOVERY_ATTEMPTS}) ulaşıldı. Model yeni görev bekliyor. [STATUS: BLOCKED]]\n`));
-          updateActiveTask({ taskState: 'BLOCKED' });
-          finalText = text || `[Kurtarma sınırına ulaşıldı: ${activeTask.originalUserRequest}]`;
+          finalText = describeContextRecoveryFailure(activeTask.originalUserRequest);
+          logger.raw(chalk.red(`\n${finalText}\n`));
+          updateActiveTask({ taskState: 'INTERRUPTED' });
           const finalMsg: OAIMessage = {
             ...effectiveAssistantMsg,
             content: finalText,
@@ -1415,6 +1423,10 @@ function isToolError(result: string): boolean {
     lower.includes('permission denied') || lower.includes('not found') ||
     lower.includes('timeout') || lower.includes('connection refused') ||
     (lower.startsWith('{') && lower.includes('"error"'));
+}
+
+function describeContextRecoveryFailure(task: string): string {
+  return `Model verilen görevi takip edemedi; ${MAX_CONTEXT_RECOVERY_ATTEMPTS} kurtarma denemesinden sonra bu tur durduruldu. Göreviniz kayıtlı: "${safeSlice(task, 0, 300)}". "devam et" yazarak yeniden deneyebilirsiniz.`;
 }
 
 /** Check if the model's response contains a [STATUS: COMPLETE/CONTINUE/BLOCKED] tag */

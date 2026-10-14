@@ -168,8 +168,8 @@ describe('Agent Continuity & Persistent Memory', () => {
     expect(seenTokens[seenTokens.length - 1]).toBeLessThan(seenTokens.reduce((a, b) => a + b, 0));
   });
 
-  // ─── Test 3: BLOCKED kurtarma sınırına ulaşılması ────────────────────────────
-  it('3. BLOCKED kurtarma sınırına (3 deneme) ulaşıldığında sonsuz döngüye girmeden durur ve raporlar', async () => {
+  // ─── Test 3: Görev unutma kurtarma sınırına ulaşılması ──────────────────────
+  it('3. Kurtarma sınırına (3 deneme) ulaşıldığında turu INTERRUPTED olarak durdurur ve raporlar', async () => {
     let callCount = 0;
 
     vi.spyOn(aiService, 'sendWithToolsOpenAICompat').mockImplementation(async () => {
@@ -195,8 +195,10 @@ describe('Agent Continuity & Persistent Memory', () => {
     // İlk deneme + 3 kurtarma denemesi = toplam 4 çağrı ve ardından durmalı
     expect(callCount).toBe(4);
     const activeTask = getActiveTask();
-    expect(activeTask?.taskState).toBe('BLOCKED');
-    expect(result.response).toBeTruthy();
+    expect(activeTask?.taskState).toBe('INTERRUPTED');
+    expect(result.response).toContain('Göreviniz kayıtlı');
+    expect(result.response).not.toContain('[STATUS: BLOCKED]');
+    expect(result.response).not.toContain('Ne yapmamı istersiniz');
   });
 
   // ─── Test 4: COMPLETE sonrasında eski görevin hatırlanması ───────────────────
