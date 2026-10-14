@@ -12,6 +12,7 @@ import { toolWebSearch, toolCrawlUrl } from './search';
 import { editFile, insertLines, deleteLines } from './edit';
 import { logger } from '../services/logger';
 import { safeSlice } from '../services/text-utils';
+import { BRAIN_TOOL, executeBrainTool } from '../services/sectioned-context/brain';
 // vision tool requires DehaConfig, handled separately in agent.ts
 
 // ─── Tool definitions (Claude API schema) ──────────────────────────────────
@@ -357,6 +358,7 @@ export const DEHA_TOOLS: ToolDefinition[] = [
       required: ['command'],
     },
   },
+  BRAIN_TOOL,
 ];
 
 // ─── Tool Yürütücü ─────────────────────────────────────────────────────────
@@ -438,6 +440,7 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'mkdir':           return toolMkdir(inp);
       case 'diff_files':      return toolDiffFiles(inp as any);
       case 'find_files':      return toolFindFiles(inp as any);
+      case 'brain':           return executeBrainTool(input);
       // Async toollar için placeholder — agent.ts'te executeToolAsync kullanılır
       case 'run_terminal':
       case 'run_python':

@@ -8,6 +8,7 @@ import { Message, sendMessage } from '../services/ai-service';
 import { safeSlice } from '../services/text-utils';
 import { formatResponse } from './chat';
 import { runAgent, summarizeOldToolResults, resolveTaskForUserMessage } from './agent';
+import { isSectionedContextEnabled } from '../services/sectioned-context';
 import { mcpManager } from '../mcp/manager';
 import { handleMcpCommand } from '../mcp/commands';
 import { checkForUpdates } from './update';
@@ -32,6 +33,7 @@ import {
   buildContextMessages,
   buildStaticContextMessages,
   autoCompress,
+  archiveOldMessages,
   getContextStats,
   getSessionStats,
   loadSession,
@@ -445,22 +447,33 @@ export async function interactive(
         // "CRITICAL: devam et" talimatıyla görüp alakasız tool'lar çalıştırıyordu.
         resolveTaskForUserMessage(userMessage);
 
-        const contextHistory = buildContextMessages(undefined, { maxTokens: contextBudget, minHotMessages });
-        const summarizedHistory = summarizeOldToolResults(contextHistory, 25);
+        // Bölümlü mod: assembler task/brain/changes/tool-log bölümlerini kendisi
+        // kurar, ona ham oturum geçmişi verilir. Kapalıysa eski yol.
+        const sectioned = isSectionedContextEnabled();
+        const agentHistory = sectioned
+          ? [...getSessionMessages()]
+          : summarizeOldToolResults(buildContextMessages(undefined, { maxTokens: contextBudget, minHotMessages }), 25);
 
         // A crash/kill mid-turn used to lose the entire turn silently (nothing
         // was persisted until runAgent fully returned) — "devam et" afterwards
         // had zero memory of a tool call that was in flight. Persist each
         // message as it's produced instead of batching at the end.
-        await runAgent(userMessage, config, summarizedHistory, abortController.signal, undefined, async (msg) => {
+        await runAgent(userMessage, config, agentHistory, abortController.signal, undefined, async (msg) => {
           history.push(msg);
           await appendMessage(msg);
           addMessage(msg).catch(() => {});
-        }, { taskAlreadyResolved: true });
+        }, { taskAlreadyResolved: true, sectioned });
 
         saveConversation(history, config.provider, getActiveModel(config), { conversationId: conversationId ?? undefined });
-        const compressed = await autoCompress((msgs) => summarizeForCompression(msgs, config, maxCtxTokens), maxCtxTokens, config.compressThreshold, minHotMessages);
-        if (compressed) logger.write(chalk.dim('  📦 Context compressed\n'));
+        if (sectioned) {
+          // LLM özeti yok: görev/brain/değişiklikler workspace store'da kalıcı,
+          // eski ham mesajlar sadece arşive taşınır.
+          const archived = await archiveOldMessages(maxCtxTokens, config.compressThreshold, 200);
+          if (archived) logger.write(chalk.dim('  📦 Eski mesajlar arşivlendi\n'));
+        } else {
+          const compressed = await autoCompress((msgs) => summarizeForCompression(msgs, config, maxCtxTokens), maxCtxTokens, config.compressThreshold, minHotMessages);
+          if (compressed) logger.write(chalk.dim('  📦 Context compressed\n'));
+        }
         logger.write(chalk.dim('─'.repeat(50)) + '\n');
       } catch (err: any) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Hata: ') + err.message + '\n'); }
       finally { activeAbortController = null; }

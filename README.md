@@ -161,6 +161,24 @@ DEHA_COMPRESS_THRESHOLD=0.75   # %75 → compress
 DEHA_MIN_HOT_MESSAGES=10       # compress'te korunan mesaj
 ```
 
+### Bölümlü Agent Context (4 bölüm)
+
+Agent modunda her model çağrısından önce istek, toplam context'in **oranıyla** bölünmüş 4 bölümden yeniden kurulur. 64k, 128k veya 256k fark etmez — aynı oranlar ölçeklenir:
+
+| Bölüm | Varsayılan | İçerik |
+|---|---|---|
+| 1. Görev `<task>` | %5 | Kullanıcının orijinal isteği + takip talimatları. Asla silinmez. |
+| 2. Plan / Brain `<brain>` | %15 | Modelin `brain` aracıyla yönettiği second brain: plan adımları, bulgular, kararlar, **çıkmaz sokaklar**. `.deha/brain.md`'ye de yazılır. |
+| 3. Değişiklikler | %10 | Hangi dosya ne kadar değişti — tool çağrılarından otomatik çıkarılır. |
+| 4. Tool günlüğü | %70 | Son round'lar tam; eskileri LLM'siz tek satırlık özet (`#12 run_shell(...) → exit 1 · ValueError ...`). |
+
+Oranlar, çıktı rezervi + %3 güvenlik payı + sabit önek (system prompt, tool şemaları) düşüldükten sonra kalan alana uygulanır; kullanılmayan pay tool günlüğüne akar. Mesaj sırası önek önbelleği (DeepSeek/Anthropic) için sabit tutulur, brain her zaman en sondadır.
+
+```env
+DEHA_SECTIONED_CONTEXT=1       # 0 = eski davranış
+DEHA_CTX_RATIOS=5,15,10,70     # görev, plan, değişiklik, tool
+```
+
 ## Güvenlik Filtresi
 
 `run_shell` tool'u ile çalıştırılan komutlar otomatik olarak taranır. Aşağıdaki kalıplar **engellenir**:

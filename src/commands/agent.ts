@@ -7,6 +7,7 @@ import { getWorkDir, isHomeDirectory, getActiveTask, setActiveTask, updateActive
 import { logger } from '../services/logger';
 import { safeSlice, safeJsonParse } from '../services/text-utils';
 import { getMaxContextTokens } from '../services/token-counter';
+import { TurnContextAssembler, createTurnAssembler, isSectionedContextEnabled, SECTIONED_CONTEXT_PROMPT, BuildStats, addTaskFollowUp } from '../services/sectioned-context';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
@@ -47,7 +48,7 @@ export async function runAgent(
   abortSignal?: AbortSignal,
   customSystemPrompt?: string,
   onMessage?: OnMessage,
-  options: { taskAlreadyResolved?: boolean } = {},
+  options: { taskAlreadyResolved?: boolean; sectioned?: boolean } = {},
 ): Promise<AgentResult> {
   const mcpTools = mcpManager.getAnthropicTools();
   const allTools = [...DEHA_TOOLS, ...mcpTools];
@@ -64,15 +65,31 @@ export async function runAgent(
   }
 
   // WorkDir'i system prompt'a enjekte et
-  const enrichedConfig = injectWorkDir(config, customSystemPrompt);
+  let enrichedConfig = injectWorkDir(config, customSystemPrompt);
+
+  // Bölümlü context: görev / brain / değişiklikler / tool günlüğü
+  let assembler: TurnContextAssembler | undefined;
+  if (options.sectioned && isSectionedContextEnabled()) {
+    enrichedConfig = { ...enrichedConfig, systemPrompt: enrichedConfig.systemPrompt + SECTIONED_CONTEXT_PROMPT };
+    assembler = createTurnAssembler(enrichedConfig, allTools as unknown[], config.provider === 'claude' ? 'claude' : 'openai');
+  }
 
   // Claude → native tool calling
   if (config.provider === 'claude') {
-    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage);
+    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler);
   }
 
   // OpenAI-uyumlu providerlar (DeepSeek, OpenAI, OpenRouter, xAI, custom)
-  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage);
+  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler);
+}
+
+function logAssemblerStats(stats: BuildStats): void {
+  if (!stats.rolledOver) return;
+  const u = stats.used;
+  logger.write(chalk.dim(
+    `  ✂ Bağlam: eski round'lar özetlendi — ~${Math.round(stats.totalTokens / 1000)}k/${Math.round(stats.budgets.total / 1000)}k ` +
+    `(görev ${u.task} · plan ${u.plan} · değişiklik ${u.changes} · tool özet ${u.toolLog} · son round'lar ${u.native})\n`,
+  ));
 }
 
 const MAX_TOOL_ROUNDS = 200;
@@ -291,11 +308,13 @@ export function resolveTaskForUserMessage(userMessage: string): ActiveTaskContex
 
   // 4. Önceki veya mevcut görev üzerine takip / soru / hata düzeltme
   if (isFollowUpOrInspection(trimmed)) {
-    return updateActiveTask({
+    const updated = updateActiveTask({
       currentObjective: userMessage,
       taskState: 'ACTIVE',
       recoveryAttemptCount: 0,
     }) || currentTask;
+    addTaskFollowUp(userMessage);
+    return updated;
   }
 
   // 5. Eski görev ister ACTIVE ister COMPLETE/BLOCKED olsun, yeni bir üst-düzey talimat geldiğinde
@@ -410,6 +429,7 @@ async function runAgentClaude(
   allTools: typeof DEHA_TOOLS,
   abortSignal?: AbortSignal,
   onMessage?: OnMessage,
+  assembler?: TurnContextAssembler,
 ): Promise<AgentResult> {
   const messages: Message[] = [...history];
   const startIdx = history.length;
@@ -448,10 +468,17 @@ async function runAgentClaude(
     round++;
     let roundText = '';
 
-    const fit = fitTurnToBudget(messages as TurnMessage[], startIdx, turnBudget, buildTaskReminder(userMessage));
-    if (fit.dropped > 0) logger.write(chalk.dim(`  ✂ Bağlam limiti: ${fit.dropped} eski araç mesajı çıkarıldı, görev çapası korundu\n`));
+    let requestMessages: Message[] = messages;
+    if (assembler) {
+      const built = assembler.build({ systemPrompt: config.systemPrompt, history, turn: messages.slice(startIdx) as any, userMessage });
+      requestMessages = built.messages as unknown as Message[];
+      logAssemblerStats(built.stats);
+    } else {
+      const fit = fitTurnToBudget(messages as TurnMessage[], startIdx, turnBudget, buildTaskReminder(userMessage));
+      if (fit.dropped > 0) logger.write(chalk.dim(`  ✂ Bağlam limiti: ${fit.dropped} eski araç mesajı çıkarıldı, görev çapası korundu\n`));
+    }
 
-    const { text, toolCalls, stopReason } = await sendWithTools(messages, config, allTools, (chunk) => {
+    const { text, toolCalls, stopReason } = await sendWithTools(requestMessages, config, allTools, (chunk) => {
       roundText += chunk;
     }, abortSignal, forceToolUse ? 'required' : 'auto');
     lastStopReason = stopReason;
@@ -562,6 +589,7 @@ async function runAgentClaude(
     }
 
     const toolResultBlocks: string[] = [];
+    const pendingRecords: Array<{ name: string; input: Record<string, unknown>; result: string }> = [];
     hadToolActivity = true;
     postToolCompletionRounds = 0;
     autoContinueRounds = 0;
@@ -583,6 +611,7 @@ async function runAgentClaude(
         : chalk.gray(previewText.length > 200 ? previewText.slice(0, 200) + '…' : previewText);
       logger.write(chalk.dim('    → ') + preview);
       toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${compactedResult}\n</tool_result>`);
+      pendingRecords.push({ name: tc.name, input: tc.input, result: compactedResult });
       finalText = text;
 
       if (previewText.length > 0 && !isSilentInterimOutput(previewText)) {
@@ -618,6 +647,10 @@ async function runAgentClaude(
       role: 'user',
       content: toolResultBlocks.join('\n\n') + '\n\nUse these results to continue.' + budgetWarning + errorRecovery,
     });
+    if (assembler) {
+      const turnIndex = messages.length - 1 - startIdx;
+      for (const r of pendingRecords) assembler.recordTool(r.name, r.input, r.result, text, turnIndex);
+    }
   }
 
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
@@ -641,6 +674,7 @@ async function runAgentOpenAI(
   allTools: typeof DEHA_TOOLS,
   abortSignal?: AbortSignal,
   onMessage?: OnMessage,
+  assembler?: TurnContextAssembler,
 ): Promise<AgentResult> {
   // Geçmiş mesajları OpenAI formatına dönüştür + mutual-pairing ile orphan tool mesajlarını temizle
   const startIdx = history.length;
@@ -692,11 +726,18 @@ async function runAgentOpenAI(
     round++;
     let roundText = '';
 
-    const fit = fitTurnToBudget(messages as TurnMessage[], initialMessageCount, turnBudget, buildTaskReminder(userMessage));
-    if (fit.dropped > 0) logger.write(chalk.dim(`  ✂ Bağlam limiti: ${fit.dropped} eski araç mesajı çıkarıldı, görev çapası korundu\n`));
+    let requestMessages: OAIMessage[] = messages;
+    if (assembler) {
+      const built = assembler.build({ systemPrompt: config.systemPrompt, history, turn: messages.slice(initialMessageCount) as any, userMessage });
+      requestMessages = built.messages as OAIMessage[];
+      logAssemblerStats(built.stats);
+    } else {
+      const fit = fitTurnToBudget(messages as TurnMessage[], initialMessageCount, turnBudget, buildTaskReminder(userMessage));
+      if (fit.dropped > 0) logger.write(chalk.dim(`  ✂ Bağlam limiti: ${fit.dropped} eski araç mesajı çıkarıldı, görev çapası korundu\n`));
+    }
 
     const { text, toolCalls, rawAssistantMsg, malformedToolCalls, finishReason } = await sendWithToolsOpenAICompat(
-      messages,
+      requestMessages,
       config,
       allTools,
       (chunk) => {
@@ -893,6 +934,7 @@ async function runAgentOpenAI(
         tool_call_id: tc.id,
         content: compactedResult,
       });
+      assembler?.recordTool(tc.name, tc.input, compactedResult, text, messages.length - 1 - initialMessageCount);
 
       finalText = text;
     }

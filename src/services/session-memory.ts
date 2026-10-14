@@ -1,5 +1,5 @@
 /**
- * Session Memory Service — v2 (Context Compression Destekli)
+ * Session Memory Service â€” v2 (Context Compression Destekli)
  */
 
 import * as fs from 'fs';
@@ -11,7 +11,7 @@ import { estimateTokens, estimateMessagesTokens } from './token-counter';
 import { generateRepoMap } from './repo-map';
 import { safeSlice } from './text-utils';
 
-// ─── Sabitler & Yollar ────────────────────────────────────────────────────────
+// â”€â”€â”€ Sabitler & Yollar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function getSessionBufferDir(workDir: string = _state?.workDir || process.cwd()): string {
   return path.join(path.resolve(workDir), '.deha');
@@ -44,7 +44,7 @@ const DEFAULT_MODEL_CONTEXT_BUDGET_TOKENS = 80_000;
 const MAX_SUMMARY_CHARS = 24_000;
 const MAX_CONTEXT_MESSAGE_CHARS = 16_000;
 
-// ─── Redis (opsiyonel) ────────────────────────────────────────────────────────
+// â”€â”€â”€ Redis (opsiyonel) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 let redisClient: RedisLike | null = null;
 let _redisChecked = false;
@@ -72,7 +72,7 @@ async function getRedis(): Promise<RedisLike | null> {
   }
 }
 
-// ─── Task & Conversation Lifecycle ──────────────────────────────────────────
+// â”€â”€â”€ Task & Conversation Lifecycle â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export type TaskState = 'ACTIVE' | 'COMPLETE' | 'BLOCKED' | 'CANCELLED' | 'INTERRUPTED';
 export type ConversationLifecycle = 'CREATED' | 'ACTIVE' | 'ARCHIVED' | 'EXPLICITLY CLEARED';
@@ -89,7 +89,7 @@ export interface ActiveTaskContext {
   completedAt?: string;
 }
 
-// ─── Session state ────────────────────────────────────────────────────────────
+// â”€â”€â”€ Session state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface SessionState {
   sessionId: string;
@@ -103,6 +103,8 @@ interface SessionState {
   workDir: string;        
   flushedCount: number;   
   compressCount: number;  
+  /** BÃ¶lÃ¼mlÃ¼ agent context'i (gÃ¶rev eki, brain, deÄŸiÅŸiklikler, tool gÃ¼nlÃ¼ÄŸÃ¼) â€” bkz. services/context */
+  workspace?: unknown;
 }
 
 let _state: SessionState = {
@@ -119,7 +121,7 @@ let _state: SessionState = {
   compressCount: 0,
 };
 
-// ─── Core Logic ──────────────────────────────────────────────────────────────
+// â”€â”€â”€ Core Logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function loadSession(targetDir: string = process.cwd()): Promise<void> {
   const resolvedDir = path.resolve(targetDir);
@@ -191,11 +193,15 @@ export function clearArchitectureFiles(): void {
 /**
  * Optimized for Prompt Caching:
  * 1. ARCHITECTURE (The Constitution - Most Static)
- * 2. Pinned Context (En Üst - En Sabit - Cache dostu)
+ * 2. Pinned Context (En Ãœst - En Sabit - Cache dostu)
  * 3. Repo Map (Top - Static)
  * 4. Context Recap / Summary (Middle - Semi-Static)
  */
-export function buildStaticContextMessages(): Message[] {
+export function buildStaticContextMessages(
+  options: { includeActiveTask?: boolean; includeSummary?: boolean } = {},
+): Message[] {
+  const includeActiveTask = options.includeActiveTask ?? true;
+  const includeSummary = options.includeSummary ?? true;
   const result: Message[] = [];
 
   // 0. ARCHITECTURE
@@ -214,7 +220,7 @@ export function buildStaticContextMessages(): Message[] {
       });
       result.push({
         role: 'assistant',
-        content: 'Proje anayasasını ve mimari dökümanları (Second Brain) hafızama kazıdım. Onay almadan bu yapıları değiştirmeyeceğim.',
+        content: 'Proje anayasasÄ±nÄ± ve mimari dÃ¶kÃ¼manlarÄ± (Second Brain) hafÄ±zama kazÄ±dÄ±m. Onay almadan bu yapÄ±larÄ± deÄŸiÅŸtirmeyeceÄŸim.',
       });
     }
   }
@@ -228,12 +234,12 @@ export function buildStaticContextMessages(): Message[] {
     });
     result.push({
       role: 'assistant',
-      content: 'Sabit talimatları aldım, bunları her zaman önceliklendireceğim.',
+      content: 'Sabit talimatlarÄ± aldÄ±m, bunlarÄ± her zaman Ã¶nceliklendireceÄŸim.',
     });
   }
 
   // 2. PROJECT STRUCTURE
-  // Skip when workDir is the user's home directory — it isn't "a project",
+  // Skip when workDir is the user's home directory â€” it isn't "a project",
   // it's the whole profile (IDE extension caches, Android AVDs, dotfiles for
   // every tool installed). Walking it produces a multi-KB dump of unrelated
   // noise that gets re-sent on every single turn, and combined with the
@@ -248,34 +254,34 @@ export function buildStaticContextMessages(): Message[] {
       });
       result.push({
         role: 'assistant',
-        content: 'Proje yapısını aldım.',
+        content: 'Proje yapÄ±sÄ±nÄ± aldÄ±m.',
       });
     }
   }
 
   // 2.5 ACTIVE TASK CONTEXT (if task is ACTIVE, keep in static context for caching & continuity)
-  if (_state.activeTask && _state.activeTask.taskState === 'ACTIVE') {
+  if (includeActiveTask && _state.activeTask && _state.activeTask.taskState === 'ACTIVE') {
     const task = _state.activeTask;
-    const taskBlock = `ORIGINAL USER REQUEST: ${task.originalUserRequest}\nCURRENT OBJECTIVE: ${task.currentObjective || task.originalUserRequest}\nTASK STATE: ${task.taskState}\nCRITICAL: This task is actively running — keep working until it is complete. Never output a greeting, never claim the user's message is empty, never ask what to do. Only switch tasks if the user explicitly writes a NEW, different request.`;
+    const taskBlock = `ORIGINAL USER REQUEST: ${task.originalUserRequest}\nCURRENT OBJECTIVE: ${task.currentObjective || task.originalUserRequest}\nTASK STATE: ${task.taskState}\nCRITICAL: This task is actively running â€” keep working until it is complete. Never output a greeting, never claim the user's message is empty, never ask what to do. Only switch tasks if the user explicitly writes a NEW, different request.`;
     result.push({
       role: 'user',
       content: `<active_task>\n${taskBlock}\n</active_task>`,
     });
     result.push({
       role: 'assistant',
-      content: 'Aktif görevi ve mevcut hedefi hafızamda tutuyorum. Karşılama yapmadan göreve odaklanarak devam ediyorum.',
+      content: 'Aktif gÃ¶revi ve mevcut hedefi hafÄ±zamda tutuyorum. KarÅŸÄ±lama yapmadan gÃ¶reve odaklanarak devam ediyorum.',
     });
   }
 
   // 3. CONTEXT RECAP / SUMMARY
-  if (_state.summary) {
+  if (includeSummary && _state.summary) {
     result.push({
       role: 'user',
       content: `<context_recap>\n${truncateText(_state.summary, MAX_SUMMARY_CHARS)}\n</context_recap>`,
     });
     result.push({
       role: 'assistant',
-      content: 'Bağlam özetini aldım.',
+      content: 'BaÄŸlam Ã¶zetini aldÄ±m.',
     });
   }
 
@@ -297,8 +303,8 @@ export function buildContextMessages(
   const older = msgs.slice(0, hotStart);
   const hot = msgs.slice(hotStart);
 
-  // Eski mesajları bütçeye sığdır — EN YENİDEN ESKİYE iterasyon
-  // Böylece bütçe dolunca en ESKİ mesajlar düşer, en yeniler kalır
+  // Eski mesajlarÄ± bÃ¼tÃ§eye sÄ±ÄŸdÄ±r â€” EN YENÄ°DEN ESKÄ°YE iterasyon
+  // BÃ¶ylece bÃ¼tÃ§e dolunca en ESKÄ° mesajlar dÃ¼ÅŸer, en yeniler kalÄ±r
   const fittingOlder: Message[] = [];
   const hotCompacted = hot.map(compactContextMessage);
   const hotTokens = estimateMessagesTokens(hotCompacted);
@@ -309,21 +315,21 @@ export function buildContextMessages(
     const compacted = compactContextMessage(older[i]);
     const msgTokens = estimateMessagesTokens([compacted]);
     if (staticTokens + olderTokens + msgTokens + hotTokens > budget) break;
-    fittingOlder.unshift(compacted); // unshift → sırayı korur (eski → yeni)
+    fittingOlder.unshift(compacted); // unshift â†’ sÄ±rayÄ± korur (eski â†’ yeni)
     olderTokens += msgTokens;
   }
 
-  // Eski mesajları doğru sırada ekle
+  // Eski mesajlarÄ± doÄŸru sÄ±rada ekle
   for (const msg of fittingOlder) {
     result.push(msg);
   }
 
-  // Son (hot) mesajları ekle — bunlar her zaman eklenir
+  // Son (hot) mesajlarÄ± ekle â€” bunlar her zaman eklenir
   for (const msg of hotCompacted) {
     result.push(msg);
   }
 
-  // Kullanıcının yeni mesajı
+  // KullanÄ±cÄ±nÄ±n yeni mesajÄ±
   if (pendingUserMessage) {
     result.push({ role: 'user', content: pendingUserMessage });
   }
@@ -335,7 +341,7 @@ export function getSessionMessages(): Message[] {
   return _state.messages;
 }
 
-// ─── Active Task & Lifecycle Management ─────────────────────────────────────
+// â”€â”€â”€ Active Task & Lifecycle Management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function getPreviousTask(): ActiveTaskContext | null {
   return _state.previousTask || null;
@@ -376,6 +382,47 @@ export function updateActiveTask(updates: Partial<ActiveTaskContext>): ActiveTas
 
 export function getActiveTask(): ActiveTaskContext | null {
   return _state.activeTask || null;
+}
+
+export function getPreviousTaskContext(): ActiveTaskContext | null {
+  return _state.previousTask || null;
+}
+
+export function getSessionId(): string {
+  return _state.sessionId;
+}
+
+/** BÃ¶lÃ¼mlÃ¼ context deposu (ham) â€” ÅŸema `services/sectioned-context/store.ts` iÃ§inde. */
+export function getWorkspaceContextRaw(): unknown {
+  return _state.workspace;
+}
+
+export function setWorkspaceContextRaw(value: unknown): void {
+  _state.workspace = value;
+  _writeWarmBuffer();
+  _writeRedis().catch(() => {});
+}
+
+/**
+ * LLM Ã§aÄŸrÄ±sÄ± OLMADAN eski ham mesajlarÄ± arÅŸivler: Ã¶nce cold storage'a yazÄ±lÄ±r,
+ * sonra sadece son `keepLast` mesaj bellekte kalÄ±r. BÃ¶lÃ¼mlÃ¼ context modunda
+ * gÃ¶rev/plan/deÄŸiÅŸiklik/tool bilgisi zaten `workspace` iÃ§inde tutulduÄŸu iÃ§in
+ * ham geÃ§miÅŸi LLM ile Ã¶zetlemeye gerek yok.
+ */
+export async function archiveOldMessages(
+  maxContextTokens: number,
+  threshold: number,
+  keepLast: number,
+): Promise<boolean> {
+  const totalTokens = estimateMessagesTokens(_state.messages as any);
+  if (totalTokens < maxContextTokens * threshold) return false;
+  if (_state.messages.length <= keepLast) return false;
+  await _flushCold(false);
+  _state.messages = _state.messages.slice(-keepLast);
+  _state.flushedCount = 0;
+  _writeWarmBuffer();
+  _writeRedis().catch(() => {});
+  return true;
 }
 
 export function completeActiveTask(): void {
@@ -482,7 +529,7 @@ export function setWorkDir(dir: string): void {
     try {
       const summaryPath = path.join(dir, '.deha_summary.md');
       if (fs.existsSync(summaryPath)) {
-        _state.summary = fs.readFileSync(summaryPath, 'utf-8').replace(/^# DEHA — Proje Özeti\n\n> Son Güncelleme: .*\n\n/, '');
+        _state.summary = fs.readFileSync(summaryPath, 'utf-8').replace(/^# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: .*\n\n/, '');
       }
     } catch { }
   }
@@ -492,7 +539,7 @@ export function getWorkDir(): string {
   return _state.workDir;
 }
 
-/** True when `dir` resolves to the OS home directory — see the repo-map skip above. */
+/** True when `dir` resolves to the OS home directory â€” see the repo-map skip above. */
 export function isHomeDirectory(dir: string): boolean {
   try {
     return path.resolve(dir) === path.resolve(os.homedir());
@@ -572,7 +619,7 @@ export async function summarizeOld(
   if (toSummarize.length < 4) return false;
 
   try {
-    // Özetleme öncesinde tüm mesajların cold storage'a yazıldığından emin ol
+    // Ã–zetleme Ã¶ncesinde tÃ¼m mesajlarÄ±n cold storage'a yazÄ±ldÄ±ÄŸÄ±ndan emin ol
     await _flushCold(false);
 
     const newSummary = await summarizeFn(toSummarize);
@@ -586,11 +633,11 @@ export async function summarizeOld(
     }
     const stickyContext = `[STICKY CONTEXT]\n- ACTIVE WORKDIR: ${_state.workDir}\n${activeTaskInfo}- SUMMARY VERSION: ${_state.compressCount + 1}\n\n`;
     _state.summary = _state.summary 
-      ? truncateText(`${stickyContext}${_state.summary}\n\n---\n\n[Sonraki Bölüm Özeti]\n${newSummary}`, MAX_SUMMARY_CHARS)
+      ? truncateText(`${stickyContext}${_state.summary}\n\n---\n\n[Sonraki BÃ¶lÃ¼m Ã–zeti]\n${newSummary}`, MAX_SUMMARY_CHARS)
       : truncateText(`${stickyContext}${newSummary}`, MAX_SUMMARY_CHARS);
 
     if (_state.workDir && fs.existsSync(_state.workDir)) {
-      fs.writeFileSync(path.join(_state.workDir, '.deha_summary.md'), `# DEHA — Proje Özeti\n\n> Son Güncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
+      fs.writeFileSync(path.join(_state.workDir, '.deha_summary.md'), `# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
     }
 
     _state.messages = msgs.slice(-minHot);
@@ -654,7 +701,7 @@ function compactContextMessage(message: Message): Message {
   const content = message.content || '';
   if (content.length <= MAX_CONTEXT_MESSAGE_CHARS) return message;
 
-  // Tool mesajları: hata mesajlarını koru, akıllı kırpma yap
+  // Tool mesajlarÄ±: hata mesajlarÄ±nÄ± koru, akÄ±llÄ± kÄ±rpma yap
   if (message.role === 'tool') {
     return { ...message, content: compactToolContent(content, MAX_CONTEXT_MESSAGE_CHARS) };
   }
@@ -663,16 +710,16 @@ function compactContextMessage(message: Message): Message {
 }
 
 /**
- * Tool sonuçlarını akıllıca kırpar:
- * - Hata mesajlarını ASLA kırpma
- * - JSON yanıtlarında anahtarları koru
- * - Dosya okumalarında head + tail tut
+ * Tool sonuÃ§larÄ±nÄ± akÄ±llÄ±ca kÄ±rpar:
+ * - Hata mesajlarÄ±nÄ± ASLA kÄ±rpma
+ * - JSON yanÄ±tlarÄ±nda anahtarlarÄ± koru
+ * - Dosya okumalarÄ±nda head + tail tut
  */
 function compactToolContent(content: string, maxChars: number): string {
-  // Hata mesajlarını olduğu gibi bırak (genelde kısadır)
+  // Hata mesajlarÄ±nÄ± olduÄŸu gibi bÄ±rak (genelde kÄ±sadÄ±r)
   const lowerContent = content.toLowerCase();
   if (lowerContent.includes('error') || lowerContent.includes('hata') || lowerContent.includes('failed') || lowerContent.includes('exception')) {
-    // Hata mesajı bile çok uzunsa, yine de biraz kırp ama daha fazla tut
+    // Hata mesajÄ± bile Ã§ok uzunsa, yine de biraz kÄ±rp ama daha fazla tut
     if (content.length <= maxChars * 1.5) return content;
     return truncateText(content, Math.floor(maxChars * 1.5));
   }
