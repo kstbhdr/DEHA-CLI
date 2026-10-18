@@ -568,9 +568,7 @@ async function runAgentClaude(
       // Final asistan mesajını mutlaka kalıcılaştır
       const finalContent = text?.trim()
         ? text
-        : hadToolActivity
-          ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
-          : describeEmptyResponse(lastStopReason);
+        : describeSilentFinalResponse(lastStopReason, hadToolActivity);
       await pushMessage({ role: 'assistant', content: finalContent });
 
       if (looksLikeUnexecutedToolCallAttempt(text)) {
@@ -584,7 +582,7 @@ async function runAgentClaude(
       } else if (hadToolActivity) {
         // Tool aktivitesi vardı ama son yanıt silent/boş çıktı — özet iste
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
-        logger.raw(chalk.dim('[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]\n'));
+        logger.raw(chalk.dim(finalContent + '\n'));
       } else {
         // Ne görünür metin ne tool aktivitesi var — kullanıcıya asla sessiz
         // dönmeyelim, aksi halde "chat cevap vermiyor" gibi görünür.
@@ -663,9 +661,7 @@ async function runAgentClaude(
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
     const finalContent = finalText?.trim()
       ? finalText
-      : hadToolActivity
-        ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
-        : describeEmptyResponse(lastStopReason);
+      : describeSilentFinalResponse(lastStopReason, hadToolActivity);
     await pushMessage({ role: 'assistant', content: finalContent });
   }
 
@@ -857,9 +853,7 @@ async function runAgentOpenAI(
       // Final asistan mesajını mutlaka kalıcılaştır
       const finalContent = text?.trim()
         ? text
-        : hadToolActivity
-          ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
-          : describeEmptyResponse(lastFinishReason);
+        : describeSilentFinalResponse(lastFinishReason, hadToolActivity);
       const finalAssistantMsg: OAIMessage = {
         ...effectiveAssistantMsg,
         content: finalContent,
@@ -883,7 +877,7 @@ async function runAgentOpenAI(
         logger.raw('\n');
       } else if (hadToolActivity) {
         logger.write('\n' + chalk.bold.cyan('DEHA:'));
-        logger.raw(chalk.dim('[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]\n'));
+        logger.raw(chalk.dim(finalContent + '\n'));
       } else {
         // Ne görünür metin ne tool aktivitesi var — kullanıcıya asla sessiz
         // dönmeyelim, aksi halde "chat cevap vermiyor" gibi görünür.
@@ -965,9 +959,7 @@ async function runAgentOpenAI(
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
     const finalContent = finalText?.trim()
       ? finalText
-      : hadToolActivity
-        ? '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]'
-        : describeEmptyResponse(lastFinishReason);
+      : describeSilentFinalResponse(lastFinishReason, hadToolActivity);
     const finalAssistantMsg: OAIMessage = {
       role: 'assistant',
       content: finalContent,
@@ -1546,6 +1538,25 @@ function describeEmptyResponse(stopReason: string | null): string {
       'DEHA_TOOL_MAX_TOKENS değerini artırmayı veya /clear ile konuşma geçmişini kısaltmayı deneyin.]';
   }
   return `[DEHA: Model boş yanıt döndürdü (stop_reason: ${stopReason ?? 'bilinmiyor'}). Tekrar deneyin veya mesajı yeniden ifade edin.]`;
+}
+
+/**
+ * Tool aktivitesi sonrası model sessiz kaldığında (ne tool çağrısı ne metin)
+ * gösterilecek son mesaj. ÖNEMLİ: stop_reason max_tokens/length ise bu
+ * GERÇEK bir tamamlanma değil, bir KESİNTİdir — "[Agent araştırmayı
+ * tamamladı]" gibi başarı ima eden genel mesaj yanıltıcı olur ve görev
+ * yarıda kesilmiş halde kullanıcıya "bitti" gibi görünür. Bu durumda
+ * describeEmptyResponse'un token-limiti açıklayan mesajını kullan.
+ */
+function describeSilentFinalResponse(stopReason: string | null, hadToolActivity: boolean): string {
+  if (!hadToolActivity) return describeEmptyResponse(stopReason);
+  const isTruncated = stopReason === 'max_tokens' || stopReason === 'length';
+  if (isTruncated) {
+    return '[DEHA: Araç sonuçları üretildi ama model ardından boş yanıt döndürdü — yanıt token limitine ' +
+      '(max_tokens) takılmış olabilir, görev YARIDA KESİLMİŞ olabilir. DEHA_TOOL_MAX_TOKENS değerini artırmayı ' +
+      'veya /clear ile konuşma geçmişini kısaltmayı deneyin, ardından "devam et" yazın.]';
+  }
+  return '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]';
 }
 
 function looksLikePlanningJson(normalized: string): boolean {
