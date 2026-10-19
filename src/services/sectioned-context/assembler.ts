@@ -193,6 +193,24 @@ export class TurnContextAssembler {
     return true;
   }
 
+  /** En geç geçerli pencere başlangıcı — son round'u bile aşan taşmalarda son çare. */
+  private lastValidStart(turn: AssemblerMessage[]): number {
+    for (let i = turn.length - 1; i > this.nativeStart; i--) {
+      if (isValidWindowStart(turn, i)) return i;
+    }
+    return this.nativeStart;
+  }
+
+  private truncateNative(native: AssemblerMessage[], nativeBudget: number, floorChars: number): AssemblerMessage[] {
+    if (messagesTokens(native) <= nativeBudget) return native;
+    const toolMsgs = native.filter(isToolResult);
+    const nonTool = messagesTokens(native.filter(m => !isToolResult(m)));
+    const perMsgChars = Math.max(floorChars, Math.floor(tokensToChars(Math.max(0, nativeBudget - nonTool)) / Math.max(1, toolMsgs.length)));
+    return native.map(m => (isToolResult(m) && typeof m.content === 'string'
+      ? { ...m, content: truncateMiddle(m.content, perMsgChars, 'bağlam limiti') }
+      : m));
+  }
+
   build(input: BuildInput): { messages: AssemblerMessage[]; stats: BuildStats } {
     if (!this.staticMsgs) {
       this.staticMsgs = buildStaticContextMessages({ includeActiveTask: false, includeSummary: false }) as AssemblerMessage[];
@@ -223,17 +241,6 @@ export class TurnContextAssembler {
     }
     const nativeBudget = nativeBudgetFor(this.snapshot);
 
-    // Native pencere (kopya). Tek bir round bile bütçeyi aşıyorsa tool içerikleri kopyada kırpılır.
-    let native: AssemblerMessage[] = input.turn.slice(this.nativeStart).map(m => ({ ...m }));
-    if (messagesTokens(native) > nativeBudget) {
-      const toolMsgs = native.filter(isToolResult);
-      const nonTool = messagesTokens(native.filter(m => !isToolResult(m)));
-      const perMsgChars = Math.max(2_000, Math.floor(tokensToChars(Math.max(0, nativeBudget - nonTool)) / Math.max(1, toolMsgs.length)));
-      native = native.map(m => (isToolResult(m) && typeof m.content === 'string'
-        ? { ...m, content: truncateMiddle(m.content, perMsgChars, 'bağlam limiti') }
-        : m));
-    }
-
     const original = getActiveTask()?.originalUserRequest || input.userMessage;
     const brainBlock = [
       BRAIN_BLOCK_MARKER,
@@ -245,23 +252,54 @@ export class TurnContextAssembler {
         'Kullanıcının mesajı boş DEĞİL. Görev bitene kadar devam et; bitince [STATUS: COMPLETE] yaz.',
     ].join('\n');
 
-    const out: AssemblerMessage[] = [];
-    if (this.opts.format === 'openai') out.push({ role: 'system', content: input.systemPrompt });
-    out.push(...this.staticMsgs);
-    out.push({ role: 'user', content: `<task>\n${taskText}\n</task>` });
-    out.push({ role: 'assistant', content: 'Görevi aldım; bitene kadar bu göreve odaklanacağım.' });
-    if (this.snapshot.text) {
-      out.push({ role: 'user', content: `<work_log>\n${this.snapshot.text}\n</work_log>` });
-      out.push({ role: 'assistant', content: 'Çalışma günlüğünü aldım; yapılanları tekrar etmeyeceğim.' });
+    const assemble = (native: AssemblerMessage[]): { out: AssemblerMessage[]; totalTokens: number } => {
+      const out: AssemblerMessage[] = [];
+      if (this.opts.format === 'openai') out.push({ role: 'system', content: input.systemPrompt });
+      out.push(...this.staticMsgs!);
+      out.push({ role: 'user', content: `<task>\n${taskText}\n</task>` });
+      out.push({ role: 'assistant', content: 'Görevi aldım; bitene kadar bu göreve odaklanacağım.' });
+      if (this.snapshot!.text) {
+        out.push({ role: 'user', content: `<work_log>\n${this.snapshot!.text}\n</work_log>` });
+        out.push({ role: 'assistant', content: 'Çalışma günlüğünü aldım; yapılanları tekrar etmeyeceğim.' });
+      }
+      out.push(...dialogue);
+      out.push(...native);
+      const last = out[out.length - 1];
+      if (this.opts.format === 'claude' && last && last.role === 'user' && typeof last.content === 'string') {
+        // Anthropic ardışık user mesajı sevmez → son user mesajına ekle (kopya üzerinde)
+        out[out.length - 1] = { ...last, content: `${last.content}\n\n${brainBlock}` };
+      } else {
+        out.push({ role: 'user', content: brainBlock });
+      }
+      const totalTokens = messagesTokens(out) + this.opts.toolSchemaTokens + (this.opts.format === 'claude' ? estimateTextTokens(input.systemPrompt) : 0);
+      return { out, totalTokens };
+    };
+    const overflow = (totalTokens: number) => totalTokens + budgets.outputReserve + budgets.safetyReserve > budgets.total;
+
+    // Native pencere (kopya). Tek bir round bile bütçeyi aşıyorsa tool içerikleri kopyada kırpılır.
+    let native: AssemblerMessage[] = this.truncateNative(input.turn.slice(this.nativeStart).map(m => ({ ...m })), nativeBudget, 2_000);
+    let built = assemble(native);
+
+    // Son çare: yukarıdaki yumuşak kaydırma + 2000 karakter taban değeriyle bile taşma
+    // devam ediyorsa (ör. tek turda art arda çok sayıda tool sonucu birikmiş uzun bir
+    // anketleme/polling döngüsü), turu hata ile tamamen kesmek yerine önce pencereyi
+    // son geçerli round'a kadar zorla daralt, sonra tabanı düşür — görev ve brain
+    // korunurken mümkün olduğunca turu tamamlatmaya çalışıyoruz.
+    if (overflow(built.totalTokens)) {
+      const forcedStart = this.lastValidStart(input.turn);
+      if (forcedStart > this.nativeStart) {
+        this.nativeStart = forcedStart;
+        this.snapshot = this.renderSnapshot(ws, budgets.changes, toolLogBudget);
+        native = this.truncateNative(input.turn.slice(this.nativeStart).map(m => ({ ...m })), nativeBudgetFor(this.snapshot), 2_000);
+        built = assemble(native);
+      }
     }
-    out.push(...dialogue);
-    out.push(...native);
-    const last = out[out.length - 1];
-    if (this.opts.format === 'claude' && last && last.role === 'user' && typeof last.content === 'string') {
-      // Anthropic ardışık user mesajı sevmez → son user mesajına ekle (kopya üzerinde)
-      out[out.length - 1] = { ...last, content: `${last.content}\n\n${brainBlock}` };
-    } else {
-      out.push({ role: 'user', content: brainBlock });
+    if (overflow(built.totalTokens)) {
+      native = this.truncateNative(input.turn.slice(this.nativeStart).map(m => ({ ...m })), nativeBudgetFor(this.snapshot), 300);
+      built = assemble(native);
+    }
+    if (overflow(built.totalTokens)) {
+      throw new Error('Bağlam bütçesi aşıldı: sabit içerik (system prompt + proje bağlamı + tool şemaları) tek başına pencereye sığmıyor. Context limitini artırın veya sabit proje bağlamını/aktif MCP araçlarını azaltın. Görev ve brain korunuyor.');
     }
 
     const stats: BuildStats = {
@@ -274,13 +312,10 @@ export class TurnContextAssembler {
         dialogue: dialogueTokens,
         native: messagesTokens(native),
       },
-      totalTokens: messagesTokens(out) + this.opts.toolSchemaTokens + (this.opts.format === 'claude' ? estimateTextTokens(input.systemPrompt) : 0),
+      totalTokens: built.totalTokens,
       nativeStart: this.nativeStart,
       rolledOver,
     };
-    if (stats.totalTokens + budgets.outputReserve + budgets.safetyReserve > budgets.total) {
-      throw new Error('Bağlam bütçesi aşıldı: son araç çağrısı veya sabit içerik tek başına pencereye sığmıyor. Daha küçük araç girdileri kullanın veya context limitini artırın. Görev ve brain korunuyor.');
-    }
-    return { messages: out, stats };
+    return { messages: built.out, stats };
   }
 }
