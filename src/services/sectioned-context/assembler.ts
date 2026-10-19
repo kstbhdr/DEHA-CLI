@@ -59,6 +59,15 @@ export interface BuildStats {
 
 export const BRAIN_BLOCK_MARKER = '<brain>';
 
+/**
+ * Native (son round'lar — gerçek tool çağrıları) bütçesi ÖZERK: eskiden her
+ * tool sonucu sabit bir tavana (MAX_TOOL_RESULT_CHARS≈32k karakter ≈ 9000
+ * token) kırpılır, başka hiçbir bölümle paylaşım yapmazdı. Bu taban, diğer
+ * bölümler (tool günlüğü/sohbet) ne kadar şişerse şişsin tool çağrılarının
+ * payının bunun altına düşmemesini garanti eder.
+ */
+const MIN_NATIVE_BUDGET_TOKENS = 9_000;
+
 const INTERNAL_MESSAGE_PATTERNS = [
   /^The previous tool call was truncated/,
   /^This response was detected as an interim/,
@@ -226,13 +235,19 @@ export class TurnContextAssembler {
     const planTokens = estimateTextTokens(planBody);
     const toolsBudget = budgets.tools + Math.max(0, budgets.task - taskTokens) + Math.max(0, budgets.plan - planTokens);
 
-    const dialogue = this.buildDialogue(input.history, Math.floor(toolsBudget * 0.15), input.userMessage);
+    const dialogueBudget = Math.floor(toolsBudget * 0.15);
+    const dialogue = this.buildDialogue(input.history, dialogueBudget, input.userMessage);
     const dialogueTokens = messagesTokens(dialogue);
     const toolLogBudget = Math.floor(toolsBudget * 0.30);
 
     if (!this.snapshot) this.snapshot = this.renderSnapshot(ws, budgets.changes, toolLogBudget);
-    const nativeBudgetFor = (s: { changesTokens: number; toolLogTokens: number }) =>
-      Math.max(2_000, toolsBudget + Math.max(0, budgets.changes - s.changesTokens) - s.toolLogTokens - dialogueTokens);
+    // ÖZERK native bütçesi: tool günlüğü ve sohbet geçmişinin GERÇEK kullanımı
+    // değil, SABİT tavanları (toolLogBudget/dialogueBudget) düşülür. Böylece bu
+    // iki bölüm ne kadar dolarsa dolsun (renderToolLog/buildDialogue zaten
+    // kendi tavanlarına sığdırıyor) tool çağrılarının payı bundan etkilenmez —
+    // sadece değişiklik defterinden kalan artık pay bonus olarak eklenir.
+    const nativeBudgetFor = (s: { changesTokens: number }) =>
+      Math.max(MIN_NATIVE_BUDGET_TOKENS, toolsBudget - toolLogBudget - dialogueBudget + Math.max(0, budgets.changes - s.changesTokens));
 
     let rolledOver = false;
     if (this.rollWindow(input.turn, nativeBudgetFor(this.snapshot))) {
