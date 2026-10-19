@@ -125,6 +125,24 @@ describe('process-manager', () => {
   });
 
   describe('startServices', () => {
+    it('otomatik başlangıç kapalıysa servis kurmaz veya port taramaz', async () => {
+      vi.stubEnv('DEHA_AUTO_START_SERVICES', '0');
+      try {
+        expect(await startServices()).toEqual({ redis: 'unavailable', chromadb: 'unavailable', vectorStore: 'JSON' });
+        expect(mockCreateConnection).not.toHaveBeenCalled();
+        expect(mockExecSync).not.toHaveBeenCalled();
+      } finally { vi.unstubAllEnvs(); }
+    });
+    it('varsayılan açılış eksik servisler için pip veya apt kurulumu çalıştırmaz', async () => {
+      vi.stubEnv('DEHA_AUTO_INSTALL_SERVICES', '0');
+      mockPortOpen(false);
+      mockExecSync.mockImplementation(() => { throw new Error('not installed'); });
+      try {
+        expect(await ensureRedis()).toBe('unavailable');
+        expect(await ensureChroma()).toBe('unavailable');
+        expect(mockExecSync.mock.calls.every(([command]) => !/pip install|apt-get/.test(String(command)))).toBe(true);
+      } finally { vi.unstubAllEnvs(); }
+    });
     it('her iki servis running doner', async () => {
       mockPortOpen(true);
       const status = await startServices();

@@ -168,13 +168,14 @@ export class DehaCLI {
       .option('-p, --packages <pkgs>', 'Kurulacak pip paketleri (virgülle)')
       .option('--venv', 'Sanal ortam kullan')
       .action(async (file: string | undefined, opts) => {
-        const { runPythonCode: rpc, detectPython } = await import('./tools/python');
+        const { runPythonCode: rpc, detectPython, createVenv } = await import('./tools/python');
         const python = await detectPython();
         if (!python) { logger.error('Python bulunamadı'); process.exit(1); }
         const code = opts.code ?? (file ? require('fs').readFileSync(file, 'utf-8') : '');
         if (!code) { logger.error('Kod veya dosya gerekli'); process.exit(1); }
         const packages = opts.packages ? opts.packages.split(',').map((s: string) => s.trim()) : [];
-        const r = await rpc(code, { installPackages: packages });
+        const venvPath = opts.venv ? await createVenv(process.cwd()) : undefined;
+        const r = await rpc(code, { installPackages: packages, venvPath });
         if (r.stdout) process.stdout.write(r.stdout);
         if (r.stderr) process.stderr.write(r.stderr);
         process.exit(r.exitCode);

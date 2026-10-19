@@ -68,7 +68,6 @@ const INTERNAL_MESSAGE_PATTERNS = [
   /^\[SYSTEM WARNING\]/,
   /^\[DEHA BAĞLAM NOTU\]/,
   /^<tool_result/,
-  /^<previous_tool_result/,
   /^<brain>/,
   /^\[tool calls\]$/,
 ];
@@ -275,10 +274,13 @@ export class TurnContextAssembler {
         dialogue: dialogueTokens,
         native: messagesTokens(native),
       },
-      totalTokens: messagesTokens(out) + this.opts.toolSchemaTokens,
+      totalTokens: messagesTokens(out) + this.opts.toolSchemaTokens + (this.opts.format === 'claude' ? estimateTextTokens(input.systemPrompt) : 0),
       nativeStart: this.nativeStart,
       rolledOver,
     };
+    if (stats.totalTokens + budgets.outputReserve + budgets.safetyReserve > budgets.total) {
+      throw new Error('Bağlam bütçesi aşıldı: son araç çağrısı veya sabit içerik tek başına pencereye sığmıyor. Daha küçük araç girdileri kullanın veya context limitini artırın. Görev ve brain korunuyor.');
+    }
     return { messages: out, stats };
   }
 }

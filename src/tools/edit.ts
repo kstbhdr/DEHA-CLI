@@ -96,7 +96,7 @@ export function insertLines(input: {
   if (!fs.existsSync(resolved)) return `HATA: ${resolved} bulunamadı`;
 
   const lines = fs.readFileSync(resolved, 'utf-8').split('\n');
-  const insertAt = Math.min(Math.max(0, input.line), lines.length);
+  const insertAt = Math.min(Math.max(0, input.line - 1), lines.length);
   lines.splice(insertAt, 0, ...input.content.split('\n'));
   fs.writeFileSync(resolved, lines.join('\n'), 'utf-8');
   return `✓ ${input.content.split('\n').length} satır eklendi (satır ${insertAt + 1}): ${resolved}`;

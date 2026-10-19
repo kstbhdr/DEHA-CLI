@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { Message } from '../services/ai-service';
+import { getSessionSnapshot, SessionState } from '../services/session-memory';
 
 export interface ConversationMeta {
   id: string;           // dosya adı (uzantısız)
@@ -52,6 +53,11 @@ export function saveConversation(
 
   const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model, workDir: process.cwd() });
   fs.writeFileSync(filePath, md, 'utf-8');
+  // Markdown contains display previews, not a lossless agent checkpoint.
+  const snapshot = { ...getSessionSnapshot(), conversationId: id, messages };
+  const snapshotFile = path.join(getConvDir(), `${id}.session.json`);
+  fs.writeFileSync(`${snapshotFile}.tmp`, JSON.stringify(snapshot), 'utf-8');
+  fs.renameSync(`${snapshotFile}.tmp`, snapshotFile);
 
   return filePath;
 }
@@ -104,6 +110,8 @@ export function getConversationMeta(id: string): ConversationMeta | null {
 }
 
 export function loadConversationMessages(id: string): Message[] | null {
+  const snapshot = loadConversationSnapshot(id);
+  if (snapshot) return snapshot.messages;
   const raw = readConversation(id);
   if (!raw) return null;
 
@@ -159,6 +167,13 @@ export function loadConversationMessages(id: string): Message[] | null {
   }
 
   return messages.length > 0 ? mergeConsecutiveSameRole(messages) : null;
+}
+
+export function loadConversationSnapshot(id: string): SessionState | null {
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(getConvDir(), `${id}.session.json`), 'utf-8'));
+    return saved?.conversationId === id && Array.isArray(saved.messages) ? saved : null;
+  } catch { return null; }
 }
 
 /**

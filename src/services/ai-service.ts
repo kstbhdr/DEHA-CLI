@@ -130,6 +130,7 @@ export async function callRole(
 }
 
 function roleFromConfig(config: DehaConfig): RoleConfig {
+  if (config.roleOverride) return config.roleOverride;
   const modelMap: Record<string, string> = {
     claude:     config.claudeModel,
     openai:     config.openaiModel,

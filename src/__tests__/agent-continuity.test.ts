@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { runAgent, isContextLossGreeting, isFollowUpOrInspection } from '../commands/agent';
 import * as aiService from '../services/ai-service';
 import * as tools from '../tools';
@@ -19,17 +20,18 @@ import {
   buildContextMessages,
 } from '../services/session-memory';
 import { getConfig } from '../config';
+const TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'deha-continuity-'));
 
 describe('Agent Continuity & Persistent Memory', () => {
   const dummyConfig = getConfig({ provider: 'deepseek' });
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    await resetSession(process.cwd());
+    await resetSession(TEST_DIR);
   });
 
   afterEach(async () => {
-    await resetSession(process.cwd());
+    await resetSession(TEST_DIR);
   });
 
   // ─── Test 1: Tool solved: False ardından [STATUS: BLOCKED] karşılama mesajı ──
@@ -296,7 +298,7 @@ describe('Agent Continuity & Persistent Memory', () => {
     expect(savedMessagesBefore.length).toBe(2);
 
     // Yeni CLI oturumu açılışı: loadSession çağrılır
-    await loadSession();
+    await loadSession(TEST_DIR);
 
     const restoredMessages = getSessionMessages();
     expect(restoredMessages.length).toBe(2);
@@ -358,7 +360,7 @@ describe('Agent Continuity & Persistent Memory', () => {
     expect(getSessionMessages().length).toBe(1);
     expect(getActiveTask()).not.toBeNull();
 
-    await resetSession(process.cwd());
+    await resetSession(TEST_DIR);
 
     expect(getSessionMessages().length).toBe(0);
     expect(getActiveTask()).toBeNull();
@@ -459,8 +461,8 @@ describe('Agent Continuity & Persistent Memory', () => {
 
   // ─── Test 13: Farklı çalışma dizinleri (Multiple working directories) ────────
   it('13. Farklı çalışma dizinlerindeki oturumlar ve aktif görevler birbirine karışmaz', async () => {
-    const projectADir = path.resolve('C:/test-projects/project-alpha');
-    const projectBDir = path.resolve('C:/test-projects/project-beta');
+    const projectADir = path.join(TEST_DIR, 'project-alpha');
+    const projectBDir = path.join(TEST_DIR, 'project-beta');
 
     // Project A oturumu
     await resetSession(projectADir);

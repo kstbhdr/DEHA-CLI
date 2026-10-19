@@ -19,6 +19,7 @@
     "prepublishOnly": "npm run build",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
+    "test:local": "npm run build && node scripts/local-smoke.cjs",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },

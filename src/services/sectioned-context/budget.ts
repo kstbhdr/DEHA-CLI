@@ -75,7 +75,8 @@ export function computeSectionBudgets(
 ): SectionBudgets {
   const outputReserve = options.outputReserve ?? computeOutputReserve(totalContext);
   const safetyReserve = Math.round(totalContext * 0.03);
-  const sections = Math.max(MIN_SECTION_TOKENS, totalContext - outputReserve - safetyReserve - fixedPrefixTokens);
+  const sections = totalContext - outputReserve - safetyReserve - fixedPrefixTokens;
+  if (sections < MIN_SECTION_TOKENS) throw new Error(`Bağlam bütçesi yetersiz: ${totalContext} token penceresinde sabit bağlam ve çıktı rezervinden sonra ${sections} token kaldı. Sabit proje bağlamını/araç şemalarını azaltın veya context limitini artırın. Görev belleği korunuyor.`);
   const r = options.ratios ?? DEFAULT_SECTION_RATIOS;
   const sum = r.task + r.plan + r.changes + r.tools || 1;
   const task = Math.floor((sections * r.task) / sum);

@@ -76,6 +76,7 @@ describe('insertLines', () => {
   it('ortaya satir ekler', () => {
     const result = insertLines({ path: 'test.txt', line: 2, content: 'yeni satir' });
     expect(result).toContain('1 satır eklendi');
+    expect(fs.writeFileSync).toHaveBeenCalledWith(expect.any(String), 'satir 1\nyeni satir\nsatir 2\n', 'utf-8');
   });
 
   it('dosya yoksa hata dondurur', () => {

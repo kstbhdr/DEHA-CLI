@@ -62,7 +62,7 @@ async function getRedis(): Promise<RedisLike | null> {
   const url = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
   try {
     const { default: Redis } = await import('ioredis');
-    const client = new Redis(url, { lazyConnect: true, connectTimeout: 3000 });
+    const client = new Redis(url, { lazyConnect: true, connectTimeout: 3000, maxRetriesPerRequest: 1, retryStrategy: () => null });
     client.on('error', () => { /* Suppress unhandled errors */ });
     await client.connect();
     redisClient = client;
@@ -91,8 +91,9 @@ export interface ActiveTaskContext {
 
 // â”€â”€â”€ Session state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-interface SessionState {
+export interface SessionState {
   sessionId: string;
+  conversationId?: string;
   conversationLifecycle: ConversationLifecycle;
   activeTask?: ActiveTaskContext | null;
   previousTask?: ActiveTaskContext | null;
@@ -125,6 +126,18 @@ let _state: SessionState = {
 
 export async function loadSession(targetDir: string = process.cwd()): Promise<void> {
   const resolvedDir = path.resolve(targetDir);
+  // Synchronous disk checkpoints are newer than the asynchronous Redis cache.
+  // Never let an older Redis record overwrite a successfully saved workspace.
+  const bufferFile = getSessionBufferFile(resolvedDir);
+  for (const file of [bufferFile, `${bufferFile}.bak`]) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(file, 'utf-8')) as SessionState;
+      if (Array.isArray(saved.messages) && shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
+        _state = { ...emptySession(resolvedDir), ...saved, workDir: resolvedDir };
+        return;
+      }
+    } catch { /* Try the backup, then Redis. */ }
+  }
   const redis = await getRedis();
   if (redis) {
     const projectKey = getProjectRedisKey(resolvedDir);
@@ -133,7 +146,7 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
       try {
         const saved = JSON.parse(raw) as Partial<SessionState>;
         if (shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
-          _state = { ..._state, ...saved, workDir: resolvedDir };
+          _state = { ...emptySession(resolvedDir), ...saved, workDir: resolvedDir };
           if (_state.messages.length > 0 && _state.conversationLifecycle !== 'EXPLICITLY CLEARED') {
             _state.conversationLifecycle = 'ACTIVE';
           }
@@ -143,19 +156,22 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
     }
   }
 
-  const bufferFile = getSessionBufferFile(resolvedDir);
-  if (fs.existsSync(bufferFile)) {
-    try {
-      const raw = fs.readFileSync(bufferFile, 'utf-8');
-      const saved = JSON.parse(raw) as Partial<SessionState>;
-      if (shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
-        _state = { ..._state, ...saved, workDir: resolvedDir };
-        if (_state.messages.length > 0 && _state.conversationLifecycle !== 'EXPLICITLY CLEARED') {
-          _state.conversationLifecycle = 'ACTIVE';
-        }
-      }
-    } catch { }
-  }
+  _state = emptySession(resolvedDir);
+}
+
+function emptySession(workDir: string): SessionState {
+  return { sessionId: crypto.randomUUID(), conversationLifecycle: 'CREATED', activeTask: null,
+    previousTask: null, messages: [], summary: '', pinnedContext: [], architectureFiles: [],
+    workDir, flushedCount: 0, compressCount: 0 };
+}
+
+export function getSessionSnapshot(): SessionState {
+  return JSON.parse(JSON.stringify(_state));
+}
+
+export function setConversationId(id: string): void {
+  _state.conversationId = id;
+  _writeWarmBuffer();
 }
 
 export function shouldLoadSessionForCurrentDir(saved: Partial<SessionState>, targetDir: string = process.cwd()): boolean {
@@ -467,8 +483,13 @@ export function getConversationLifecycle(): ConversationLifecycle {
 
 export async function hydrateSession(
   messages: Message[],
-  options: { workDir?: string; preserveSummary?: boolean; activeTask?: ActiveTaskContext | null; previousTask?: ActiveTaskContext | null } = {},
+  options: { workDir?: string; preserveSummary?: boolean; activeTask?: ActiveTaskContext | null; previousTask?: ActiveTaskContext | null; snapshot?: SessionState } = {},
 ): Promise<void> {
+  // A transcript alone cannot carry brain/task state. Start clean when opening
+  // another conversation; use its own snapshot when one exists.
+  _state = options.snapshot
+    ? { ...emptySession(options.workDir || process.cwd()), ...JSON.parse(JSON.stringify(options.snapshot)) }
+    : { ...emptySession(options.workDir || process.cwd()), workspace: null };
   _state.messages = [...messages];
   _state.flushedCount = 0;
   _state.compressCount = 0;
@@ -499,6 +520,7 @@ export async function resetSession(workDir = process.cwd()): Promise<void> {
     workDir: resolvedDir,
     flushedCount: 0,
     compressCount: 0,
+    workspace: null, // Explicit reset: do not import a previous conversation's brain.md.
   };
   _writeWarmBuffer();
   const redis = await getRedis();
@@ -670,7 +692,16 @@ function _writeWarmBuffer(): void {
     const bufferFile = getSessionBufferFile(_state.workDir);
     const bufferDir = path.dirname(bufferFile);
     if (!fs.existsSync(bufferDir)) fs.mkdirSync(bufferDir, { recursive: true });
-    fs.writeFileSync(bufferFile, JSON.stringify(_state), 'utf-8');
+    const tempFile = `${bufferFile}.tmp`;
+    fs.writeFileSync(tempFile, JSON.stringify(_state), 'utf-8');
+    // Keep the last valid checkpoint if the process is killed during a write.
+    if (fs.existsSync(bufferFile)) {
+      try {
+        JSON.parse(fs.readFileSync(bufferFile, 'utf-8'));
+        fs.copyFileSync(bufferFile, `${bufferFile}.bak`);
+      } catch { /* Do not replace a valid backup with a corrupt file. */ }
+    }
+    fs.renameSync(tempFile, bufferFile);
   } catch { }
 }
 

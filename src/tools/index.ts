@@ -1,10 +1,12 @@
 import * as fs from 'fs';
 import { createTwoFilesPatch } from 'diff';
 import * as path from 'path';
-import { execSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { parseCommandArgs } from '../services/command-args';
 import chalk from 'chalk';
 import type { ToolDefinition } from '../services/ai-service';
-import { toolRunTerminal } from './terminal';
+import { toolRunTerminal, runCommand } from './terminal';
 import { toolRunPython } from './python';
 import { toolSmokeTest } from './smoke';
 import { toolBrowserAction } from './browser';
@@ -466,6 +468,7 @@ export async function executeToolAsync(
   name: string,
   input: Record<string, unknown>,
   config?: import('../config').DehaConfig,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   try {
     switch (name) {
@@ -482,9 +485,9 @@ export async function executeToolAsync(
         await ensureSafeFileAccess((input as any).path, 'delete_lines');
         return deleteLines(input as any);
       case 'run_shell':
-        return await toolRunShell(input as ToolInput);
+        return await toolRunShell(input as ToolInput, abortSignal);
       case 'run_terminal':
-        return await toolRunTerminal(input as Parameters<typeof toolRunTerminal>[0]);
+        return await toolRunTerminal(input as Parameters<typeof toolRunTerminal>[0], abortSignal);
       case 'run_python':
         return await toolRunPython(input as Parameters<typeof toolRunPython>[0]);
       case 'smoke_test':
@@ -700,7 +703,7 @@ async function ensureSafeFileAccess(filePath: string, operationName: string): Pr
   }
 }
 
-async function toolRunShell(inp: ToolInput): Promise<string> {
+async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<string> {
   if (!inp.command) throw new Error('command gerekli');
 
   // Güvenlik kontrolü
@@ -737,18 +740,18 @@ async function toolRunShell(inp: ToolInput): Promise<string> {
   const cwd = inp.cwd ? path.resolve(inp.cwd) : projectRoot;
 
   // Proje dışına çıkışı engelle
-  if (!cwd.startsWith(projectRoot)) {
+  const relativeCwd = path.relative(projectRoot, cwd);
+  if (relativeCwd === '..' || relativeCwd.startsWith('..' + path.sep) || path.isAbsolute(relativeCwd)) {
     throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nProje kökü: ${projectRoot}`);
   }
 
-  const result = execSync(inp.command, {
+  const result = await runCommand(inp.command, {
     cwd,
     timeout: Math.min(inp.timeout ?? 60, 86400) * 1000, // max 24 saat (86400 saniye)
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    maxBuffer: 10 * 1024 * 1024, // 10MB
+    signal,
   });
-  return result || '(çıktı yok)';
+  if (result.exitCode !== 0) throw new Error(`Command failed (exit ${result.exitCode}):\n${result.stdout}\n${result.stderr}`);
+  return [result.stdout, result.stderr].filter(Boolean).join('\n') || '(çıktı yok)';
 }
 
 function toolSearchInFiles(inp: ToolInput): string {
@@ -914,9 +917,11 @@ async function toolGit(inp: { command: string; cwd?: string }): Promise<string> 
   let cmd = inp.command.trim();
   if (cmd.startsWith('git ')) cmd = cmd.substring(4);
   
-  const safeCommands = ['status', 'diff', 'log', 'branch', 'show', 'blame', 'ls-files'];
-  const baseCmd = cmd.split(' ')[0];
-  const isSafe = safeCommands.includes(baseCmd);
+  const args = parseCommandArgs(cmd);
+  const safeCommands = ['status', 'diff', 'log', 'show', 'blame', 'ls-files'];
+  const baseCmd = args[0];
+  const readOnlyBranch = baseCmd === 'branch' && (args.length === 1 || args.slice(1).every(arg => /^(-[arv]+|--list|--show-current|--all|--remotes|--verbose)$/.test(arg)));
+  const isSafe = (safeCommands.includes(baseCmd) || readOnlyBranch) && !args.some(arg => /^--output(?:=|$)/.test(arg));
   
   if (!isSafe && !autoAllowDangerousCommands) {
       const inquirer = await import('inquirer').then(m => m.default || m);
@@ -944,12 +949,14 @@ async function toolGit(inp: { command: string; cwd?: string }): Promise<string> 
   
   const cwd = inp.cwd ? path.resolve(inp.cwd) : process.cwd();
   try {
-    const result = execSync(`git ${cmd}`, {
+    const result = await promisify(execFile)('git', args, {
       cwd,
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe']
+      windowsHide: true,
+      timeout: 60_000,
+      maxBuffer: 10 * 1024 * 1024,
     });
-    return result || '(çıktı yok)';
+    return result.stdout || result.stderr || '(çıktı yok)';
   } catch (err: any) {
     throw new Error(`Git hatası: ${err.stderr || err.message}`);
   }

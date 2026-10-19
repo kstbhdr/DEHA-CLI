@@ -9,6 +9,7 @@ import { safeSlice } from '../services/text-utils';
 import { formatResponse } from './chat';
 import { runAgent, summarizeOldToolResults, resolveTaskForUserMessage } from './agent';
 import { isSectionedContextEnabled } from '../services/sectioned-context';
+import { initializeInteractiveSession } from '../services/interactive-session';
 import { mcpManager } from '../mcp/manager';
 import { handleMcpCommand } from '../mcp/commands';
 import { checkForUpdates } from './update';
@@ -29,6 +30,7 @@ import {
 import {
   detectWorkDir,
   setWorkDir,
+  setConversationId,
   appendMessage,
   buildContextMessages,
   buildStaticContextMessages,
@@ -121,8 +123,7 @@ export async function interactive(
     if (parts.length) process.stdout.write(chalk.dim('  ') + parts.join(chalk.dim('  ')) + '\n\n');
   }).catch(() => {});
 
-  setWorkDir(process.cwd());
-  mcpManager.connectAll(true).catch(() => {});
+  if (process.env.DEHA_MCP_AUTOCONNECT !== '0') mcpManager.connectAll(true).catch(() => {});
   checkForUpdates(true).catch(() => {});
 
   const pasteInput = createPasteInput();
@@ -186,27 +187,10 @@ export async function interactive(
   };
   pasteInput.stream.on('keypress', onGlobalKeypress);
 
-  const history: Message[] = [...initialHistory];
-  let conversationId: string | null = initialConversationId ?? null;
-  if (initialHistory.length > 0) {
-    await hydrateSession(initialHistory, { workDir: process.cwd(), preserveSummary: true }).catch(() => {});
-    logger.write(chalk.dim(`  ↩ ${initialHistory.length} mesaj yüklendi\n`));
-  } else {
-    // Terminal yeniden açıldığında önceki oturumu ve aktif görevi geri yükle
-    await loadSession().catch(() => {});
-    const savedMessages = getSessionMessages();
-    if (savedMessages.length > 0) {
-      history.push(...savedMessages);
-      const stats = getSessionStats();
-      logger.write(chalk.dim(`  ↩ Önceki oturumdan ${savedMessages.length} mesaj geri yüklendi\n`));
-      if (stats.activeTask && stats.activeTask.taskState === 'ACTIVE') {
-        logger.write(chalk.yellow(`  ⚡ Devam eden aktif görev: ${stats.activeTask.originalUserRequest}\n`));
-      }
-    } else {
-      conversationId = createConversationId();
-      await resetSession(process.cwd()).catch(() => {});
-    }
-  }
+  const restored = await initializeInteractiveSession(process.cwd(), initialHistory, initialConversationId);
+  const history: Message[] = [...restored.messages];
+  let conversationId: string | null = restored.conversationId;
+  if (history.length) logger.write(chalk.dim(`  ↩ ${history.length} mesaj ve kayıtlı görev bağlamı yüklendi\n`));
 
   // DEHA_SECOND_BRAIN_PATH env varı tanımlıysa otomatik yükle
   const secondBrainPath = process.env.DEHA_SECOND_BRAIN_PATH;
@@ -257,6 +241,7 @@ export async function interactive(
         history.length = 0;
         conversationId = createConversationId();
         await resetSession(process.cwd()).catch(() => {});
+        setConversationId(conversationId);
         clearActiveTask();
         setWorkDir(process.cwd());
         logger.write(chalk.green('✓ Yeni sohbet başlatıldı. ID: ') + chalk.cyan(conversationId) + '\n');
@@ -267,6 +252,7 @@ export async function interactive(
         history.length = 0;
         conversationId = createConversationId();
         await resetSession(process.cwd()).catch(() => {});
+        setConversationId(conversationId);
         clearActiveTask();
         console.clear();
         logger.write(BANNER);
@@ -378,8 +364,9 @@ export async function interactive(
       if (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history')) {
         const selection = await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
         if (selection) {
-          history.length = 0; history.push(...selection.messages);
-          conversationId = selection.id; await hydrateSession(selection.messages, { workDir: process.cwd() }).catch(() => {});
+          const restored = await initializeInteractiveSession(process.cwd(), selection.messages, selection.id);
+          history.length = 0; history.push(...restored.messages);
+          conversationId = restored.conversationId;
         }
         prompt(); return;
       }

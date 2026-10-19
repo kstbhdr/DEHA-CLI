@@ -41,7 +41,7 @@ function isPortOpen(port: number): Promise<boolean> {
 
 function which(cmd: string): boolean {
   try {
-    execSync(process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`, { stdio: 'pipe' });
+    execSync(process.platform === 'win32' ? `where ${cmd}` : `which ${cmd}`, { stdio: 'pipe', timeout: 5000, windowsHide: true });
     return true;
   } catch { return false; }
 }
@@ -66,7 +66,7 @@ export async function ensureRedis(): Promise<'running' | 'started' | 'unavailabl
 
   // Linux'ta doğrudan kurulu redis-server'ı tercih et (redis-memory-server Linux binary'leri SSL kütüphanesi uyumsuzluğu yaşayabiliyor)
   if (isLinux) {
-    if (!which('redis-server') && username === 'root') {
+    if (!which('redis-server') && username === 'root' && process.env.DEHA_AUTO_INSTALL_SERVICES === '1') {
       try {
         // Colab gibi root yetkisi olan ortamlarda paket yöneticisiyle kurmaya çalış
         execSync('apt-get update -y && apt-get install -y redis-server', { stdio: 'ignore', timeout: 30000 });
@@ -91,6 +91,13 @@ export async function ensureRedis(): Promise<'running' | 'started' | 'unavailabl
         // Hata durumunda redis-memory-server fallback'e düş
       }
     }
+  }
+
+  if (process.env.DEHA_AUTO_INSTALL_SERVICES !== '1') {
+    if (!which('redis-server')) return 'unavailable';
+    _redisProc = spawn('redis-server', ['--port', String(REDIS_PORT), '--loglevel', 'warning', '--bind', '127.0.0.1'], { stdio: 'ignore', windowsHide: true });
+    _redisProc.on('error', () => {});
+    return await waitPort(REDIS_PORT, 3000) ? 'started' : 'unavailable';
   }
 
   // Windows/macOS'ta veya Linux'ta kurulu redis yoksa redis-memory-server'ı dene
@@ -130,7 +137,8 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
 
   const py = which('python3') ? 'python3' : 'python';
 
-  if (!fs.existsSync(CHROMA_FLAG)) {
+  if (!fs.existsSync(CHROMA_FLAG) && !which('chroma')) {
+    if (process.env.DEHA_AUTO_INSTALL_SERVICES !== '1') return 'unavailable';
     try {
       execSync(`${py} -m pip install chromadb --quiet --disable-pip-version-check --break-system-packages`, {
         stdio: 'pipe',
@@ -151,14 +159,14 @@ export async function ensureChroma(): Promise<'running' | 'started' | 'unavailab
     _chromaProc = spawn(
       chromaBin,
       ['run', '--path', CHROMA_DATA, '--port', String(CHROMA_PORT), '--host', '127.0.0.1'],
-      { stdio: 'ignore', env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
+      { stdio: 'ignore', windowsHide: true, env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
     );
   } else {
     const startScript = `from chromadb.cli.cli import app; import sys; sys.argv=['chroma','run','--path',r'${CHROMA_DATA}','--port','${CHROMA_PORT}','--host','127.0.0.1']; app()`;
     _chromaProc = spawn(
       py,
       ['-c', startScript],
-      { stdio: 'ignore', env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
+      { stdio: 'ignore', windowsHide: true, env: { ...process.env, ANONYMIZED_TELEMETRY: 'False' } },
     );
   }
   
@@ -181,6 +189,7 @@ export interface ServicesStatus {
 }
 
 export async function startServices(): Promise<ServicesStatus> {
+  if (process.env.DEHA_AUTO_START_SERVICES === '0') return { redis: 'unavailable', chromadb: 'unavailable', vectorStore: 'JSON' };
   const [redis, chromadb, vs] = await Promise.all([
     ensureRedis(),
     ensureChroma(),

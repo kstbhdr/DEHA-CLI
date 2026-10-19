@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 // Redis mock
 vi.mock('ioredis', () => {
@@ -26,6 +29,7 @@ vi.mock('../services/token-counter', () => ({
 import * as session from '../services/session-memory';
 
 const ORIGINAL_ENV = { ...process.env };
+const TEST_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'deha-memory-test-'));
 
 interface Message {
   role: 'user' | 'assistant';
@@ -33,10 +37,11 @@ interface Message {
 }
 
 describe('session-memory', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     process.env = { ...ORIGINAL_ENV };
     delete process.env.REDIS_URL;
+    await session.resetSession(TEST_DIR);
   });
 
   afterEach(() => {
@@ -85,8 +90,9 @@ describe('session-memory', () => {
     });
 
     it('setWorkDir ile güncellenir', () => {
-      session.setWorkDir('/fake/path');
-      expect(session.getWorkDir()).toBe('/fake/path');
+      const target = path.join(TEST_DIR, 'new-directory');
+      session.setWorkDir(target);
+      expect(session.getWorkDir()).toBe(target);
     });
   });
 

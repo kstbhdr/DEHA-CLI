@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { runCommand } from './terminal';
 
 const PYTHON_BIN = process.platform === 'win32' ? 'python' : 'python3';
@@ -29,22 +30,23 @@ export async function runPythonCode(
   } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const python = opts.venvPath
-    ? path.join(opts.venvPath, process.platform === 'win32' ? 'Scripts/python' : 'bin/python')
+    ? path.join(opts.venvPath, process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
     : PYTHON_BIN;
 
   // Gerekli paketleri kur
   if (opts.installPackages?.length) {
-    await runCommand(`${python} -m pip install ${opts.installPackages.join(' ')} -q`, {
+    const installed = await runCommand(`"${python}" -m pip install ${opts.installPackages.join(' ')} -q`, {
       timeout: 60_000,
     });
+    if (installed.exitCode !== 0) throw new Error(`Python paketleri kurulamadı: ${installed.stderr}`);
   }
 
   // Geçici dosyaya yaz
-  const tmpFile = path.join(os.tmpdir(), `deha_py_${Date.now()}.py`);
+  const tmpFile = path.join(os.tmpdir(), `deha_py_${randomUUID()}.py`);
   fs.writeFileSync(tmpFile, code, 'utf-8');
 
   try {
-    return await runCommand(`${python} "${tmpFile}"`, {
+    return await runCommand(`"${python}" "${tmpFile}"`, {
       timeout: (opts.timeout ?? 30) * 1000,
       cwd: opts.cwd,
     });

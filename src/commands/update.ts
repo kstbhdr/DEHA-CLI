@@ -15,6 +15,7 @@ interface VersionInfo {
 }
 
 export async function checkForUpdates(silent = false): Promise<void> {
+  if (process.env.DEHA_CHECK_UPDATES === '0') return;
   try {
     const info = await fetchLatestVersion();
     if (!info) return;

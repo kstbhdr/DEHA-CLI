@@ -8,6 +8,8 @@ import { logger } from '../services/logger';
 import { safeSlice, safeJsonParse } from '../services/text-utils';
 import { getMaxContextTokens } from '../services/token-counter';
 import { TurnContextAssembler, createTurnAssembler, isSectionedContextEnabled, SECTIONED_CONTEXT_PROMPT, BuildStats, addTaskFollowUp } from '../services/sectioned-context';
+import { resolveTotalContextTokens } from '../services/sectioned-context';
+import { computeOutputReserve } from '../services/sectioned-context/budget';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
@@ -71,6 +73,10 @@ export async function runAgent(
   let assembler: TurnContextAssembler | undefined;
   if (options.sectioned && isSectionedContextEnabled()) {
     enrichedConfig = { ...enrichedConfig, systemPrompt: enrichedConfig.systemPrompt + SECTIONED_CONTEXT_PROMPT };
+    const requested = enrichedConfig.roleOverride?.maxTokens ?? enrichedConfig.toolMaxTokens ?? enrichedConfig.maxTokens;
+    const outputLimit = Math.min(requested, computeOutputReserve(resolveTotalContextTokens(enrichedConfig), requested));
+    enrichedConfig.toolMaxTokens = outputLimit;
+    if (enrichedConfig.roleOverride) enrichedConfig.roleOverride = { ...enrichedConfig.roleOverride, maxTokens: outputLimit };
     assembler = createTurnAssembler(enrichedConfig, allTools as unknown[], config.provider === 'claude' ? 'claude' : 'openai');
   }
 
@@ -250,6 +256,7 @@ export function isExplicitContinuation(text: string): boolean {
   const patterns = [
     /^(devam|devam et|s[uü]rd[uü]r|continue|go on|proceed|keep going)$/i,
     /^(kald[iı][gğ][iı]n yerden devam( et)?|kald[iı][gğ][iı]m[iı]z yerden devam( et)?)$/i,
+    /^(devam et|continue|keep going)[\s,;:!—-]+(?!ama (?:yeni|başka)|but (?:a )?(?:new|different))/i,
   ];
   return patterns.some(p => p.test(lower));
 }
@@ -294,8 +301,11 @@ export function resolveTaskForUserMessage(userMessage: string): ActiveTaskContex
   if (isExplicitContinuation(trimmed)) {
     if (currentTask) {
       if (currentTask.taskState !== 'ACTIVE') {
-        return updateActiveTask({ taskState: 'ACTIVE', recoveryAttemptCount: 0 }) || currentTask;
+        const updated = updateActiveTask({ taskState: 'ACTIVE', recoveryAttemptCount: 0 }) || currentTask;
+        addTaskFollowUp(userMessage);
+        return updated;
       }
+      addTaskFollowUp(userMessage);
       return currentTask;
     }
     return setActiveTask(userMessage, userMessage);
@@ -494,6 +504,9 @@ async function runAgentClaude(
       : parseInlineXmlToolCalls(text, allTools);
 
     if (effectiveToolCalls.length === 0) {
+      if (!text.trim() && getActiveTask()?.taskState === 'ACTIVE' && round >= maxRounds) {
+        updateActiveTask({ taskState: 'INTERRUPTED' });
+      }
       if (looksLikeUnexecutedToolCallAttempt(text) && inlineRetryRounds < MAX_INLINE_RETRY_ROUNDS) {
         inlineRetryRounds++;
         forceToolUse = true;
@@ -569,6 +582,8 @@ async function runAgentClaude(
       const finalContent = text?.trim()
         ? text
         : describeSilentFinalResponse(lastStopReason, hadToolActivity);
+      finalText = finalContent;
+      if (!text.trim() && getActiveTask()?.taskState === 'ACTIVE') updateActiveTask({ taskState: 'INTERRUPTED' });
       await pushMessage({ role: 'assistant', content: finalContent });
 
       if (looksLikeUnexecutedToolCallAttempt(text)) {
@@ -608,7 +623,7 @@ async function runAgentClaude(
 
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
-      const result = await runTool(tc.name, tc.input, config);
+      const result = await runTool(tc.name, tc.input, config, abortSignal);
       const compactedResult = compactToolResultForModel(tc.name, result);
       const previewText = compactedResult.trim();
       const preview = previewText.length === 0
@@ -659,9 +674,12 @@ async function runAgentClaude(
   }
 
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
-    const finalContent = finalText?.trim()
-      ? finalText
-      : describeSilentFinalResponse(lastStopReason, hadToolActivity);
+    const capped = round >= maxRounds && !abortSignal?.aborted;
+    const finalContent = capped
+      ? '[DEHA: Araç turu sınırına ulaşıldı. Görev tamamlanmadı; görev ve brain korunuyor. "devam et" ile sürdürebilirsiniz.]'
+      : finalText?.trim() ? finalText : describeSilentFinalResponse(lastStopReason, hadToolActivity);
+    if (capped) updateActiveTask({ taskState: 'INTERRUPTED' });
+    finalText = finalContent;
     await pushMessage({ role: 'assistant', content: finalContent });
   }
 
@@ -783,6 +801,9 @@ async function runAgentOpenAI(
     }
 
     if (effectiveToolCalls.length === 0) {
+      if (!text.trim() && getActiveTask()?.taskState === 'ACTIVE' && round >= maxRounds) {
+        updateActiveTask({ taskState: 'INTERRUPTED' });
+      }
       // Context-loss kontrolü: Aktif görev varken model "Henüz görev vermediniz" dediğinde kurtar
       const activeTask = getActiveTask();
       const isContextLoss = activeTask && activeTask.taskState === 'ACTIVE' && isContextLossGreeting(text, { userMessage, hadToolActivity });
@@ -854,6 +875,8 @@ async function runAgentOpenAI(
       const finalContent = text?.trim()
         ? text
         : describeSilentFinalResponse(lastFinishReason, hadToolActivity);
+      finalText = finalContent;
+      if (!text.trim() && getActiveTask()?.taskState === 'ACTIVE') updateActiveTask({ taskState: 'INTERRUPTED' });
       const finalAssistantMsg: OAIMessage = {
         ...effectiveAssistantMsg,
         content: finalContent,
@@ -911,7 +934,7 @@ async function runAgentOpenAI(
     // Tool'ları çalıştır ve sonuçları ekle
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
-      const result = await runTool(tc.name, tc.input, config);
+      const result = await runTool(tc.name, tc.input, config, abortSignal);
       const compactedResult = compactToolResultForModel(tc.name, result);
       const previewText = compactedResult.trim();
       const preview = previewText.length === 0
@@ -957,9 +980,12 @@ async function runAgentOpenAI(
   }
 
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
-    const finalContent = finalText?.trim()
-      ? finalText
-      : describeSilentFinalResponse(lastFinishReason, hadToolActivity);
+    const capped = round >= maxRounds && !abortSignal?.aborted;
+    const finalContent = capped
+      ? '[DEHA: Araç turu sınırına ulaşıldı. Görev tamamlanmadı; görev ve brain korunuyor. "devam et" ile sürdürebilirsiniz.]'
+      : finalText?.trim() ? finalText : describeSilentFinalResponse(lastFinishReason, hadToolActivity);
+    if (capped) updateActiveTask({ taskState: 'INTERRUPTED' });
+    finalText = finalContent;
     const finalAssistantMsg: OAIMessage = {
       role: 'assistant',
       content: finalContent,
@@ -1554,9 +1580,9 @@ function describeSilentFinalResponse(stopReason: string | null, hadToolActivity:
   if (isTruncated) {
     return '[DEHA: Araç sonuçları üretildi ama model ardından boş yanıt döndürdü — yanıt token limitine ' +
       '(max_tokens) takılmış olabilir, görev YARIDA KESİLMİŞ olabilir. DEHA_TOOL_MAX_TOKENS değerini artırmayı ' +
-      'veya /clear ile konuşma geçmişini kısaltmayı deneyin, ardından "devam et" yazın.]';
+      'deneyin veya daha kısa araç çıktılarıyla yeniden devam edin. Görev bağlamını silmeyin.]';
   }
-  return '[Agent araştırmayı tamamladı. Yukarıdaki tool çıktılarına bakabilirsin.]';
+  return '[DEHA: Model araç çıktılarından sonra nihai yanıt üretmedi. Görevin tamamlandığı doğrulanmadı; mevcut bağlam korunuyor. Devam etmek için "devam et" yazabilirsiniz.]';
 }
 
 function looksLikePlanningJson(normalized: string): boolean {
@@ -1672,7 +1698,9 @@ async function runTool(
   name: string,
   input: Record<string, unknown>,
   config: DehaConfig,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
+  if (abortSignal?.aborted) return 'HATA: İşlem kullanıcı tarafından durduruldu';
   if (mcpManager.isMcpTool(name)) {
     try {
       return await mcpManager.callTool(name, input);
@@ -1683,7 +1711,7 @@ async function runTool(
 
   const syncResult = executeTool(name, input);
   if (syncResult.startsWith('__ASYNC_TOOL__:')) {
-    return await executeToolAsync(name, input, config);
+    return await executeToolAsync(name, input, config, abortSignal);
   }
   return syncResult;
 }

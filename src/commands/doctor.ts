@@ -4,6 +4,8 @@ import { execSync } from 'child_process';
 import { resolve } from 'path';
 import { createInterface } from 'readline';
 import { logger } from '../services/logger';
+import { getConfig, resolveApiKey } from '../config';
+import { getMcpConfigPath } from '../mcp/config';
 
 const RESET = '\x1b[0m';
 const GREEN = '\x1b[32m';
@@ -44,16 +46,9 @@ async function checkPlaywright(): Promise<void> {
 
     // Check if chromium browser is available
     try {
-      const chromiumPath = execSync('npx playwright install --dry-run chromium', {
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 10_000,
-      });
-      if (chromiumPath.includes('already installed') || chromiumPath.includes('No install')) {
-        ok('Playwright Chromium browser', 'installed');
-      } else {
-        warn('Playwright Chromium browser', 'Not installed. Run: npx playwright install chromium');
-      }
+      const { chromium } = await import('playwright');
+      await access(chromium.executablePath(), constants.R_OK);
+      ok('Playwright Chromium browser', 'installed');
     } catch {
       warn('Playwright Chromium browser', 'Could not verify. Run: npx playwright install chromium');
     }
@@ -92,10 +87,10 @@ async function checkNode(): Promise<void> {
       timeout: 5_000,
     });
     const verNum = parseInt(version.trim().replace('v', '').split('.')[0], 10);
-    if (verNum >= 18) {
+    if (verNum >= 20) {
       ok('Node.js', version.trim());
     } else {
-      fail('Node.js', `Version ${version.trim()} is too old. Need 18+.`);
+      fail('Node.js', `Version ${version.trim()} is too old. Need 20+.`);
     }
   } catch {
     fail('Node.js', 'Node.js not found. Install from https://nodejs.org');
@@ -134,29 +129,22 @@ async function checkOllama(): Promise<void> {
 }
 
 async function checkEnvFile(): Promise<void> {
+  const config = getConfig();
+  ok('Active provider', config.provider);
+  if (config.provider === 'ollama') ok('API key', 'local Ollama does not require one');
+  else if (resolveApiKey({ provider: config.provider, model: '' }, config)) ok('Active provider API key', 'set');
+  else fail('Active provider API key', `No API key configured for ${config.provider}. Run: deha init`);
   const envPath = resolve(process.cwd(), '.env');
   try {
     await access(envPath, constants.R_OK);
-    const content = await readFile(envPath, 'utf-8');
-    const openaiMatch = content.match(/^OPENAI_API_KEY=(.+)$/m);
-    const anthropicMatch = content.match(/^ANTHROPIC_API_KEY=(.+)$/m);
-    const groqMatch = content.match(/^GROQ_API_KEY=(.+)$/m);
-
-    if (openaiMatch && openaiMatch[1].trim()) ok('OPENAI_API_KEY', 'set');
-    else warn('OPENAI_API_KEY', 'Not set in .env');
-
-    if (anthropicMatch && anthropicMatch[1].trim()) ok('ANTHROPIC_API_KEY', 'set');
-    else warn('ANTHROPIC_API_KEY', 'Not set in .env');
-
-    if (groqMatch && groqMatch[1].trim()) ok('GROQ_API_KEY', 'set');
-    else warn('GROQ_API_KEY', 'Not set in .env');
+    ok('.env file', 'readable');
   } catch {
     warn('.env file', 'Not found. Run: deha init or copy .env.example to .env');
   }
 }
 
 async function checkMCPConfig(): Promise<void> {
-  const mcpPath = resolve(process.cwd(), 'mcp.json');
+  const mcpPath = getMcpConfigPath();
   try {
     await access(mcpPath, constants.R_OK);
     const content = await readFile(mcpPath, 'utf-8');
@@ -187,8 +175,10 @@ async function checkDiskSpace(): Promise<void> {
 }
 
 export async function doctor() {
+  passed = 0; failed = 0; warnings = 0;
   logger.write(`\n${BOLD}🔍 DEHA Diagnostic Report${RESET}\n`);
   logger.write(`${BOLD}System Checks${RESET}`);
+  ok('Installation', resolve(__dirname, '../..'));
 
   await checkNode();
   await checkPython();

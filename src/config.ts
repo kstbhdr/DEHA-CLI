@@ -47,6 +47,7 @@ export interface PipelineConfig {
 // ─── Ana Config ─────────────────────────────────────────────────────────────
 
 export interface DehaConfig {
+  roleOverride?: RoleConfig;
   provider: Provider;
 
   // API Keyleri (global)

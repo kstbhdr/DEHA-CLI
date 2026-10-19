@@ -112,6 +112,29 @@ export function resetWorkspace(): void {
   setWorkspaceContextRaw(emptyWorkspace());
 }
 
+/** Migrate surviving brain.md from older sessions that lost the JSON workspace. */
+export function recoverBrainFile(): boolean {
+  try {
+    const raw = fs.readFileSync(path.join(getWorkDir(), '.deha', 'brain.md'), 'utf-8');
+    if (!raw.startsWith('# DEHA Brain')) return false;
+    const brain = emptyWorkspace().brain;
+    let section = '';
+    const marks: Record<string, StepStatus> = { ' ': 'todo', '~': 'doing', x: 'done', '!': 'blocked' };
+    for (const line of raw.split(/\r?\n/)) {
+      if (line.startsWith('## ')) { section = line.slice(3); continue; }
+      const step = /^\[([ x~!])\] \d+\. (.+)$/.exec(line);
+      if (section === 'Plan' && step) brain.steps.push({ text: step[2], status: marks[step[1]] });
+      else if (line.startsWith('- ')) {
+        const list = section === 'Bulgular' ? brain.findings : section === 'Kararlar' ? brain.decisions : section.startsWith('Çıkmaz sokaklar') ? brain.deadEnds : null;
+        list?.push(line.slice(2));
+      } else if (section === 'Kabul kriteri' && line.trim()) brain.criteria = [brain.criteria, line].filter(Boolean).join('\n');
+    }
+    if (!brain.steps.length && !brain.findings.length && !brain.decisions.length && !brain.deadEnds.length && !brain.criteria) return false;
+    const ws = emptyWorkspace(); ws.brain = brain; saveWorkspace(ws);
+    return true;
+  } catch { return false; }
+}
+
 /** İnsan tarafından okunabilir brain dosyası: <workDir>/.deha/brain.md */
 export function writeBrainFile(markdown: string): void {
   try {
