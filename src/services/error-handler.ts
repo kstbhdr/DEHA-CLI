@@ -187,7 +187,17 @@ export function handleError(
 
   // İsteğe bağlı çıkış
   if (options?.exit !== false) {
-    process.exit(options?.exitCode ?? 1);
+    const code = options?.exitCode ?? 1;
+    process.exitCode = code;
+    // stdout bir pipe ise (Colab, CI, `| tee` vb.) yazılar senkron flush
+    // olmaz; process.exit() hemen çağrılırsa yukarıdaki mesaj hiç ekrana
+    // yansımadan buffer'da kaybolur — kullanıcı sebepsiz yere terminale
+    // düşmüş gibi görür. Önce drain'i bekle, sonra çık.
+    if ((process.stdout as any).writableLength > 0) {
+      process.stdout.once('drain', () => process.exit(code));
+    } else {
+      process.exit(code);
+    }
   }
 }
 

@@ -8,6 +8,16 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 import chalk from 'chalk';
 import { DehaCLI } from './cli';
 import { logger } from './services/logger';
+import { setupGlobalErrorHandler } from './services/error-handler';
+
+// Hiçbir yerde kayıtlı değildi: bir .catch() atlanmış promise reddi (örn. uzun
+// bir agent oturumundaki job-polling/arşivleme/health-check interval'larından
+// biri) Node 15+'ta varsayılan olarak TÜM process'i sessizce çökertiyordu —
+// özellikle stdout pipe'landığı ortamlarda (Colab gibi) hiçbir hata mesajı
+// görünmeden doğrudan shell'e düşülüyordu. Artık uncaughtException loglanıp
+// çıkılıyor (flush garantili), unhandledRejection ise sadece uyarıp devam
+// ediyor — interaktif REPL tek bir kaçak promise yüzünden ölmüyor.
+setupGlobalErrorHandler();
 
 const cli = new DehaCLI();
 
