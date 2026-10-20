@@ -105,7 +105,7 @@ export const DEHA_TOOLS: ToolDefinition[] = [
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Command to run (max 2000 chars, destructive commands blocked)' },
-        cwd:     { type: 'string', description: 'Working directory (must be within project root)' },
+        cwd:     { type: 'string', description: 'Working directory (by default must be within project root — DEHA_SANDBOX_CWD=0 lifts this)' },
         timeout: { type: 'number', description: 'Timeout in seconds (default: 30, max: 60)' },
       },
       required: ['command'],
@@ -782,16 +782,29 @@ async function ensureSafeShellCommand(command: string): Promise<void> {
 
 }
 
+/**
+ * run_shell'in `cwd` parametresi varsayılan olarak proje köküyle sınırlı.
+ * Bu sınır zaten tamamen aşılabiliyordu (`command: "cd /dışarı && ..."` gömülünce
+ * hiçbir şeyi engellemiyordu — gerçek koruma değil, sadece `cwd` alanını
+ * kullanınca sürtünme yaratıyordu) ve tek bir proje kökünde durmayan kurulumlarda
+ * (örn. Colab: /content, /content/drive/MyDrive/... gibi bağımsız dizinler)
+ * gereksiz engel oluyordu. DEHA_SANDBOX_CWD=0 ile tamamen kapatılabilir;
+ * varsayılan (1/unset) eski davranışı korur.
+ */
+function shellCwdSandboxEnabled(): boolean {
+  return process.env.DEHA_SANDBOX_CWD !== '0';
+}
+
 async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<string> {
   await ensureSafeShellCommand(inp.command!);
-  // Çalışma dizinini proje köküyle sınırla
   const projectRoot = process.cwd();
   const cwd = inp.cwd ? path.resolve(inp.cwd) : projectRoot;
 
-  // Proje dışına çıkışı engelle
-  const relativeCwd = path.relative(projectRoot, cwd);
-  if (relativeCwd === '..' || relativeCwd.startsWith('..' + path.sep) || path.isAbsolute(relativeCwd)) {
-    throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nProje kökü: ${projectRoot}`);
+  if (shellCwdSandboxEnabled()) {
+    const relativeCwd = path.relative(projectRoot, cwd);
+    if (relativeCwd === '..' || relativeCwd.startsWith('..' + path.sep) || path.isAbsolute(relativeCwd)) {
+      throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nProje kökü: ${projectRoot}\n(Bu kurulumda gerçekten dışarı çıkmak gerekiyorsa DEHA_SANDBOX_CWD=0 ile kapatılabilir.)`);
+    }
   }
 
   const result = await runCommand(inp.command!, {
