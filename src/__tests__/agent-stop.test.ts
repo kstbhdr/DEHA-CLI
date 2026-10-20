@@ -6,6 +6,7 @@ import * as ai from '../services/ai-service';
 import * as tools from '../tools';
 import { runAgent } from '../commands/agent';
 import { getConfig } from '../config';
+import { logger } from '../services/logger';
 import { getActiveTask, resetSession, getWorkspaceContextRaw, setWorkspaceContextRaw } from '../services/session-memory';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deha-stop-'));
 afterEach(() => { vi.restoreAllMocks(); });
@@ -31,6 +32,7 @@ describe('Agent tamamlanmamış işi başarı olarak sunmaz', () => {
   });
   it.each(['deepseek', 'claude'] as const)('%s araç turu sınırına ulaşırsa eski düşünceyi final diye dönmez', async provider => {
     await resetSession(dir);
+    const visible = vi.spyOn(logger, 'write');
     const response = { text: 'E18 ölçülüyor', toolCalls: [{ id: 'e18', name: 'run_shell', input: { command: 'echo probe' } }],
       rawAssistantMsg: { role: 'assistant', content: 'E18 ölçülüyor', tool_calls: [{ id: 'e18', type: 'function', function: { name: 'run_shell', arguments: '{"command":"echo probe"}' } }] },
       malformedToolCalls: 0, finishReason: 'tool_calls', stopReason: 'tool_use' };
@@ -41,5 +43,6 @@ describe('Agent tamamlanmamış işi başarı olarak sunmaz', () => {
     expect(result.response).toContain('Araç turu sınırına');
     expect(result.response).not.toBe('E18 ölçülüyor');
     expect(getActiveTask()?.taskState).toBe('INTERRUPTED');
+    expect(visible).toHaveBeenCalledWith(expect.stringContaining('Araç turu sınırına'));
   });
 });

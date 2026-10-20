@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import { readJobState, writeJobState, JobStatus } from './job-state';
+import { resolveCommandShell } from '../services/command-shell';
 
 function supervise(dir: string): void {
   const job = readJobState(dir);
@@ -13,7 +14,7 @@ function supervise(dir: string): void {
   let finished = false;
   let stopping: JobStatus | undefined;
   let hardKill: NodeJS.Timeout | undefined;
-  const child = spawn(job.command, { cwd: job.cwd, shell: true, windowsHide: true,
+  const child = spawn(job.command, { cwd: job.cwd, shell: resolveCommandShell(), windowsHide: true,
     detached: process.platform !== 'win32', env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
 
   job.workerPid = process.pid; job.pid = child.pid;

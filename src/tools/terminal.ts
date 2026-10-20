@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as path from 'path';
 import chalk from 'chalk';
+import { resolveCommandShell } from '../services/command-shell';
 
 export interface RunResult {
   stdout: string;
@@ -13,7 +14,7 @@ export interface RunOptions {
   cwd?: string;
   env?: Record<string, string>;
   timeout?: number;       // ms, default 30s
-  shell?: boolean;        // shell üzerinden çalıştır
+  shell?: boolean | string; // shell üzerinden çalıştır; Unix'te varsa Bash
   stream?: boolean;       // stdout'u canlı yaz
   label?: string;         // log etiketi
   signal?: AbortSignal;
@@ -33,7 +34,7 @@ export function runCommand(command: string, opts: RunOptions = {}): Promise<RunR
 
     const proc = spawn(command, {
       cwd,
-      shell: opts.shell ?? true,
+      shell: resolveCommandShell(opts.shell),
       windowsHide: true,
       detached: process.platform !== 'win32',
       env: { ...process.env, ...(opts.env ?? {}) },

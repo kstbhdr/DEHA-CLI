@@ -70,4 +70,8 @@ Aynı sorgu aynı çıktıyı üçüncü kez verdiğinde modele uyarı eklenir; 
 
 ## Doğrulama
 
+Normal shell araçları ve arka plan supervisor, Unix'te `/bin/bash` varsa onu kullanır; yoksa sistem kabuğuna döner. Böylece `{harness,traces}` gibi Bash genişletmeleri desteklenir. `DEHA_SHELL=/bin/sh` gibi açık bir ayar bu tercihi değiştirir. Windows varsayılan sistem kabuğunu kullanır.
+
+Agent tur sınırına ulaşınca görev `INTERRUPTED` kalır ve sınırın kaç turda dolduğu terminalde açıkça gösterilir. Prompt içine yazılan “10 araç çağrısından önce dosya oluştur” gibi koşullar ayrı bir yürütme kuralına dönüştürülmez; model talimatı olarak kalır. Tekrar uyarıları da modeli yönlendirir, görevi tamamlayacağını garanti etmez.
+
 `npm run build`, `npm test`, `node scripts/background-jobs-smoke.cjs` ve `node scripts/background-agent-smoke.cjs`. Testler yerel sahte sağlayıcı kullanır, ücretli API çağırmaz.

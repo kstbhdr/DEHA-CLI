@@ -703,11 +703,12 @@ async function runAgentClaude(
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
     const capped = round >= maxRounds && !abortSignal?.aborted;
     const finalContent = capped
-      ? '[DEHA: Araç turu sınırına ulaşıldı. Görev tamamlanmadı; görev ve brain korunuyor. "devam et" ile sürdürebilirsiniz.]'
+      ? `[DEHA: Araç turu sınırına ulaşıldı (${round}/${maxRounds} tur). Görev tamamlanmadı; görev ve brain korunuyor.]`
       : finalText?.trim() ? finalText : describeSilentFinalResponse(lastStopReason, hadToolActivity);
     if (capped) updateActiveTask({ taskState: 'INTERRUPTED' });
     finalText = finalContent;
     await pushMessage({ role: 'assistant', content: finalContent });
+    if (capped) logger.write(chalk.yellow('\n' + finalContent + '\n'));
   }
 
   return { response: finalText, messages: messages.slice(startIdx) };
@@ -1025,7 +1026,7 @@ async function runAgentOpenAI(
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
     const capped = round >= maxRounds && !abortSignal?.aborted;
     const finalContent = capped
-      ? '[DEHA: Araç turu sınırına ulaşıldı. Görev tamamlanmadı; görev ve brain korunuyor. "devam et" ile sürdürebilirsiniz.]'
+      ? `[DEHA: Araç turu sınırına ulaşıldı (${round}/${maxRounds} tur). Görev tamamlanmadı; görev ve brain korunuyor.]`
       : finalText?.trim() ? finalText : describeSilentFinalResponse(lastFinishReason, hadToolActivity);
     if (capped) updateActiveTask({ taskState: 'INTERRUPTED' });
     finalText = finalContent;
@@ -1034,6 +1035,7 @@ async function runAgentOpenAI(
       content: finalContent,
     };
     await pushMessage(finalAssistantMsg);
+    if (capped) logger.write(chalk.yellow('\n' + finalContent + '\n'));
   }
 
   // Convert internal OAIMessage back to Message[] for history
