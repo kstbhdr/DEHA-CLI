@@ -24,7 +24,7 @@ export async function initializeInteractiveSession(
       const original = messages.find(m => m.role === 'user' && m.content && !/^(<|\[|merhaba[!.\s]*$|selam[!.\s]*$)/i.test(m.content.trim()));
       if (original?.content) setActiveTask(original.content);
     }
-  } else if (!warm.messages.length && !warm.activeTask && !warm.workspace) {
+  } else if (!warm.messages.length && !warm.activeTask && !warm.workspace && !warm.pendingInputs?.length) {
     await resetSession(workDir);
   }
   // The original working directory is storage context; tool cwd can be another

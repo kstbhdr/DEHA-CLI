@@ -24,3 +24,7 @@ Sohbeti korumak için normal şekilde çıkıp `deha resume <id>` kullanın. `/c
 Çalışma sırasında her mesaj ve workspace güncellemesi, proje tamponuna ek olarak `~/.deha/conversations/<id>.session.json` dosyasına yazılır. Agent turu tamamlanmasa bile `/oldconversations` bu kaydı listeler; `resume` tam araç çağrılarını ve brain bilgisini yükler. Yerel tampon ve yedeği okunamazsa aynı proje dizinine ait en son global checkpoint denenir. Global checkpointin de `.bak` yedeği vardır. Bu kayıtlar makinenin diskindedir; Colab çalışma zamanı sıfırlanmasına karşı ayrıca Drive yedeği gerekir.
 
 `npm run build` ardından `node scripts/recovery-smoke.cjs`, izole geçici dizinde gerçek süreci zorla kapatıp yeniden açar; görev/brain/araç kayıtlarını ve bozuk yerel tampondan kurtarmayı doğrular.
+
+DEHA çalışırken yeni mesajı yazıp Enter'a basabilirsiniz. Mesajlar mevcut turu değiştirmeden sıraya alınır ve tur tamamlandıktan sonra tek tek işlenir. `/queue` bekleyenleri gösterir; `/queue remove 2` ikinci bekleyeni kaldırır; `/queue clear` bekleyenleri temizler. ESC mevcut agent turunu iptal eder; bekleyen mesajların işlenmesi devam eder. Diğer komutlar da sırayla çalışır. Bekleyen metinler çalıştırılana kadar model geçmişine eklenmez ve checkpointlerde saklanır; yeniden açılışta sırayla işlenir.
+
+`node scripts/queue-smoke.cjs`, ücretli API kullanmadan gerçek CLI'de iş sürerken mesaj gönderme, sıra yönetimi, UTF-8 çok satırlı yapıştırma ve araç sonuçları sonrasında mesaj sırasını doğrular.

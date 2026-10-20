@@ -39,6 +39,13 @@ async function app() {
 }
 
 describe('Gerçek açılış ve sohbet geri yükleme yolu', () => {
+  it('mesaj geçmişi henüz oluşmamış bekleyen kuyruk açılışta sıfırlanmaz', async () => {
+    seed({ ...savedState(), messages: [], activeTask: null, workspace: undefined,
+      pendingInputs: ['first queued', 'second queued'] } as any);
+    const { start, session } = await app(); await start(project);
+    expect(session.getPendingInputs()).toEqual(['first queued', 'second queued']);
+    expect(session.getSessionMessages()).toEqual([]);
+  });
   it('tur bitmeden gelen tool sonucu arşivde listelenir ve eksiksiz resume edilir', async () => {
     seed(); const { start, session, conversations } = await app(); await start(project);
     const result: any = { role: 'tool', tool_call_id: 'pending-call', content: 'CHECKPOINT_SAVED_SHA256' };

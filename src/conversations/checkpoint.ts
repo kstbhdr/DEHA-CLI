@@ -21,7 +21,7 @@ export function readCheckpoint(id: string): SessionState | null {
 
 export function writeCheckpoint(state: SessionState): void {
   const id = state.conversationId;
-  if (!id || path.basename(id) !== id || (!state.messages.length && !state.activeTask)) return;
+  if (!id || path.basename(id) !== id || (!state.messages.length && !state.activeTask && !state.pendingInputs?.length)) return;
   fs.mkdirSync(checkpointDir(), { recursive: true });
   const file = path.join(checkpointDir(), `${id}.session.json`);
   const previous = readCheckpoint(id) as (SessionState & { provider?: string; model?: string }) | null;

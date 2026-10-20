@@ -21,12 +21,14 @@ async function child(home, project, mode) {
     await memory.appendMessage({ role: 'assistant', content: null, tool_calls: [
       { id: 'probe', type: 'function', function: { name: 'run_shell', arguments: '{"command":"probe"}' } }] });
     await memory.appendMessage({ role: 'tool', tool_call_id: 'probe', content: 'E19 result persisted' });
+    memory.setPendingInputs(['Queued follow-up one', 'Queued follow-up two']);
     process.send({ ready: true });
     setInterval(() => {}, 1000);
   } else {
     assert.equal(restored.messages.at(-1).content, 'E19 result persisted');
     assert.equal(memory.getActiveTask().originalUserRequest, 'Recover the ARC research without losing E19');
     assert.deepEqual(memory.getSessionSnapshot().workspace.brain.deadEnds, ['E18 failed']);
+    assert.deepEqual(memory.getPendingInputs(), ['Queued follow-up one', 'Queued follow-up two']);
     const listed = conversations.listConversations(100, project);
     assert.equal(listed.length, 1);
     assert.equal(conversations.loadConversationMessages(listed[0].id)[1].tool_calls[0].id, 'probe');

@@ -10,6 +10,7 @@ import { formatResponse } from './chat';
 import { runAgent, summarizeOldToolResults, resolveTaskForUserMessage } from './agent';
 import { isSectionedContextEnabled } from '../services/sectioned-context';
 import { initializeInteractiveSession } from '../services/interactive-session';
+import { InputQueue } from '../services/input-queue';
 import { mcpManager } from '../mcp/manager';
 import { handleMcpCommand } from '../mcp/commands';
 import { checkForUpdates } from './update';
@@ -40,6 +41,8 @@ import {
   getSessionStats,
   loadSession,
   getSessionMessages,
+  getPendingInputs,
+  setPendingInputs,
   getActiveTask,
   clearActiveTask,
   flushOnExit,
@@ -88,6 +91,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/stats')}                        Token kullanımı ve maliyet istatistikleri
   ${chalk.cyan('/test')}                         API ve pipeline sistem testi
   ${chalk.cyan('/judge <dosya> <görev>')}   Sadece Judge rolünü çalıştırarak bir dosyayı değerlendir
+  ${chalk.cyan('/queue [clear|remove <n>]')}     Bekleyen mesajları göster / düzenle
   ${chalk.cyan('/exit')}                         Çıkış yap
 
 ${chalk.bold('@dosya.ts sözdizimi:')}
@@ -97,7 +101,7 @@ ${chalk.bold('@dosya.ts sözdizimi:')}
 const COMMAND_SUGGESTIONS = [
   '/help', '/new', '/clear', '/model', '/thinking', '/agent', '/build', '/file', '/architecture',
   '/mcp', '/history', '/oldconversations', '/run', '/python', '/smoketest', '/screenshot',
-  '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
+  '/queue', '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
 
 const PASTE_START = '\x1b[200~';
@@ -115,6 +119,7 @@ export async function interactive(
     chalk.dim('  |  Model: ') + chalk.yellow(getActiveModel(config)) + '\n',
   );
   logger.write(chalk.dim('Çıkmak için /exit  •  Yardım için /help\n'));
+  logger.write(chalk.dim('Çalışırken gönderdiğin mesajlar sıraya alınır  •  Sırayı görmek için /queue\n'));
 
   startServices().then(s => {
     const parts: string[] = [];
@@ -199,42 +204,27 @@ export async function interactive(
     logger.write(chalk.dim(`  🧠 Second Brain: ${secondBrainPath}\n`));
   }
 
-  const prompt = async () => {
-    const input = await new Promise<string>((resolve) => {
-      let buffer = '';
-      const roleLabels: Record<string, string> = {
-        chat:    chalk.bold.cyan('DEHA ❯ '),
-        planner: chalk.bold.magenta('PLANNER ❯ '),
-        judge:   chalk.bold.yellow('JUDGE ❯ '),
-      };
-      rl.setPrompt(roleLabels[activeRole] || roleLabels.chat);
-      rl.prompt();
-      lastSuggestion = getInlineSuggestion(rl.line);
-      const onLine = (line: string) => {
-        if (line.endsWith('\\')) {
-          buffer += (buffer ? '\n' : '') + line.slice(0, -1);
-          rl.setPrompt('... ');
-          rl.prompt();
-          return;
-        }
-        buffer += (buffer ? '\n' : '') + line;
-        rl.removeListener('line', onLine);
-        resolve(buffer);
-      };
-      rl.on('line', onLine);
-    });
+  let closed = false;
+  const prompt = () => {
+    if (closed) return;
+    const labels = { chat: 'DEHA', planner: 'PLANNER', judge: 'JUDGE' };
+    rl.setPrompt(queue.running ? chalk.yellow('SIRAYA ❯ ') : chalk.bold.cyan(`${labels[activeRole]} ❯ `));
+    rl.prompt(true);
+    lastSuggestion = getInlineSuggestion(rl.line);
+  };
 
-    const modelInput = pasteInput.expand(input);
+  const processInput = async (input: string) => {
+    const modelInput = input;
     const trimmed = input.trim();
     const modelTrimmed = modelInput.trim();
-    if (!trimmed) { prompt(); return; }
+    if (!trimmed) { return; }
 
       if (trimmed === '/exit' || trimmed === 'exit' || trimmed === 'quit') {
         await exitCleanup(history, config, conversationId, sessionUsageSnapshot);
         rl.close(); process.exit(0);
       }
 
-      if (trimmed === '/help') { logger.write(HELP_TEXT); prompt(); return; }
+      if (trimmed === '/help') { logger.write(HELP_TEXT); return; }
 
       if (trimmed === '/new') {
         if (history.length >= 2) saveConversation(history, config.provider, getActiveModel(config), { conversationId: conversationId ?? undefined });
@@ -245,7 +235,7 @@ export async function interactive(
         clearActiveTask();
         setWorkDir(process.cwd());
         logger.write(chalk.green('✓ Yeni sohbet başlatıldı. ID: ') + chalk.cyan(conversationId) + '\n');
-        prompt(); return;
+        return;
       }
 
       if (trimmed === '/clear') {
@@ -257,32 +247,32 @@ export async function interactive(
         console.clear();
         logger.write(BANNER);
         logger.write(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));
-        prompt(); return;
+        return;
       }
 
-      if (trimmed === '/stats') { printStats(); prompt(); return; }
-      if (trimmed === '/version' || isVersionQuestion(trimmed)) { logger.write(chalk.cyan(`${DEHA_VERSION_LABEL}\n`)); prompt(); return; }
+      if (trimmed === '/stats') { printStats(); return; }
+      if (trimmed === '/version' || isVersionQuestion(trimmed)) { logger.write(chalk.cyan(`${DEHA_VERSION_LABEL}\n`)); return; }
 
       if (trimmed === '/model') {
         rl.pause();
         try { await modelSetup(config); } catch (err: any) { if (err.name !== 'ExitPromptError') logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err))); }
-        rl.resume(); prompt(); return;
+        rl.resume(); return;
       }
 
       if (trimmed.startsWith('/thinking')) {
         const parts = trimmed.split(/\s+/).slice(1);
-        if (parts.length === 0) { logger.write(chalk.cyan('Thinking: ') + chalk.yellow(config.deepseekThinking) + '\n'); prompt(); return; }
+        if (parts.length === 0) { logger.write(chalk.cyan('Thinking: ') + chalk.yellow(config.deepseekThinking) + '\n'); return; }
         const state = normalizeThinkingState(parts[0]);
-        if (!state) { logger.write(chalk.yellow('ℹ /thinking <on|off>\n')); prompt(); return; }
+        if (!state) { logger.write(chalk.yellow('ℹ /thinking <on|off>\n')); return; }
         config.deepseekThinking = state;
         if (state === 'enabled' && parts[1]) config.deepseekReasoningEffort = normalizeThinkingEffort(parts[1]);
         logger.write(chalk.green('✓ Güncellendi.\n'));
-        prompt(); return;
+        return;
       }
 
       if (trimmed.startsWith('/build ')) {
         const task = modelTrimmed.slice(7).trim();
-        if (!task) { logger.write(chalk.yellow('ℹ /build <görev>\n')); prompt(); return; }
+        if (!task) { logger.write(chalk.yellow('ℹ /build <görev>\n')); return; }
         const abortController = new AbortController();
         activeAbortController = abortController;
         try {
@@ -308,15 +298,15 @@ export async function interactive(
         } catch (err: unknown) {
           if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Pipeline hatası: ') + (err instanceof Error ? err.message : String(err)) + '\n');
         } finally { activeAbortController = null; }
-        prompt(); return;
+        return;
       }
 
       if (trimmed.startsWith('/judge ')) {
         const parts = modelTrimmed.slice(7).trim().split(/\s+/);
         const filePath = parts[0];
         const task = parts.slice(1).join(' ').trim();
-        if (!filePath || !task) { logger.write(chalk.yellow('ℹ /judge <dosya> <görev>\n')); prompt(); return; }
-        if (!fs.existsSync(filePath)) { logger.write(chalk.red(`✗ Dosya yok: ${filePath}\n`)); prompt(); return; }
+        if (!filePath || !task) { logger.write(chalk.yellow('ℹ /judge <dosya> <görev>\n')); return; }
+        if (!fs.existsSync(filePath)) { logger.write(chalk.red(`✗ Dosya yok: ${filePath}\n`)); return; }
         const abortController = new AbortController();
         activeAbortController = abortController;
         try {
@@ -326,27 +316,27 @@ export async function interactive(
           logger.write('\n' + chalk.bold('─'.repeat(40)) + (verdict.pass ? chalk.bgGreen.black(' PASS ') : chalk.bgRed.white(' FAIL ')) + '\n');
         } catch (err: unknown) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Hata: ') + (err instanceof Error ? err.message : String(err)) + '\n'); }
         finally { activeAbortController = null; }
-        prompt(); return;
+        return;
       }
 
-      if (trimmed === '/plannerchat') { activeRole = activeRole === 'planner' ? 'chat' : 'planner'; logger.write(chalk.magenta(`\n● Planner moduna ${activeRole === 'planner' ? 'girildi' : 'çıkıldı'}.\n`)); prompt(); return; }
-      if (trimmed === '/judgechat') { activeRole = activeRole === 'judge' ? 'chat' : 'judge'; logger.write(chalk.yellow(`\n● Judge moduna ${activeRole === 'judge' ? 'girildi' : 'çıkıldı'}.\n`)); prompt(); return; }
+      if (trimmed === '/plannerchat') { activeRole = activeRole === 'planner' ? 'chat' : 'planner'; logger.write(chalk.magenta(`\n● Planner moduna ${activeRole === 'planner' ? 'girildi' : 'çıkıldı'}.\n`)); return; }
+      if (trimmed === '/judgechat') { activeRole = activeRole === 'judge' ? 'chat' : 'judge'; logger.write(chalk.yellow(`\n● Judge moduna ${activeRole === 'judge' ? 'girildi' : 'çıkıldı'}.\n`)); return; }
 
       if (trimmed.startsWith('/architecture ')) {
         const filePath = trimmed.slice(14).trim();
-        if (!fs.existsSync(filePath)) { logger.write(chalk.red(`✗ Dosya bulunamadı: ${filePath}\n`)); prompt(); return; }
+        if (!fs.existsSync(filePath)) { logger.write(chalk.red(`✗ Dosya bulunamadı: ${filePath}\n`)); return; }
         addArchitectureFile(filePath);
         logger.write(chalk.green(`✓ Mimari dosya (Second Brain) mıhlandı.\n`));
-        prompt(); return;
+        return;
       }
 
       if (trimmed.startsWith('/pin ')) {
         const text = modelTrimmed.slice(5).trim();
         if (text) { addPinnedMessage(text); logger.write(chalk.green('✓ Sabitlendi.\n')); }
-        prompt(); return;
+        return;
       }
 
-      if (trimmed === '/unpin') { clearPinnedMessages(); logger.write(chalk.yellow('✓ Pinler temizlendi.\n')); prompt(); return; }
+      if (trimmed === '/unpin') { clearPinnedMessages(); logger.write(chalk.yellow('✓ Pinler temizlendi.\n')); return; }
 
       if (trimmed.startsWith('/file ')) {
         const filePath = trimmed.slice(6).trim();
@@ -356,10 +346,10 @@ export async function interactive(
           history.push(msg); history.push({ role: 'assistant', content: `Okudum: ${filePath}` });
           await appendMessage(msg);
         }
-        prompt(); return;
+        return;
       }
 
-      if (trimmed.startsWith('/mcp')) { await handleMcpCommand(trimmed.slice(4).trim()); prompt(); return; }
+      if (trimmed.startsWith('/mcp')) { await handleMcpCommand(trimmed.slice(4).trim()); return; }
 
       if (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history')) {
         const selection = await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
@@ -368,7 +358,7 @@ export async function interactive(
           history.length = 0; history.push(...restored.messages);
           conversationId = restored.conversationId;
         }
-        prompt(); return;
+        return;
       }
 
       if (trimmed.startsWith('/run ')) {
@@ -378,7 +368,7 @@ export async function interactive(
         try { const r = await runCommand(cmd, { stream: true, shell: true, timeout: 60_000 }); }
         catch (err: any) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ ') + err.message + '\n'); }
         finally { activeAbortController = null; }
-        prompt(); return;
+        return;
       }
 
       const userMessage = resolveAtFiles(modelTrimmed);
@@ -407,7 +397,7 @@ export async function interactive(
           logger.write(chalk.dim('─'.repeat(50)) + '\n');
         } catch (err: any) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Hata: ') + err.message + '\n'); }
         finally { activeAbortController = null; }
-        prompt(); return;
+        return;
       }
 
       // ── Main Chat / Agent ──
@@ -464,13 +454,56 @@ export async function interactive(
         logger.write(chalk.dim('─'.repeat(50)) + '\n');
       } catch (err: any) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Hata: ') + err.message + '\n'); }
       finally { activeAbortController = null; }
-      prompt();
   };
+
+  const queue = new InputQueue({
+    initial: getPendingInputs(),
+    changed: setPendingInputs,
+    process: async input => {
+      logger.write(chalk.dim(`\n  ▶ İşleniyor: ${input.replace(/\s+/g, ' ').slice(0, 100)}\n`));
+      prompt();
+      try { await processInput(input); }
+      finally { setPendingInputs(queue.pending); }
+    },
+    idle: prompt,
+    error: error => logger.error('Mesaj işlenemedi: ' + (error instanceof Error ? error.message : String(error))),
+  });
+
+  let multiline = '';
+  rl.on('line', line => {
+    if (line.endsWith('\\')) {
+      multiline += (multiline ? '\n' : '') + line.slice(0, -1);
+      rl.setPrompt('... '); rl.prompt(); return;
+    }
+    const input = pasteInput.expand(multiline + (multiline ? '\n' : '') + line);
+    multiline = '';
+    const trimmed = input.trim();
+    if (!trimmed) { prompt(); return; }
+    if (/^\/queue(?:\s|$)/.test(trimmed)) {
+      const args = trimmed.split(/\s+/).slice(1);
+      if (!args.length) {
+        const pending = queue.pending;
+        logger.write(pending.length
+          ? pending.map((message, i) => `  ${i + 1}. ${message.replace(/\s+/g, ' ').slice(0, 150)}`).join('\n')
+          : '  Sırada bekleyen mesaj yok.');
+      } else if (args[0] === 'clear' && args.length === 1) {
+        queue.clear(); logger.write('  Bekleyen mesajlar temizlendi.');
+      } else if (args[0] === 'remove' && args.length === 2 && /^\d+$/.test(args[1])) {
+        logger.write(queue.remove(Number(args[1]) - 1) ? '  Mesaj sıradan çıkarıldı.' : '  Geçersiz sıra numarası.');
+      } else logger.write('  Kullanım: /queue | /queue clear | /queue remove <n>');
+      prompt(); return;
+    }
+    if (queue.running) logger.write(chalk.yellow(`  ⏳ Sıraya eklendi (#${queue.pending.length + 1}): ${trimmed.replace(/\s+/g, ' ').slice(0, 100)}`));
+    queue.enqueue(input);
+    prompt();
+  });
+  if (queue.pending.length) logger.write(chalk.yellow(`  ↩ ${queue.pending.length} bekleyen mesaj geri yüklendi.\n`));
 
   rl.on('SIGINT', async () => { if (activeAbortController) activeAbortController.abort(); else { await exitCleanup(history, config, conversationId, sessionUsageSnapshot); process.exit(0); } });
   process.once('SIGTERM', async () => { await flushOnExit().catch(() => {}); await closeMemory().catch(() => {}); process.exit(0); });
-  rl.on('close', () => { pasteInput.stream.removeListener('keypress', onGlobalKeypress); process.stdin.unpipe(pasteInput.stream); pasteInput.cleanup(); if (process.stdin.isTTY) { process.stdout.write('\x1b[?2004l'); process.stdin.setRawMode(false); } });
-  prompt();
+  rl.on('close', () => { closed = true; queue.stop(); pasteInput.stream.removeListener('keypress', onGlobalKeypress); process.stdin.unpipe(pasteInput.stream); pasteInput.cleanup(); if (process.stdin.isTTY) { process.stdout.write('\x1b[?2004l'); process.stdin.setRawMode(false); } });
+  queue.start();
+  if (!queue.running) prompt();
 }
 
 async function exitCleanup(history: Message[], config: DehaConfig, conversationId?: string | null, sessionUsageSnapshot = 0): Promise<void> {

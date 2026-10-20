@@ -95,6 +95,8 @@ export interface ActiveTaskContext {
 export interface SessionState {
   sessionId: string;
   conversationId?: string;
+  /** Waiting user input; separate from model history until it is processed. */
+  pendingInputs?: string[];
   conversationLifecycle: ConversationLifecycle;
   activeTask?: ActiveTaskContext | null;
   previousTask?: ActiveTaskContext | null;
@@ -177,6 +179,15 @@ export function getSessionSnapshot(): SessionState {
 
 export function setConversationId(id: string): void {
   _state.conversationId = id;
+  _writeWarmBuffer();
+}
+
+export function getPendingInputs(): string[] {
+  return [...(_state.pendingInputs ?? [])];
+}
+
+export function setPendingInputs(inputs: string[]): void {
+  _state.pendingInputs = [...inputs];
   _writeWarmBuffer();
 }
 
