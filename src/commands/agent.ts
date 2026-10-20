@@ -473,6 +473,7 @@ async function runAgentClaude(
   let jobCompletionRetries = 0;
   let readOnlyStreak = 0;
   let readOnlyNudges = 0;
+  let jobWaitRounds = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -513,6 +514,12 @@ async function runAgentClaude(
     const effectiveToolCalls = toolCalls.length > 0
       ? toolCalls
       : parseInlineXmlToolCalls(text, allTools);
+
+    if (isPureJobWaitRound(effectiveToolCalls)) {
+      round--;
+      jobWaitRounds++;
+      if (jobWaitRounds > MAX_JOB_WAIT_ROUNDS) round = maxRounds;
+    }
 
     if (effectiveToolCalls.length === 0) {
       if (!text.trim() && getActiveTask()?.taskState === 'ACTIVE' && round >= maxRounds) {
@@ -676,13 +683,17 @@ async function runAgentClaude(
     readOnlyStreak = allReadOnlyRound ? readOnlyStreak + 1 : 0;
     let readOnlyHalt = false;
 
-    // Round budget awareness
+    // Round budget awareness — job-wait round'larda round sabit kaldığı için
+    // (round'u sayılmaz) burayı atla, yoksa "X tur kullanıldı" uyarısı her
+    // wait_job çağrısında tekrar tekrar basılırdı.
     let budgetWarning = '';
-    if (round > 0 && round % 15 === 0) {
-      logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
-    }
-    if (round === 50) {
-      budgetWarning = '\n[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.';
+    if (!isPureJobWaitRound(effectiveToolCalls)) {
+      if (round > 0 && round % 15 === 0) {
+        logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
+      }
+      if (round === 50) {
+        budgetWarning = '\n[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.';
+      }
     }
     if (readOnlyStreak >= READ_ONLY_STREAK_THRESHOLD) {
       readOnlyStreak = 0;
@@ -776,6 +787,7 @@ async function runAgentOpenAI(
   let jobCompletionRetries = 0;
   let readOnlyStreak = 0;
   let readOnlyNudges = 0;
+  let jobWaitRounds = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -831,6 +843,12 @@ async function runAgentOpenAI(
     let effectiveAssistantMsg = inlineToolCalls.length > 0
       ? withSyntheticOpenAIToolCalls(rawAssistantMsg, inlineToolCalls)
       : rawAssistantMsg;
+
+    if (isPureJobWaitRound(effectiveToolCalls)) {
+      round--;
+      jobWaitRounds++;
+      if (jobWaitRounds > MAX_JOB_WAIT_ROUNDS) round = maxRounds;
+    }
 
     if (effectiveToolCalls.length > 0 && effectiveAssistantMsg.tool_calls && Array.isArray(effectiveAssistantMsg.tool_calls)) {
       const validIds = new Set(effectiveToolCalls.map(tc => tc.id));
@@ -1041,12 +1059,16 @@ async function runAgentOpenAI(
     readOnlyStreak = allReadOnlyRound ? readOnlyStreak + 1 : 0;
     let readOnlyHalt = false;
 
-    // Round budget awareness
-    if (round > 0 && round % 15 === 0) {
-      logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
-    }
-    if (round === 50) {
-      await pushMessage({ role: 'user', content: '[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.' });
+    // Round budget awareness — job-wait round'larda round sabit kaldığı için
+    // (round'u sayılmaz) burayı atla, yoksa "X tur kullanıldı" uyarısı her
+    // wait_job çağrısında tekrar tekrar basılırdı.
+    if (!isPureJobWaitRound(effectiveToolCalls)) {
+      if (round > 0 && round % 15 === 0) {
+        logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
+      }
+      if (round === 50) {
+        await pushMessage({ role: 'user', content: '[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.' });
+      }
     }
     if (readOnlyStreak >= READ_ONLY_STREAK_THRESHOLD) {
       readOnlyStreak = 0;
@@ -1574,6 +1596,17 @@ function isReadOnlyToolCall(name: string, input: Record<string, unknown>): boole
 
 const READ_ONLY_STREAK_THRESHOLD = 15;
 const MAX_READ_ONLY_NUDGES = 2;
+
+// wait_job/list_jobs talimat gereği 30-60 sn aralıklarla yoklanır (bkz.
+// BACKGROUND_JOBS_PROMPT) — saatlerce sürebilen bir eğitim/kopyalama işi
+// beklenirken bu yoklama turları "araştırma/aksiyon" turu SAYILMAMALI,
+// aksi halde maxRounds (varsayılan 200) dolup görev job hâlâ koşarken
+// "tamamlanmadı" diye sahte şekilde kesiliyordu. Yine de gerçek bir sonsuz
+// döngüye karşı (örn. job state bug'ı) çok yüksek ama sonlu bir üst sınır var.
+const MAX_JOB_WAIT_ROUNDS = 2000;
+function isPureJobWaitRound(toolCalls: Array<{ name: string }>): boolean {
+  return toolCalls.length > 0 && toolCalls.every(tc => tc.name === 'wait_job' || tc.name === 'list_jobs');
+}
 
 function readOnlyStallWarning(streakRounds: number): string {
   return `\n[DEHA UYARI — KEŞİF TIKANMASI] Son ${streakRounds} round'da SADECE okuma/listeleme türü araçlar çağrıldı (read_file/ls/grep/cat/brain view vb.) — hiç write_file, edit_file veya gerçek bir komut çalıştırma (python/npm/build/test) olmadı. Daha fazla keşif YAPMA. Planının bir sonraki somut adımını HEMEN uygula: ya bir dosya yaz/düzenle ya da somut bir komut çalıştır. Gerçekten engellendiysen keşfetmeyi bırak ve [STATUS: BLOCKED] yazıp engeli açıkla.`;
