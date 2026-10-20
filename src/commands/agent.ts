@@ -471,6 +471,8 @@ async function runAgentClaude(
   let inlineRetryRounds = 0;
   let contextRecoveryAttempts = 0;
   let jobCompletionRetries = 0;
+  let readOnlyStreak = 0;
+  let readOnlyNudges = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -669,6 +671,11 @@ async function runAgentClaude(
       }
     }
 
+    // Okuma-sadece tıkanma tespiti: bu round'da çağrılan TÜM araçlar salt inceleme miydi?
+    const allReadOnlyRound = effectiveToolCalls.every(tc => isReadOnlyToolCall(tc.name, tc.input));
+    readOnlyStreak = allReadOnlyRound ? readOnlyStreak + 1 : 0;
+    let readOnlyHalt = false;
+
     // Round budget awareness
     let budgetWarning = '';
     if (round > 0 && round % 15 === 0) {
@@ -676,6 +683,16 @@ async function runAgentClaude(
     }
     if (round === 50) {
       budgetWarning = '\n[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.';
+    }
+    if (readOnlyStreak >= READ_ONLY_STREAK_THRESHOLD) {
+      readOnlyStreak = 0;
+      readOnlyNudges++;
+      if (readOnlyNudges > MAX_READ_ONLY_NUDGES) {
+        readOnlyHalt = true;
+      } else {
+        budgetWarning += readOnlyStallWarning(READ_ONLY_STREAK_THRESHOLD);
+        logger.write(chalk.yellow(`  ⚠ ${READ_ONLY_STREAK_THRESHOLD} round üst üste sadece okuma — modele aksiyona geçmesi hatırlatıldı.\n`));
+      }
     }
 
     // Error recovery
@@ -697,6 +714,15 @@ async function runAgentClaude(
         await pushMessage({ role: 'user', content: notices.join('\n') });
         logger.write(chalk.yellow('  ↻ Aynı inceleme sonucu tekrarlandı; modele mevcut kanıtı kullanması hatırlatıldı.'));
       }
+    }
+    if (readOnlyHalt) {
+      finalText = describeReadOnlyStall(READ_ONLY_STREAK_THRESHOLD * (MAX_READ_ONLY_NUDGES + 1));
+      updateActiveTask({ taskState: 'INTERRUPTED' });
+      await pushMessage({ role: 'assistant', content: finalText });
+      logger.write('\n' + chalk.bold.cyan('DEHA:'));
+      logger.raw(chalk.red(finalText));
+      logger.raw('\n');
+      break;
     }
   }
 
@@ -748,6 +774,8 @@ async function runAgentOpenAI(
   let inlineRetryRounds = 0;
   let contextRecoveryAttempts = 0;
   let jobCompletionRetries = 0;
+  let readOnlyStreak = 0;
+  let readOnlyNudges = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -1008,6 +1036,11 @@ async function runAgentOpenAI(
       finalText = text;
     }
 
+    // Okuma-sadece tıkanma tespiti: bu round'da çağrılan TÜM araçlar salt inceleme miydi?
+    const allReadOnlyRound = effectiveToolCalls.every(tc => isReadOnlyToolCall(tc.name, tc.input));
+    readOnlyStreak = allReadOnlyRound ? readOnlyStreak + 1 : 0;
+    let readOnlyHalt = false;
+
     // Round budget awareness
     if (round > 0 && round % 15 === 0) {
       logger.write(chalk.dim(`  ⚠ ${round} tool rounds used\n`));
@@ -1015,11 +1048,32 @@ async function runAgentOpenAI(
     if (round === 50) {
       await pushMessage({ role: 'user', content: '[SYSTEM WARNING] 50 tool rounds used. Is the task still incomplete? Work efficiently, avoid unnecessary repetition.' });
     }
+    if (readOnlyStreak >= READ_ONLY_STREAK_THRESHOLD) {
+      readOnlyStreak = 0;
+      readOnlyNudges++;
+      if (readOnlyNudges > MAX_READ_ONLY_NUDGES) {
+        readOnlyHalt = true;
+      } else {
+        await pushMessage({ role: 'user', content: readOnlyStallWarning(READ_ONLY_STREAK_THRESHOLD) });
+        logger.write(chalk.yellow(`  ⚠ ${READ_ONLY_STREAK_THRESHOLD} round üst üste sadece okuma — modele aksiyona geçmesi hatırlatıldı.\n`));
+      }
+    }
 
     // Error recovery injection
     if (consecutiveToolFailures >= 3) {
       await pushMessage({ role: 'user', content: ERROR_RECOVERY_PROMPT });
       consecutiveToolFailures = 0;
+    }
+
+    if (readOnlyHalt) {
+      finalText = describeReadOnlyStall(READ_ONLY_STREAK_THRESHOLD * (MAX_READ_ONLY_NUDGES + 1));
+      updateActiveTask({ taskState: 'INTERRUPTED' });
+      const haltMsg: OAIMessage = { role: 'assistant', content: finalText };
+      await pushMessage(haltMsg);
+      logger.write('\n' + chalk.bold.cyan('DEHA:'));
+      logger.raw(chalk.red(finalText));
+      logger.raw('\n');
+      break;
     }
   }
 
@@ -1486,6 +1540,47 @@ function isToolError(result: string): boolean {
     lower.includes('permission denied') || lower.includes('not found') ||
     lower.includes('timeout') || lower.includes('connection refused') ||
     (lower.startsWith('{') && lower.includes('"error"'));
+}
+
+// ─── Okuma-sadece tıkanma tespiti ───────────────────────────────────────────
+// Büyük/tanıdık olmayan bir kod tabanında model dosya okuyup listelemeye devam
+// edip hiç write_file/edit_file/gerçek komut çalıştırmaya geçmeyebilir — tool
+// çağrısı VAR (hadToolActivity=true), metin "interim" de görünmeyebilir, bu
+// yüzden mevcut auto-continue/context-loss dedektörleri bunu yakalamaz. Bunun
+// yerine ÇAĞRILAN ARAÇLARIN TÜRÜNE bakıyoruz: art arda çok sayıda round'da
+// SADECE okuma/listeleme araçları çağrılmışsa (yazma/çalıştırma hiç yoksa),
+// modele bunu söylüyoruz; birkaç kez görmezden gelirse turu durduruyoruz.
+const READ_ONLY_TOOL_NAMES = new Set([
+  'read_file', 'cat', 'list_dir', 'ls', 'grep', 'search_in_files', 'find_files', 'diff_files', 'list_jobs',
+]);
+const MUTATING_SHELL_MARKERS = /(>>?|\brm\b|\bmv\b|\bcp\b|\bmkdir\b|\btouch\b|\bsed\s+-i\b|\bgit\s+(add|commit|push|checkout|reset|stash|merge|rebase)\b|\bpip\s+install\b|\bnpm\s+(install|run|ci)\b|\bpython[0-9.]*\b|\bnode\b|\bchmod\b|\bkill\b|\bdd\b|\btaskkill\b|\bapt(-get)?\b|\bpm2\b|\bsystemctl\b|\bdocker\b)/i;
+const READ_ONLY_SHELL_HEAD = /^(cd|ls|cat|head|tail|sed|grep|find|wc|du|stat|pwd|file|tree|echo|type|dir)\b/i;
+
+function isReadOnlyShellCommand(command: string): boolean {
+  if (!command || MUTATING_SHELL_MARKERS.test(command)) return false;
+  const segments = command.split(/&&|;/).map(s => s.trim()).filter(Boolean);
+  return segments.length > 0 && segments.every(seg => READ_ONLY_SHELL_HEAD.test(seg));
+}
+
+/** Bu tool çağrısı salt inceleme mi (dosya/komut değişikliği yok)? */
+function isReadOnlyToolCall(name: string, input: Record<string, unknown>): boolean {
+  if (name === 'brain') return input.action === 'view';
+  if (READ_ONLY_TOOL_NAMES.has(name)) return true;
+  if ((name === 'run_shell' || name === 'run_terminal') && typeof input.command === 'string') {
+    return isReadOnlyShellCommand(input.command);
+  }
+  return false;
+}
+
+const READ_ONLY_STREAK_THRESHOLD = 15;
+const MAX_READ_ONLY_NUDGES = 2;
+
+function readOnlyStallWarning(streakRounds: number): string {
+  return `\n[DEHA UYARI — KEŞİF TIKANMASI] Son ${streakRounds} round'da SADECE okuma/listeleme türü araçlar çağrıldı (read_file/ls/grep/cat/brain view vb.) — hiç write_file, edit_file veya gerçek bir komut çalıştırma (python/npm/build/test) olmadı. Daha fazla keşif YAPMA. Planının bir sonraki somut adımını HEMEN uygula: ya bir dosya yaz/düzenle ya da somut bir komut çalıştır. Gerçekten engellendiysen keşfetmeyi bırak ve [STATUS: BLOCKED] yazıp engeli açıkla.`;
+}
+
+function describeReadOnlyStall(rounds: number): string {
+  return `[DEHA: Görev durduruldu — yaklaşık ${rounds} round boyunca sadece okuma/keşif yapıldı, hiç dosya yazılmadı veya komut çalıştırılmadı. Uyarılara rağmen aksiyona geçilmedi. Görev ve brain korunuyor; "devam et" ile veya daha somut bir talimatla sürdürebilirsiniz.]`;
 }
 
 function describeContextRecoveryFailure(task: string): string {
