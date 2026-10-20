@@ -18,7 +18,7 @@ export const BRAIN_TOOL: ToolDefinition = {
     'Use it to keep a plan, record findings/decisions, and — most importantly — record dead ends so you never retry a failed approach.',
     'Actions: set_plan(steps[]), add_step(text), update_step(index, status, text?), set_criteria(text),',
     'add_finding(text), add_decision(text), add_dead_end(text), rewrite(section, items[]) to condense a section, view.',
-    'Statuses: todo | doing | done | blocked. Step index is 1-based.',
+    'Statuses: todo | doing | done | blocked. Step index is 1-based. Use update_step to mark progress. Replacing a plan retains matching step statuses; do not restart completed discovery.',
   ].join(' '),
   input_schema: {
     type: 'object',
@@ -47,6 +47,19 @@ function clean(text: unknown): string {
   return String(text ?? '').trim().slice(0, MAX_ITEM_CHARS);
 }
 
+function planSteps(items: string[], previous: BrainState['steps']): BrainState['steps'] {
+  const parse = (text: string) => {
+    const mark = /^\[([x~! ])\]\s*/i.exec(text);
+    const doneSuffix = /\s+[-—:]\s*(DONE|TAMAMLANDI)\s*$/i.test(text);
+    const label = text.replace(/^\[[x~! ]\]\s*/i, '').replace(/\s+[-—:]\s*(DONE|TAMAMLANDI)\s*$/i, '').trim();
+    const explicit: StepStatus | undefined = doneSuffix || mark?.[1].toLowerCase() === 'x' ? 'done'
+      : mark?.[1] === '~' ? 'doing' : mark?.[1] === '!' ? 'blocked' : mark ? 'todo' : undefined;
+    return { label, explicit, key: label.toLowerCase().replace(/\s+/g, ' ') };
+  };
+  const statuses = new Map(previous.map(s => [parse(s.text).key, s.status]));
+  return items.map(text => { const p = parse(text); return { text: p.label, status: p.explicit ?? statuses.get(p.key) ?? 'todo' }; });
+}
+
 export function executeBrainTool(input: Record<string, unknown>): string {
   const ws = getWorkspace();
   const b = ws.brain;
@@ -57,7 +70,7 @@ export function executeBrainTool(input: Record<string, unknown>): string {
     case 'set_plan': {
       const steps = Array.isArray(input.steps) ? input.steps.map(clean).filter(Boolean) : [];
       if (steps.length === 0) return 'HATA: set_plan için steps[] gerekli.';
-      b.steps = steps.map(text => ({ text, status: 'todo' as StepStatus }));
+      b.steps = planSteps(steps, b.steps);
       msg = `Plan kaydedildi (${steps.length} adım).`;
       break;
     }
@@ -99,7 +112,7 @@ export function executeBrainTool(input: Record<string, unknown>): string {
       if (section === 'findings') b.findings = items;
       else if (section === 'decisions') b.decisions = items;
       else if (section === 'dead_ends') b.deadEnds = items;
-      else if (section === 'steps') b.steps = items.map(text => ({ text, status: 'todo' as StepStatus }));
+      else if (section === 'steps') b.steps = planSteps(items, b.steps);
       else return 'HATA: section findings|decisions|dead_ends|steps olmalı.';
       msg = `${section} yeniden yazıldı (${items.length} öğe).`;
       break;

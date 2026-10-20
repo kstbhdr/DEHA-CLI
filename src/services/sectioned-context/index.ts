@@ -30,7 +30,7 @@ Your context is rebuilt every step from four sections:
    - When brain says it is full, condense with brain rewrite.
 3. <work_log> "Yapılan değişiklikler" — automatic ledger of files you changed.
 4. <work_log> "Araç çağrıları" — one-line summaries of older tool calls; the latest rounds follow in full.
-Older tool output may be summarized to save context — trust the summaries and the brain instead of re-running the same commands.`;
+Older tool output may be summarized to save context; detailed code is not fully preserved. Use the bounded inspection evidence and brain to avoid restarting discovery. If one exact detail is missing, read that specific range rather than the whole tree again. Keep step statuses current with brain update_step; set_plan is not a progress report. After compaction, continue the next unfinished step instead of rebuilding the same plan.`;
 
 export function isSectionedContextEnabled(): boolean {
   return process.env.DEHA_SECTIONED_CONTEXT !== '0';

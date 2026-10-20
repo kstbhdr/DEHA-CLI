@@ -60,6 +60,14 @@ Yeni sürüme dönmek: `git switch main && git pull --ff-only origin main && npm
 
 Windows geliştirme makinesindeki tam yedek ayrıca `C:\Users\Administrator\deha-backups\before-background-jobs-20261020-161904` içindedir. `restore.ps1` bağımlılık indirmeden global `deha` komutunu bu yedeğe bağlar. Projenin güncel sohbet/ayar dosyaları otomatik olarak eski kopyayla değiştirilmez.
 
+## Bağlam daralması ve tekrar incelemeler
+
+Son 40 okuma/inceleme için kısa kanıt önizlemeleri workspace içinde tutulur. Model bağlamındaki kanıt bölümü en fazla yaklaşık 2000 token alır ve mevcut araç günlüğü bütçesinden düşülür; tüm dosya içeriklerinin yerine geçmez. Yerel mesajlar pencereden çıkınca veya CLI yeniden açılınca bu önizlemeler korunur. Eksik bir ayrıntı gerektiğinde ilgili satır aralığı yeniden okunabilir.
+
+Aynı sorgu aynı çıktıyı üçüncü kez verdiğinde modele uyarı eklenir; araç yine gerçekten çalıştırılır. Değişen sonuç (örneğin 18 GB'den 19 GB'ye ilerleme) tekrar sayacını sıfırlar. Bu denetim bütün farklı shell komutlarının aynı anlamda olduğunu çözmez ve modelin uyarıyı izleyeceğini garanti etmez.
+
+`brain set_plan` ve `brain rewrite steps`, aynı metinle eşleşen adımların `done/doing/blocked` durumlarını korur. İlerleme `update_step` ile işlenmelidir; yeniden plan yazmak tamamlanan adımları otomatik sıfırlamaz.
+
 ## Doğrulama
 
 `npm run build`, `npm test`, `node scripts/background-jobs-smoke.cjs` ve `node scripts/background-agent-smoke.cjs`. Testler yerel sahte sağlayıcı kullanır, ücretli API çağırmaz.

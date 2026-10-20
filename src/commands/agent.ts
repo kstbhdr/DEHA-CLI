@@ -692,7 +692,11 @@ async function runAgentClaude(
     });
     if (assembler) {
       const turnIndex = messages.length - 1 - startIdx;
-      for (const r of pendingRecords) assembler.recordTool(r.name, r.input, r.result, text, turnIndex);
+      const notices = pendingRecords.map(r => assembler.recordTool(r.name, r.input, r.result, text, turnIndex)).filter(Boolean);
+      if (notices.length) {
+        await pushMessage({ role: 'user', content: notices.join('\n') });
+        logger.write(chalk.yellow('  ↻ Aynı inceleme sonucu tekrarlandı; modele mevcut kanıtı kullanması hatırlatıldı.'));
+      }
     }
   }
 
@@ -992,12 +996,13 @@ async function runAgentOpenAI(
       }
 
       // OpenAI tool result format
+      const inspectionNotice = assembler?.recordTool(tc.name, tc.input, compactedResult, text, messages.length - initialMessageCount);
       await pushMessage({
         role: 'tool',
         tool_call_id: tc.id,
-        content: compactedResult,
+        content: compactedResult + (inspectionNotice ? '\n\n' + inspectionNotice : ''),
       });
-      assembler?.recordTool(tc.name, tc.input, compactedResult, text, messages.length - 1 - initialMessageCount);
+      if (inspectionNotice) logger.write(chalk.yellow('  ↻ Aynı inceleme sonucu tekrarlandı; modele mevcut kanıtı kullanması hatırlatıldı.'));
 
       finalText = text;
     }

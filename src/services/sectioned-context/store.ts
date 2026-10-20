@@ -61,6 +61,8 @@ export interface WorkspaceContext {
   followUps: { taskId: string; items: string[] };
   nextSeq: number;
   turn: number;
+  /** Bounded read evidence survives native-window rollovers and restart. */
+  inspections?: { key: string; label: string; digest: string; repeats: number; excerpt: string; seq: number }[];
 }
 
 const MAX_TOOL_LOG_ENTRIES = 2_000;

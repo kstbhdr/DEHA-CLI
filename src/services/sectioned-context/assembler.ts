@@ -14,7 +14,7 @@
  *
  * Native pencere bütçeyi aşınca en eski round'lar TOPLU halde (bütçenin %60'ına
  * inene kadar) pencereden çıkarılır; çıkanlar zaten tool günlüğünde özetlenmiş
- * olduğu için bilgi kaybolmaz. Toplu kaydırma sayesinde önbellek her round değil,
+ * olduğu için geçmiş işlemlerin izi korunur; ayrıntılı içerik kaybolabilir. Toplu kaydırma sayesinde önbellek her round değil,
  * sadece arada bir bozulur.
  */
 
@@ -26,6 +26,7 @@ import {
 import { getWorkspace, saveWorkspace, WorkspaceContext } from './store';
 import { renderTaskAnchor } from './task-anchor';
 import { renderBrain, brainIsEmpty } from './brain';
+import { recordInspection, renderInspections } from './inspections';
 import { renderChanges, recordChange } from './change-ledger';
 import { renderToolLog, summarizeToolResult, formatToolArgs } from './tool-log';
 import { getActiveTask } from '../session-memory';
@@ -75,6 +76,8 @@ const INTERNAL_MESSAGE_PATTERNS = [
   /^\[ERROR RECOVERY\]/,
   /^\[SİSTEM UYARISI/,
   /^\[SYSTEM WARNING\]/,
+  /^\[DEHA UNCHANGED INSPECTION\]/,
+  /^\[JOB STILL RUNNING\]/,
   /^\[DEHA BAĞLAM NOTU\]/,
   /^<tool_result/,
   /^<brain>/,
@@ -131,7 +134,7 @@ export class TurnContextAssembler {
   }
 
   /** Tool çalıştıktan sonra çağrılır: tool günlüğüne ve değişiklik defterine işler. */
-  recordTool(name: string, input: Record<string, unknown>, result: string, purpose: string | undefined, turnIndex: number): void {
+  recordTool(name: string, input: Record<string, unknown>, result: string, purpose: string | undefined, turnIndex: number): string | undefined {
     if (name === 'brain') return; // brain zaten kendi bölümünde görünüyor
     const ws = getWorkspace();
     const seq = ws.nextSeq++;
@@ -139,17 +142,21 @@ export class TurnContextAssembler {
     const why = purpose && purpose.trim() ? oneLine(purpose, 200) : undefined;
     ws.toolLog.push({ seq, turn: this.turnNo, turnIndex, name, args: formatToolArgs(name, input), purpose: why, summary, ok });
     recordChange(ws.changes, name, input, result, seq, why ? oneLine(why, 100) : undefined);
+    const notice = recordInspection(ws, name, input, result, seq);
     saveWorkspace(ws);
+    return notice;
   }
 
   private renderSnapshot(ws: WorkspaceContext, changesBudget: number, toolLogBudget: number): { text: string; changesTokens: number; toolLogTokens: number } {
     const summarized = ws.toolLog.filter(e => e.turn < this.turnNo || e.turnIndex < this.nativeStart);
     const changes = renderChanges(ws.changes, changesBudget);
-    const log = renderToolLog(summarized, toolLogBudget);
+    const inspections = renderInspections(ws, Math.min(2000, Math.floor(toolLogBudget * 0.25)));
+    const log = renderToolLog(summarized, Math.max(0, toolLogBudget - estimateTextTokens(inspections)));
     const parts: string[] = [];
     if (changes) parts.push(`## Yapılan değişiklikler\n${changes}`);
     if (log) parts.push(`## Araç çağrıları (eski round'lar özet; son round'lar aşağıda tam)\n${log}`);
-    return { text: parts.join('\n\n'), changesTokens: estimateTextTokens(changes), toolLogTokens: estimateTextTokens(log) };
+    if (inspections) parts.push(inspections);
+    return { text: parts.join('\n\n'), changesTokens: estimateTextTokens(changes), toolLogTokens: estimateTextTokens(log) + estimateTextTokens(inspections) };
   }
 
   private buildDialogue(history: Message[], budgetTokens: number, userMessage: string): AssemblerMessage[] {
