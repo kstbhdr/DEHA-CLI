@@ -462,6 +462,15 @@ function applyToConfig(
 ): void {
   const { chat, planner, coder, judge, vision, image, pipeline } = answers;
 
+  // Kopyala-yapıştır veya boş Enter ile kabul edilen varsayılan değer kolayca
+  // baştan/sondan boşluk taşıyabiliyor ("deepseek-flash ") — API sunucuları tam
+  // string eşleşmesi beklediği için bu, "geçersiz model adı" hatasına yol açar.
+  for (const role of [chat, planner, coder, judge, vision, image]) {
+    if (typeof role.model === 'string') role.model = role.model.trim();
+    if (typeof role.apiKey === 'string') role.apiKey = role.apiKey.trim();
+    if (typeof role.apiUrl === 'string') role.apiUrl = role.apiUrl.trim();
+  }
+
   // Chat
   config.provider = chat.provider;
   setModel(config, chat.provider, chat.model);

@@ -74,6 +74,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/clear')}                   Sohbet geçmişini temizle
   ${chalk.cyan('/model')}                   Model & provider ayarlarını düzenle (Chat/Planner/Coder/Judge/Vision/Image)
   ${chalk.cyan('/thinking [on|off] [effort]')} DeepSeek thinking mode'u aç/kapat
+  ${chalk.cyan('/security [on|off]')}      run_shell'in proje-dışı dizin kısıtlamasını (sandbox) aç/kapat
   ${chalk.cyan('/agent <soru>')}            Araç çağırabilen ajan modu (Claude)
   ${chalk.cyan('/build <görev>')}           Planner/Coder/Judge build akışını çalıştır
   ${chalk.cyan('/file <yol>')}              Dosyayı bağlama ekle
@@ -101,7 +102,7 @@ ${chalk.bold('@dosya.ts sözdizimi:')}
 `;
 
 const COMMAND_SUGGESTIONS = [
-  '/help', '/new', '/clear', '/model', '/thinking', '/agent', '/build', '/file', '/architecture',
+  '/help', '/new', '/clear', '/model', '/thinking', '/security', '/agent', '/build', '/file', '/architecture',
   '/mcp', '/history', '/oldconversations', '/run', '/python', '/smoketest', '/screenshot',
   '/jobs', '/queue', '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
@@ -152,6 +153,13 @@ export async function interactive(
   let activeAbortController: AbortController | null = null;
   let lastSuggestion = '';
   let activeRole: 'chat' | 'planner' | 'judge' = 'chat';
+  // /model gibi inquirer tabanlı modal sihirbazlar açıkken true. rl.pause()
+  // tek başına yeterli değil: inquirer kendi raw-mode okuyucusunu stdin
+  // üzerine kurunca, pasteInput.stream'e akan pipe hâlâ 'line' olaylarını
+  // tetikleyebiliyor — sihirbaza yazılan model adı/API key gibi cevaplar bu
+  // yüzden ana kuyruğa gerçek bir sohbet mesajı gibi ekleniyordu (ve API'ye
+  // "mesaj" olarak gönderiliyordu). Bu bayrak o sızıntıyı kapatır.
+  let modalActive = false;
   
   const specializedHistories: Record<'planner' | 'judge', Message[]> = {
     planner: [],
@@ -256,9 +264,11 @@ export async function interactive(
       if (trimmed === '/version' || isVersionQuestion(trimmed)) { logger.write(chalk.cyan(`${DEHA_VERSION_LABEL}\n`)); return; }
 
       if (trimmed === '/model') {
+        modalActive = true;
         rl.pause();
         try { await modelSetup(config); } catch (err: any) { if (err.name !== 'ExitPromptError') logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err))); }
-        rl.resume(); return;
+        finally { rl.resume(); modalActive = false; }
+        return;
       }
 
       if (trimmed.startsWith('/thinking')) {
@@ -269,6 +279,20 @@ export async function interactive(
         config.deepseekThinking = state;
         if (state === 'enabled' && parts[1]) config.deepseekReasoningEffort = normalizeThinkingEffort(parts[1]);
         logger.write(chalk.green('✓ Güncellendi.\n'));
+        return;
+      }
+
+      if (trimmed.startsWith('/security')) {
+        const parts = trimmed.split(/\s+/).slice(1);
+        const isOn = process.env.DEHA_SANDBOX_CWD !== '0';
+        if (parts.length === 0) {
+          logger.write(chalk.cyan('Sandbox (run_shell cwd proje-dışı kısıtlaması): ') + (isOn ? chalk.green('ON') : chalk.red('OFF')) + '\n');
+          return;
+        }
+        const arg = parts[0].toLowerCase();
+        if (arg === 'on') { delete process.env.DEHA_SANDBOX_CWD; logger.write(chalk.green('✓ Sandbox AÇIK — run_shell cwd proje köküyle sınırlı.\n')); return; }
+        if (arg === 'off') { process.env.DEHA_SANDBOX_CWD = '0'; logger.write(chalk.yellow('⚠ Sandbox KAPALI — run_shell cwd proje dışına çıkabilir.\n')); return; }
+        logger.write(chalk.yellow('ℹ /security [on|off]\n'));
         return;
       }
 
@@ -473,6 +497,10 @@ export async function interactive(
 
   let multiline = '';
   rl.on('line', line => {
+    // /model gibi bir modal sihirbaz açıkken bu satır bize ait değil — inquirer
+    // kendi cevabını zaten işliyor. Yoksay, yoksa sihirbaza yazılan model adı/
+    // API key gibi değerler sohbet kuyruğuna "mesaj" olarak sızar.
+    if (modalActive) return;
     if (line.endsWith('\\')) {
       multiline += (multiline ? '\n' : '') + line.slice(0, -1);
       rl.setPrompt('... '); rl.prompt(); return;

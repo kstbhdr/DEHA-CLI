@@ -135,30 +135,30 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
   const base: DehaConfig = {
     provider: ((process.env.DEHA_PROVIDER || 'deepseek').toLowerCase() as Provider),
 
-    anthropicApiKey:  process.env.ANTHROPIC_API_KEY,
-    openaiApiKey:     process.env.OPENAI_API_KEY,
-    deepseekApiKey:   process.env.DEEPSEEK_API_KEY,
-    openrouterApiKey: process.env.OPENROUTER_API_KEY,
-    xaiApiKey:        process.env.XAI_API_KEY,
-    customApiKey:     process.env.CUSTOM_API_KEY,
+    anthropicApiKey:  envStrOrUndefined(process.env.ANTHROPIC_API_KEY),
+    openaiApiKey:     envStrOrUndefined(process.env.OPENAI_API_KEY),
+    deepseekApiKey:   envStrOrUndefined(process.env.DEEPSEEK_API_KEY),
+    openrouterApiKey: envStrOrUndefined(process.env.OPENROUTER_API_KEY),
+    xaiApiKey:        envStrOrUndefined(process.env.XAI_API_KEY),
+    customApiKey:     envStrOrUndefined(process.env.CUSTOM_API_KEY),
 
     deepseekThinking: parseDeepSeekThinking(process.env.DEEPSEEK_THINKING),
     deepseekReasoningEffort: parseDeepSeekReasoningEffort(process.env.DEEPSEEK_REASONING_EFFORT),
 
-    claudeModel:      process.env.CLAUDE_MODEL      || 'claude-opus-4-6',
-    openaiModel:      process.env.OPENAI_MODEL      || 'gpt-4o',
-    deepseekModel:    process.env.DEEPSEEK_MODEL    || 'deepseek-v4-flash',
-    openrouterModel:  process.env.OPENROUTER_MODEL  || 'deepseek/deepseek-v4-flash-0731',
-    xaiModel:         process.env.XAI_MODEL         || 'grok-4.3',
-    customModel:      process.env.CUSTOM_MODEL      || 'local-model',
+    claudeModel:      envStr(process.env.CLAUDE_MODEL,     'claude-opus-4-6'),
+    openaiModel:      envStr(process.env.OPENAI_MODEL,     'gpt-4o'),
+    deepseekModel:    envStr(process.env.DEEPSEEK_MODEL,   'deepseek-v4-flash'),
+    openrouterModel:  envStr(process.env.OPENROUTER_MODEL, 'deepseek/deepseek-v4-flash-0731'),
+    xaiModel:         envStr(process.env.XAI_MODEL,        'grok-4.3'),
+    customModel:      envStr(process.env.CUSTOM_MODEL,     'local-model'),
 
-    ollamaHost:  process.env.OLLAMA_HOST  || 'http://localhost:11434',
-    ollamaModel: process.env.OLLAMA_MODEL || 'llama3',
+    ollamaHost:  envStr(process.env.OLLAMA_HOST,  'http://localhost:11434'),
+    ollamaModel: envStr(process.env.OLLAMA_MODEL, 'llama3'),
 
-    customApiUrl: process.env.CUSTOM_API_URL || 'http://localhost:8080/v1',
+    customApiUrl: envStr(process.env.CUSTOM_API_URL, 'http://localhost:8080/v1'),
 
-    openrouterProvider: process.env.OPENROUTER_PROVIDER || undefined,
-    openrouterIgnoreProviders: process.env.OPENROUTER_IGNORE_PROVIDERS || undefined,
+    openrouterProvider: envStrOrUndefined(process.env.OPENROUTER_PROVIDER),
+    openrouterIgnoreProviders: envStrOrUndefined(process.env.OPENROUTER_IGNORE_PROVIDERS),
     openrouterZdr: process.env.OPENROUTER_ZDR === 'true',
 
     visionProvider: normalizeVisionProvider(process.env.VISION_PROVIDER),
@@ -201,33 +201,33 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
     pipeline: {
       planner: {
         provider:           ((process.env.PLANNER_PROVIDER || 'deepseek').toLowerCase() as Provider),
-        model:              process.env.PLANNER_MODEL   || 'deepseek-v4-flash',
-        apiKey:             process.env.PLANNER_API_KEY,
-        apiUrl:             process.env.PLANNER_API_URL,
+        model:              envStr(process.env.PLANNER_MODEL, 'deepseek-v4-flash'),
+        apiKey:             envStrOrUndefined(process.env.PLANNER_API_KEY),
+        apiUrl:             envStrOrUndefined(process.env.PLANNER_API_URL),
         maxTokens:          safeParseInt(process.env.PLANNER_MAX_TOKENS,   4096),
         temperature:        safeParseFloat(process.env.PLANNER_TEMPERATURE, 0.3),
-        openrouterProvider: process.env.PLANNER_OPENROUTER_PROVIDER || undefined,
-        openrouterIgnoreProviders: process.env.PLANNER_OPENROUTER_IGNORE_PROVIDERS || undefined,
+        openrouterProvider: envStrOrUndefined(process.env.PLANNER_OPENROUTER_PROVIDER),
+        openrouterIgnoreProviders: envStrOrUndefined(process.env.PLANNER_OPENROUTER_IGNORE_PROVIDERS),
       },
       coder: {
         provider:           ((process.env.CODER_PROVIDER || 'deepseek').toLowerCase() as Provider),
-        model:              process.env.CODER_MODEL   || 'deepseek-v4-flash',
-        apiKey:             process.env.CODER_API_KEY,
-        apiUrl:             process.env.CODER_API_URL,
+        model:              envStr(process.env.CODER_MODEL, 'deepseek-v4-flash'),
+        apiKey:             envStrOrUndefined(process.env.CODER_API_KEY),
+        apiUrl:             envStrOrUndefined(process.env.CODER_API_URL),
         maxTokens:          safeParseInt(process.env.CODER_MAX_TOKENS,   8192),
         temperature:        safeParseFloat(process.env.CODER_TEMPERATURE, 0.2),
-        openrouterProvider: process.env.CODER_OPENROUTER_PROVIDER || undefined,
-        openrouterIgnoreProviders: process.env.CODER_OPENROUTER_IGNORE_PROVIDERS || undefined,
+        openrouterProvider: envStrOrUndefined(process.env.CODER_OPENROUTER_PROVIDER),
+        openrouterIgnoreProviders: envStrOrUndefined(process.env.CODER_OPENROUTER_IGNORE_PROVIDERS),
       },
       judge: {
         provider:           ((process.env.JUDGE_PROVIDER || 'xai').toLowerCase() as Provider),
-        model:              process.env.JUDGE_MODEL   || 'grok-4.3',
-        apiKey:             process.env.JUDGE_API_KEY,
-        apiUrl:             process.env.JUDGE_API_URL,
+        model:              envStr(process.env.JUDGE_MODEL, 'grok-4.3'),
+        apiKey:             envStrOrUndefined(process.env.JUDGE_API_KEY),
+        apiUrl:             envStrOrUndefined(process.env.JUDGE_API_URL),
         maxTokens:          safeParseInt(process.env.JUDGE_MAX_TOKENS,   2048),
         temperature:        safeParseFloat(process.env.JUDGE_TEMPERATURE, 0.1),
-        openrouterProvider: process.env.JUDGE_OPENROUTER_PROVIDER || undefined,
-        openrouterIgnoreProviders: process.env.JUDGE_OPENROUTER_IGNORE_PROVIDERS || undefined,
+        openrouterProvider: envStrOrUndefined(process.env.JUDGE_OPENROUTER_PROVIDER),
+        openrouterIgnoreProviders: envStrOrUndefined(process.env.JUDGE_OPENROUTER_IGNORE_PROVIDERS),
       },
       maxIterations: safeParseMaxIterations(process.env.PIPELINE_MAX_ITERATIONS),
     },
@@ -237,6 +237,22 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
 }
 
 // ─── Güvenli sayı dönüşümleri (NaN önleme) ─────────────────────────────────
+
+/**
+ * `.env` dosyalarında satır sonu boşluğu kolayca kayıyor (ör. "DEEPSEEK_MODEL=deepseek-flash ")
+ * ve dotenv bunu kırpmıyor — sonuç API'nin "geçersiz model adı" hatası, çünkü
+ * sunucu tam string eşleşmesi bekliyor. Model/host/URL/key gibi tam eşleşmesi
+ * gereken alanlar için env okurken baştan kırpıyoruz.
+ */
+function envStr(value: string | undefined, defaultVal: string): string {
+  const trimmed = value?.trim();
+  return trimmed || defaultVal;
+}
+
+function envStrOrUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
 
 function safeParseInt(value: string | undefined, defaultVal: number): number {
   if (value === undefined || value === '') return defaultVal;
