@@ -11,6 +11,7 @@ import { runAgent, summarizeOldToolResults, resolveTaskForUserMessage } from './
 import { isSectionedContextEnabled } from '../services/sectioned-context';
 import { initializeInteractiveSession } from '../services/interactive-session';
 import { InputQueue } from '../services/input-queue';
+import { handleJobsCommand } from './jobs';
 import { mcpManager } from '../mcp/manager';
 import { handleMcpCommand } from '../mcp/commands';
 import { checkForUpdates } from './update';
@@ -92,6 +93,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/test')}                         API ve pipeline sistem testi
   ${chalk.cyan('/judge <dosya> <görev>')}   Sadece Judge rolünü çalıştırarak bir dosyayı değerlendir
   ${chalk.cyan('/queue [clear|remove <n>]')}     Bekleyen mesajları göster / düzenle
+  ${chalk.cyan('/jobs [wait|cancel <id>]')}       Arka plan işlerini göster / yönet
   ${chalk.cyan('/exit')}                         Çıkış yap
 
 ${chalk.bold('@dosya.ts sözdizimi:')}
@@ -101,7 +103,7 @@ ${chalk.bold('@dosya.ts sözdizimi:')}
 const COMMAND_SUGGESTIONS = [
   '/help', '/new', '/clear', '/model', '/thinking', '/agent', '/build', '/file', '/architecture',
   '/mcp', '/history', '/oldconversations', '/run', '/python', '/smoketest', '/screenshot',
-  '/queue', '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
+  '/jobs', '/queue', '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
 
 const PASTE_START = '\x1b[200~';
@@ -479,6 +481,12 @@ export async function interactive(
     multiline = '';
     const trimmed = input.trim();
     if (!trimmed) { prompt(); return; }
+    if (/^\/jobs(?:\s|$)/.test(trimmed)) {
+      void handleJobsCommand(trimmed.slice(5).trim())
+        .catch(error => logger.error(String(error.message)))
+        .finally(prompt);
+      return;
+    }
     if (/^\/queue(?:\s|$)/.test(trimmed)) {
       const args = trimmed.split(/\s+/).slice(1);
       if (!args.length) {

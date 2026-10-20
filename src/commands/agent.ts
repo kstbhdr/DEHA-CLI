@@ -10,6 +10,7 @@ import { getMaxContextTokens } from '../services/token-counter';
 import { TurnContextAssembler, createTurnAssembler, isSectionedContextEnabled, SECTIONED_CONTEXT_PROMPT, BuildStats, addTaskFollowUp } from '../services/sectioned-context';
 import { resolveTotalContextTokens } from '../services/sectioned-context';
 import { computeOutputReserve } from '../services/sectioned-context/budget';
+import { backgroundJobsEnabled, BACKGROUND_JOB_NAMES, BACKGROUND_JOBS_PROMPT, blockingJobsForActiveTask, listBackgroundJobs } from '../tools/background-jobs';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
@@ -53,7 +54,7 @@ export async function runAgent(
   options: { taskAlreadyResolved?: boolean; sectioned?: boolean } = {},
 ): Promise<AgentResult> {
   const mcpTools = mcpManager.getAnthropicTools();
-  const allTools = [...DEHA_TOOLS, ...mcpTools];
+  const allTools = [...DEHA_TOOLS.filter(t => backgroundJobsEnabled() || !BACKGROUND_JOB_NAMES.has(t.name)), ...mcpTools];
 
   if (mcpTools.length > 0) {
     logger.write(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
@@ -68,6 +69,13 @@ export async function runAgent(
 
   // WorkDir'i system prompt'a enjekte et
   let enrichedConfig = injectWorkDir(config, customSystemPrompt);
+  if (backgroundJobsEnabled()) {
+    enrichedConfig.systemPrompt += BACKGROUND_JOBS_PROMPT;
+    const activeId = getActiveTask()?.id;
+    const existing = listBackgroundJobs().filter(j => j.taskId === activeId).slice(0, 8)
+      .map(j => ({ job_id: j.id, status: j.status, command: j.command, exit_code: j.exitCode }));
+    if (existing.length) enrichedConfig.systemPrompt += '\n[TRACKED JOBS FOR THIS TASK]\n' + JSON.stringify(existing);
+  }
 
   // Bölümlü context: görev / brain / değişiklikler / tool günlüğü
   let assembler: TurnContextAssembler | undefined;
@@ -462,6 +470,7 @@ async function runAgentClaude(
   let lastStopReason: string | null = null;
   let inlineRetryRounds = 0;
   let contextRecoveryAttempts = 0;
+  let jobCompletionRetries = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -537,6 +546,20 @@ async function runAgentClaude(
         }
       }
 
+      const pendingJobs = parseStatusTag(text) !== 'BLOCKED' ? blockingJobsForActiveTask() : [];
+      if (pendingJobs.length) {
+        if (++jobCompletionRetries <= 3 && round < maxRounds) {
+          await pushMessage({ role: 'assistant', content: text || '[Awaiting jobs]' });
+          await pushMessage({ role: 'user', content: pendingJobReminder(pendingJobs.map(j => j.id)) });
+          forceToolUse = true;
+          continue;
+        }
+        finalText = 'Gerekli arka plan işleri henüz tamamlanmadı. İşler korunuyor; list_jobs / wait_job ile devam edilebilir.';
+        updateActiveTask({ taskState: 'INTERRUPTED' });
+        await pushMessage({ role: 'assistant', content: finalText });
+        logger.write(finalText);
+        break;
+      }
       finalText = text;
       const status = parseStatusTag(text);
       if (status === 'COMPLETE') {
@@ -719,6 +742,7 @@ async function runAgentOpenAI(
   let lastFinishReason: string | null = null;
   let inlineRetryRounds = 0;
   let contextRecoveryAttempts = 0;
+  let jobCompletionRetries = 0;
   const turnBudget = computeTurnBudgetTokens(config, allTools as unknown[]);
 
   // A process crash/kill mid-turn previously lost the whole turn (nothing was
@@ -830,6 +854,20 @@ async function runAgentOpenAI(
         }
       }
 
+      const pendingJobs = parseStatusTag(text) !== 'BLOCKED' ? blockingJobsForActiveTask() : [];
+      if (pendingJobs.length) {
+        if (++jobCompletionRetries <= 3 && round < maxRounds) {
+          await pushMessage(effectiveAssistantMsg);
+          await pushMessage({ role: 'user', content: pendingJobReminder(pendingJobs.map(j => j.id)) });
+          forceToolUse = true;
+          continue;
+        }
+        finalText = 'Gerekli arka plan işleri henüz tamamlanmadı. İşler korunuyor; list_jobs / wait_job ile devam edilebilir.';
+        updateActiveTask({ taskState: 'INTERRUPTED' });
+        await pushMessage({ role: 'assistant', content: finalText });
+        logger.write(finalText);
+        break;
+      }
       finalText = text;
       const status = parseStatusTag(text);
       if (status === 'COMPLETE') {
@@ -1693,6 +1731,10 @@ function looksLikeFinalAnswer(text: string): boolean {
 
 
 // ─── Tool yürütücü (ortak) ───────────────────────────────────────────────────
+function pendingJobReminder(ids: string[]): string {
+  return '[JOB STILL RUNNING] Required jobs are not verified complete: ' + ids.join(', ') +
+    '. Call wait_job with wait_seconds=30 or 60 for each job. Do not claim completion or restart the command. If a supervisor was lost, investigate the original process before retrying.';
+}
 
 async function runTool(
   name: string,

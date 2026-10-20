@@ -15,6 +15,7 @@ import { editFile, insertLines, deleteLines } from './edit';
 import { logger } from '../services/logger';
 import { safeSlice } from '../services/text-utils';
 import { BRAIN_TOOL, executeBrainTool } from '../services/sectioned-context/brain';
+import { backgroundJobsEnabled, startBackgroundJob, waitBackgroundJob, listBackgroundJobs, cancelBackgroundJob } from './background-jobs';
 // vision tool requires DehaConfig, handled separately in agent.ts
 
 // ─── Tool definitions (Claude API schema) ──────────────────────────────────
@@ -109,6 +110,32 @@ export const DEHA_TOOLS: ToolDefinition[] = [
       },
       required: ['command'],
     },
+  },
+  {
+    name: 'start_job',
+    description: 'Start a long-running command ONCE under a persistent supervisor. Returns job_id; use wait_job for completion, not repeated shell polling. Survives CLI restart. Default timeout 3600s, max 86400s.',
+    input_schema: { type: 'object', properties: {
+      command: { type: 'string', description: 'Command to execute once' },
+      cwd: { type: 'string', description: 'Working directory; defaults to active project' },
+      env: { type: 'object', additionalProperties: { type: 'string' } },
+      timeout: { type: 'number', minimum: 0.1, maximum: 86400, description: 'Job lifetime in seconds' },
+      wait_for_completion: { type: 'boolean', description: 'Default true. False only for a service the user wants left running.' },
+    }, required: ['command'] },
+  },
+  {
+    name: 'wait_job',
+    description: 'Wait locally for an existing job to finish; returns status, exit code and only NEW stdout/stderr. Default 30s, max 60s. Use wait_seconds=0 for an immediate read. Aborting the wait leaves the job running.',
+    input_schema: { type: 'object', properties: {
+      job_id: { type: 'string' }, wait_seconds: { type: 'number', minimum: 0, maximum: 60 },
+    }, required: ['job_id'] },
+  },
+  {
+    name: 'list_jobs', description: 'List tracked jobs and their states for the active project, including after restart. Do not restart a running job.',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'cancel_job', description: 'Explicitly stop a tracked job and its child process tree. Returns final state and new output.',
+    input_schema: { type: 'object', properties: { job_id: { type: 'string' } }, required: ['job_id'] },
   },
   {
     name: 'run_terminal',
@@ -444,6 +471,10 @@ export function executeTool(name: string, input: Record<string, unknown>): strin
       case 'find_files':      return toolFindFiles(inp as any);
       case 'brain':           return executeBrainTool(input);
       // Async toollar için placeholder — agent.ts'te executeToolAsync kullanılır
+      case 'start_job':
+      case 'wait_job':
+      case 'list_jobs':
+      case 'cancel_job':
       case 'run_terminal':
       case 'run_python':
       case 'smoke_test':
@@ -472,6 +503,16 @@ export async function executeToolAsync(
 ): Promise<string> {
   try {
     switch (name) {
+      case 'start_job':
+        if (!backgroundJobsEnabled()) throw new Error('Arka plan araçları kapalı: DEHA_BACKGROUND_JOBS=0');
+        await ensureSafeShellCommand(input.command as string);
+        return await startBackgroundJob(input as Parameters<typeof startBackgroundJob>[0], abortSignal);
+      case 'wait_job':
+        return await waitBackgroundJob(input as Parameters<typeof waitBackgroundJob>[0], abortSignal);
+      case 'list_jobs':
+        return JSON.stringify(listBackgroundJobs());
+      case 'cancel_job':
+        return await cancelBackgroundJob(input as Parameters<typeof cancelBackgroundJob>[0], abortSignal);
       case 'write_file':
         await ensureSafeFileAccess((input as ToolInput).path!, 'write_file');
         return toolWriteFile(input as ToolInput);
@@ -534,6 +575,10 @@ export function printToolCall(name: string, input: Record<string, unknown>): voi
     ls:              '📁',
     mkdir:           '📁',
     run_shell:       '⚡',
+    start_job:       '🚀',
+    wait_job:        '⏳',
+    list_jobs:       '📋',
+    cancel_job:      '🛑',
     run_terminal:    '💻',
     run_python:      '🐍',
     smoke_test:      '🧪',
@@ -703,11 +748,11 @@ async function ensureSafeFileAccess(filePath: string, operationName: string): Pr
   }
 }
 
-async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<string> {
-  if (!inp.command) throw new Error('command gerekli');
+async function ensureSafeShellCommand(command: string): Promise<void> {
+  if (typeof command !== 'string' || !command.trim()) throw new Error('command gerekli');
 
   // Güvenlik kontrolü
-  const check = isSafeCommand(inp.command);
+  const check = isSafeCommand(command);
   if (!check.safe) {
     if (!autoAllowDangerousCommands) {
       const inquirer = await import('inquirer').then(m => m.default || m);
@@ -716,7 +761,7 @@ async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<strin
           type: 'list',
           name: 'action',
           message: chalk.yellow(`\n⚠️ TEHLİKELİ KOMUT TESPİT EDİLDİ:\n`) + 
-                   chalk.white(`   Komut: `) + chalk.cyan(inp.command) + '\n' +
+                   chalk.white(`   Komut: `) + chalk.cyan(command) + '\n' +
                    chalk.white(`   Sebep: `) + chalk.red(check.reason) + '\n\n' +
                    chalk.bold('Bu komutu çalıştırmak istiyor musunuz?'),
           choices: [
@@ -735,6 +780,10 @@ async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<strin
     }
   }
 
+}
+
+async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<string> {
+  await ensureSafeShellCommand(inp.command!);
   // Çalışma dizinini proje köküyle sınırla
   const projectRoot = process.cwd();
   const cwd = inp.cwd ? path.resolve(inp.cwd) : projectRoot;
@@ -745,7 +794,7 @@ async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<strin
     throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nProje kökü: ${projectRoot}`);
   }
 
-  const result = await runCommand(inp.command, {
+  const result = await runCommand(inp.command!, {
     cwd,
     timeout: Math.min(inp.timeout ?? 60, 86400) * 1000, // max 24 saat (86400 saniye)
     signal,

@@ -21,6 +21,7 @@ import * as path from 'path';
 import { DEHA_VERSION_LABEL } from './version';
 import { logger } from './services/logger';
 import { createShoppingCommand } from './commands/shopping-command';
+import { handleJobsCommand } from './commands/jobs';
 
 export class DehaCLI {
   private program: Command;
@@ -140,6 +141,13 @@ export class DehaCLI {
       });
 
     // ── deha run <komut> ─────────────────────────────────────────────────
+    this.program.command('jobs [args...]')
+      .description('Arka plan işlerini API çağrısı yapmadan listele, bekle veya iptal et')
+      .action(async (args: string[]) => {
+        try { await handleJobsCommand(args.join(' ')); }
+        catch (error) { logger.error(String(error)); process.exitCode = 1; }
+      });
+
     this.program
       .command('run <command...>')
       .description('Terminal komutu çalıştır (streaming output)')

@@ -39,6 +39,14 @@ export function summarizeToolResult(name: string, result: string): { summary: st
   const ok = !isFailedResult(text);
   if (!text.trim()) return { summary: '(boş sonuç)', ok: false };
   if (name === 'brain') return { summary: oneLine(text, 120), ok };
+  if (['start_job', 'wait_job', 'cancel_job', 'list_jobs'].includes(name)) {
+    try {
+      const value = JSON.parse(text);
+      const jobs = Array.isArray(value) ? value : [value];
+      const summary = jobs.map(j => `${j.job_id || j.id} ${j.status}${j.exit_code !== undefined ? ` exit ${j.exit_code}` : ''}`).join(' · ');
+      return { summary: oneLine(summary, 300), ok: jobs.every(j => !['failed', 'timed_out', 'lost'].includes(j.status)) };
+    } catch { /* Preserve ordinary error messages below. */ }
+  }
 
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const parts: string[] = [];
