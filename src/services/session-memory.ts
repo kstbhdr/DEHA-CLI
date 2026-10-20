@@ -10,6 +10,7 @@ import type { Message } from './ai-service';
 import { estimateTokens, estimateMessagesTokens } from './token-counter';
 import { generateRepoMap } from './repo-map';
 import { safeSlice } from './text-utils';
+import { latestProjectCheckpoint, writeCheckpoint } from '../conversations/checkpoint';
 
 // â”€â”€â”€ Sabitler & Yollar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -137,6 +138,11 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
         return;
       }
     } catch { /* Try the backup, then Redis. */ }
+  }
+  const recovered = latestProjectCheckpoint(resolvedDir);
+  if (recovered) {
+    _state = { ...emptySession(resolvedDir), ...recovered, workDir: resolvedDir };
+    return;
   }
   const redis = await getRedis();
   if (redis) {
@@ -688,6 +694,9 @@ export async function flushOnExit(): Promise<void> {
 }
 
 function _writeWarmBuffer(): void {
+  // Independent of the project directory: survives a missing/corrupt local buffer
+  // and is discoverable before a long-running agent turn has returned.
+  try { writeCheckpoint(_state); } catch { /* The local checkpoint remains available. */ }
   try {
     const bufferFile = getSessionBufferFile(_state.workDir);
     const bufferDir = path.dirname(bufferFile);

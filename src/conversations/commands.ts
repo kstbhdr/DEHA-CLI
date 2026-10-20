@@ -71,7 +71,7 @@ function showList(all: boolean): void {
   if (convs.length === 0) {
     if (all) {
       logger.write(chalk.dim('  Henüz kayıtlı sohbet yok.\n'));
-      logger.write(chalk.dim('  Sohbet bittiğinde otomatik kaydedilir.\n'));
+      logger.write(chalk.dim('  Sohbetler çalışma sırasında otomatik kaydedilir.\n'));
     } else {
       logger.write(chalk.dim('  Bu projede henüz kayıtlı sohbet yok.\n'));
       logger.write(chalk.dim('  Tüm projelerdeki sohbetler için: /oldconversations all\n'));
@@ -127,6 +127,10 @@ function showSearch(query: string): void {
 
 function showByIndex(index: number, all: boolean): HistorySelection | null {
   const convs = all ? listConversations(100) : listConversations(100, process.cwd());
+  if (!convs.length) {
+    showList(all);
+    return null;
+  }
   if (index < 0 || index >= convs.length) {
     logger.write(chalk.red(`\n  Geçersiz numara. 1-${convs.length} arasında gir.\n`));
     return null;

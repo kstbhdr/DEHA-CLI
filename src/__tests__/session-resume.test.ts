@@ -39,6 +39,37 @@ async function app() {
 }
 
 describe('Gerçek açılış ve sohbet geri yükleme yolu', () => {
+  it('tur bitmeden gelen tool sonucu arşivde listelenir ve eksiksiz resume edilir', async () => {
+    seed(); const { start, session, conversations } = await app(); await start(project);
+    const result: any = { role: 'tool', tool_call_id: 'pending-call', content: 'CHECKPOINT_SAVED_SHA256' };
+    await session.appendMessage(result);
+    expect(fs.existsSync(path.join(conversations.getConvDir(), 'research.md'))).toBe(false);
+    const listed = conversations.listConversations(100, project);
+    expect(listed).toHaveLength(1);
+    expect(listed[0].messageCount).toBe(2);
+    expect(conversations.searchConversations('CHECKPOINT_SAVED_SHA256').map(c => c.id)).toContain('research');
+    expect(conversations.loadConversationMessages('research')?.at(-1)).toEqual(result);
+    expect(conversations.loadConversationSnapshot('research')?.workspace).toEqual(savedState().workspace);
+  });
+  it('iki yerel tampon bozuksa global kayıttan görev ve brain kurtarılır', async () => {
+    seed(); let appState = await app(); await appState.start(project);
+    await appState.session.appendMessage({ role: 'assistant', content: 'E19 henüz bitmedi' });
+    const buffer = appState.session.getSessionBufferFile(project);
+    fs.writeFileSync(buffer, '{broken'); fs.writeFileSync(`${buffer}.bak`, '{broken');
+    vi.resetModules(); appState = await app();
+    const recovered = await appState.start(project);
+    expect(recovered.messages.at(-1)?.content).toBe('E19 henüz bitmedi');
+    expect(appState.session.getSessionSnapshot().workspace).toEqual(savedState().workspace);
+    expect(appState.session.getActiveTask()?.originalUserRequest).toBe(original);
+  });
+  it('global kaydın bozulması sağlam yedekten resume edilmesini engellemez', async () => {
+    seed(); const { start, session, conversations } = await app(); await start(project);
+    await session.appendMessage({ role: 'assistant', content: 'E19 sürüyor' });
+    const file = path.join(conversations.getConvDir(), 'research.session.json');
+    fs.writeFileSync(file, '{broken');
+    expect(conversations.listConversations(100, project)).toHaveLength(1);
+    expect(conversations.loadConversationSnapshot('research')?.activeTask?.originalUserRequest).toBe(original);
+  });
   it('restart ilk setterdan önce diskten görev, brain ve tool günlüğünü yükler', async () => {
     seed(); const { start, session } = await app();
     const restored = await start(project);

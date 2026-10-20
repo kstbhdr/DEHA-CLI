@@ -20,3 +20,7 @@ Gerçek OpenRouter bağlantısı ve dosya okuma/yazma agent akışı ayrıca den
 Redis/ChromaDB isteğe bağlıdır; yerel dosya belleği bunlar olmadan çalışır. Açılış eksik servisleri varsayılan olarak kurmaz. Otomatik servis başlangıcını kapatmak için `DEHA_AUTO_START_SERVICES=0`; eksik servislerin kurulumuna izin vermek için `DEHA_AUTO_INSTALL_SERVICES=1` kullanılabilir.
 
 Sohbeti korumak için normal şekilde çıkıp `deha resume <id>` kullanın. `/clear` ve `/new` bilerek yeni sohbet başlatır. JSON checkpointleri brain, aktif görev ve araç günlüğünü taşır; Markdown dosyaları okunabilir geçmişi sağlar.
+
+Çalışma sırasında her mesaj ve workspace güncellemesi, proje tamponuna ek olarak `~/.deha/conversations/<id>.session.json` dosyasına yazılır. Agent turu tamamlanmasa bile `/oldconversations` bu kaydı listeler; `resume` tam araç çağrılarını ve brain bilgisini yükler. Yerel tampon ve yedeği okunamazsa aynı proje dizinine ait en son global checkpoint denenir. Global checkpointin de `.bak` yedeği vardır. Bu kayıtlar makinenin diskindedir; Colab çalışma zamanı sıfırlanmasına karşı ayrıca Drive yedeği gerekir.
+
+`npm run build` ardından `node scripts/recovery-smoke.cjs`, izole geçici dizinde gerçek süreci zorla kapatıp yeniden açar; görev/brain/araç kayıtlarını ve bozuk yerel tampondan kurtarmayı doğrular.

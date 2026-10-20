@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { Message } from '../services/ai-service';
 import { getSessionSnapshot, SessionState } from '../services/session-memory';
+import { readCheckpoint, writeCheckpoint } from './checkpoint';
 
 export interface ConversationMeta {
   id: string;           // dosya adı (uzantısız)
@@ -54,10 +55,8 @@ export function saveConversation(
   const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model, workDir: process.cwd() });
   fs.writeFileSync(filePath, md, 'utf-8');
   // Markdown contains display previews, not a lossless agent checkpoint.
-  const snapshot = { ...getSessionSnapshot(), conversationId: id, messages };
-  const snapshotFile = path.join(getConvDir(), `${id}.session.json`);
-  fs.writeFileSync(`${snapshotFile}.tmp`, JSON.stringify(snapshot), 'utf-8');
-  fs.renameSync(`${snapshotFile}.tmp`, snapshotFile);
+  const snapshot = { ...getSessionSnapshot(), conversationId: id, messages, provider, model };
+  writeCheckpoint(snapshot);
 
   return filePath;
 }
@@ -75,18 +74,18 @@ export function saveConversation(
  */
 export function listConversations(limit = 200, workDir?: string): ConversationMeta[] {
   const dir = getConvDir();
-  const files = fs.readdirSync(dir)
-    .filter((f) => f.endsWith('.md'))
+  const files = [...new Set(fs.readdirSync(dir)
+    .filter(f => /(?:\.md|\.session\.json(?:\.bak)?)$/.test(f))
+    .map(f => f.replace(/(?:\.md|\.session\.json(?:\.bak)?)$/, '')))]
     .sort()
     .reverse();
 
   const resolvedFilter = workDir ? path.resolve(workDir) : undefined;
 
   const all = files.map((file) => {
-    const filePath = path.join(dir, file);
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    return parseMeta(raw, file.replace('.md', ''), filePath);
-  });
+    const raw = readConversation(file);
+    return raw ? parseMeta(raw, file, path.join(dir, `${file}.md`)) : null;
+  }).filter((c): c is ConversationMeta => c !== null);
 
   const filtered = resolvedFilter
     ? all.filter((c) => !c.workDir || path.resolve(c.workDir) === resolvedFilter)
@@ -98,6 +97,12 @@ export function listConversations(limit = 200, workDir?: string): ConversationMe
 // ─── Oku ────────────────────────────────────────────────────────────────────
 
 export function readConversation(id: string): string | null {
+  const snapshot = readCheckpoint(id) as (SessionState & { provider?: string; model?: string; checkpointSavedAt?: string }) | null;
+  if (snapshot) return buildMarkdown(snapshot.messages, {
+    date: snapshot.checkpointSavedAt || new Date(0).toISOString(),
+    title: makeTitle(snapshot.messages.find(m => m.role === 'user')?.content || snapshot.activeTask?.originalUserRequest || 'Sohbet'),
+    provider: snapshot.provider || '?', model: snapshot.model || '?', workDir: snapshot.workDir,
+  });
   const filePath = path.join(getConvDir(), `${id}.md`);
   if (!fs.existsSync(filePath)) return null;
   return fs.readFileSync(filePath, 'utf-8');
@@ -170,10 +175,7 @@ export function loadConversationMessages(id: string): Message[] | null {
 }
 
 export function loadConversationSnapshot(id: string): SessionState | null {
-  try {
-    const saved = JSON.parse(fs.readFileSync(path.join(getConvDir(), `${id}.session.json`), 'utf-8'));
-    return saved?.conversationId === id && Array.isArray(saved.messages) ? saved : null;
-  } catch { return null; }
+  return readCheckpoint(id);
 }
 
 /**
@@ -198,20 +200,10 @@ function mergeConsecutiveSameRole(messages: Message[]): Message[] {
 }
 
 export function searchConversations(query: string): ConversationMeta[] {
-  const dir = getConvDir();
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.md'));
-  const results: ConversationMeta[] = [];
   const q = query.toLowerCase();
-
-  for (const file of files) {
-    const filePath = path.join(dir, file);
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    if (raw.toLowerCase().includes(q)) {
-      results.push(parseMeta(raw, file.replace('.md', ''), filePath));
-    }
-  }
-
-  return results.sort((a, b) => b.date.localeCompare(a.date));
+  return listConversations(Number.MAX_SAFE_INTEGER)
+    .filter(c => readConversation(c.id)?.toLowerCase().includes(q))
+    .sort((a, b) => b.date.localeCompare(a.date));
 }
 
 // ─── Markdown builder ────────────────────────────────────────────────────────
