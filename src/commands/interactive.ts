@@ -536,7 +536,7 @@ export async function interactive(
   if (queue.pending.length) logger.write(chalk.yellow(`  ↩ ${queue.pending.length} bekleyen mesaj geri yüklendi.\n`));
 
   rl.on('SIGINT', async () => { if (activeAbortController) activeAbortController.abort(); else { await exitCleanup(history, config, conversationId, sessionUsageSnapshot); process.exit(0); } });
-  process.once('SIGTERM', async () => { await flushOnExit().catch(() => {}); await closeMemory().catch(() => {}); process.exit(0); });
+  process.once('SIGTERM', async () => { await exitCleanup(history, config, conversationId, sessionUsageSnapshot); process.exit(0); });
   rl.on('close', () => { closed = true; queue.stop(); pasteInput.stream.removeListener('keypress', onGlobalKeypress); process.stdin.unpipe(pasteInput.stream); pasteInput.cleanup(); if (process.stdin.isTTY) { process.stdout.write('\x1b[?2004l'); process.stdin.setRawMode(false); } });
   queue.start();
   if (!queue.running) prompt();
@@ -556,6 +556,11 @@ async function exitCleanup(history: Message[], config: DehaConfig, conversationI
     } catch { }
   }
   await mcpManager.disconnectAll().catch(() => {});
+  // Temiz çıkışta (crash değil, kullanıcı kendi isteğiyle çıktı) bir sonraki
+  // `deha` açılışı otomatik olarak bu sohbeti sürdürmemeli — sohbet zaten
+  // yukarıda kaydedildi, "deha resume <id>" ile açıkça geri dönülebilir.
+  // Aksi halde kullanıcı seçmediği hâlde eski sohbet otomatik devam ediyordu.
+  await resetSession(process.cwd()).catch(() => {});
   printSessionSummary(getUsageSince(sessionUsageSnapshot));
   logger.write(chalk.dim('Görüşürüz! 👋\n'));
   if (sessionId) logger.write(chalk.dim('Önceki sohbete dönmek için: ') + chalk.cyan(`deha resume ${sessionId}\n`));
