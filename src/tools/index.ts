@@ -16,6 +16,7 @@ import { logger } from '../services/logger';
 import { safeSlice } from '../services/text-utils';
 import { BRAIN_TOOL, executeBrainTool } from '../services/sectioned-context/brain';
 import { backgroundJobsEnabled, startBackgroundJob, waitBackgroundJob, listBackgroundJobs, cancelBackgroundJob } from './background-jobs';
+import { getWorkDir } from '../services/session-memory';
 // vision tool requires DehaConfig, handled separately in agent.ts
 
 // ─── Tool definitions (Claude API schema) ──────────────────────────────────
@@ -30,6 +31,7 @@ export const DEHA_TOOLS: ToolDefinition[] = [
         path:       { type: 'string', description: 'File path (absolute or relative)' },
         start_line: { type: 'number', description: 'Start line (optional)' },
         end_line:   { type: 'number', description: 'End line (optional)' },
+        purpose:    { type: 'string', description: 'Specific next edit or concrete runtime error requiring this read. Required for focused reads after implementation discovery budget is exhausted.' },
       },
       required: ['path'],
     },
@@ -452,7 +454,23 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 300_000;
 
 // Sync toollar
+function resolveProjectInput(name: string, input: Record<string, unknown>): Record<string, unknown> {
+  const root = getWorkDir() || process.cwd();
+  const normalized = { ...input };
+  // Centralize model-facing paths so read/write/edit/execute agree on the
+  // selected project even when DEHA itself was launched from another folder.
+  const pathKeys = ['path', 'directory', 'file_a', 'file_b', ...(name === 'run_python' ? ['file'] : [])];
+  for (const key of pathKeys) if (typeof normalized[key] === 'string' && normalized[key]) {
+    normalized[key] = path.resolve(root, normalized[key] as string);
+  }
+  if (['run_shell', 'run_terminal', 'run_python', 'git', 'start_job'].includes(name)) {
+    normalized.cwd = typeof input.cwd === 'string' && input.cwd ? path.resolve(root, input.cwd) : root;
+  }
+  return normalized;
+}
+
 export function executeTool(name: string, input: Record<string, unknown>): string {
+  input = resolveProjectInput(name, input);
   const inp = input as ToolInput;
   try {
     switch (name) {
@@ -501,6 +519,7 @@ export async function executeToolAsync(
   config?: import('../config').DehaConfig,
   abortSignal?: AbortSignal,
 ): Promise<string> {
+  input = resolveProjectInput(name, input);
   try {
     switch (name) {
       case 'start_job':
@@ -797,13 +816,17 @@ function shellCwdSandboxEnabled(): boolean {
 
 async function toolRunShell(inp: ToolInput, signal?: AbortSignal): Promise<string> {
   await ensureSafeShellCommand(inp.command!);
-  const projectRoot = process.cwd();
-  const cwd = inp.cwd ? path.resolve(inp.cwd) : projectRoot;
-
+  // The selected task project may be a sibling of the CLI installation.
+  // Preserve the old launcher scope, but also accept the active project.
+  const roots = [...new Set([process.cwd(), getWorkDir()].filter(Boolean).map(p => path.resolve(p)))];
+  const cwd = inp.cwd ? path.resolve(inp.cwd) : path.resolve(getWorkDir() || process.cwd());
   if (shellCwdSandboxEnabled()) {
-    const relativeCwd = path.relative(projectRoot, cwd);
-    if (relativeCwd === '..' || relativeCwd.startsWith('..' + path.sep) || path.isAbsolute(relativeCwd)) {
-      throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nProje kökü: ${projectRoot}\n(Bu kurulumda gerçekten dışarı çıkmak gerekiyorsa DEHA_SANDBOX_CWD=0 ile kapatılabilir.)`);
+    const allowed = roots.some(root => {
+      const relative = path.relative(root, cwd);
+      return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+    });
+    if (!allowed) {
+      throw new Error(`❌ Çalışma dizini proje dışına çıkamaz: ${cwd}\nİzinli proje kökleri: ${roots.join(', ')}`);
     }
   }
 

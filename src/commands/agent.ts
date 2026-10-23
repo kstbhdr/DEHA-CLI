@@ -11,6 +11,7 @@ import { TurnContextAssembler, createTurnAssembler, isSectionedContextEnabled, S
 import { resolveTotalContextTokens } from '../services/sectioned-context';
 import { computeOutputReserve } from '../services/sectioned-context/budget';
 import { backgroundJobsEnabled, BACKGROUND_JOB_NAMES, BACKGROUND_JOBS_PROMPT, blockingJobsForActiveTask, listBackgroundJobs } from '../tools/background-jobs';
+import { createImplementationGuard, ImplementationGuard, IMPLEMENTATION_GUARD_PROMPT } from '../services/implementation-guard';
 
 /** WorkDir bilgisini config'e system prompt olarak enjekte et */
 export function injectWorkDir(config: DehaConfig, customSystemPrompt?: string): DehaConfig {
@@ -51,7 +52,7 @@ export async function runAgent(
   abortSignal?: AbortSignal,
   customSystemPrompt?: string,
   onMessage?: OnMessage,
-  options: { taskAlreadyResolved?: boolean; sectioned?: boolean } = {},
+  options: { taskAlreadyResolved?: boolean; sectioned?: boolean; implementationGuard?: boolean } = {},
 ): Promise<AgentResult> {
   const mcpTools = mcpManager.getAnthropicTools();
   const allTools = [...DEHA_TOOLS.filter(t => backgroundJobsEnabled() || !BACKGROUND_JOB_NAMES.has(t.name)), ...mcpTools];
@@ -69,6 +70,8 @@ export async function runAgent(
 
   // WorkDir'i system prompt'a enjekte et
   let enrichedConfig = injectWorkDir(config, customSystemPrompt);
+  const implementation = (options.implementationGuard ?? !customSystemPrompt) ? createImplementationGuard(userMessage) : undefined;
+  if (implementation) enrichedConfig.systemPrompt += IMPLEMENTATION_GUARD_PROMPT;
   if (backgroundJobsEnabled()) {
     enrichedConfig.systemPrompt += BACKGROUND_JOBS_PROMPT;
     const activeId = getActiveTask()?.id;
@@ -90,11 +93,11 @@ export async function runAgent(
 
   // Claude → native tool calling
   if (config.provider === 'claude') {
-    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler);
+    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation);
   }
 
   // OpenAI-uyumlu providerlar (DeepSeek, OpenAI, OpenRouter, xAI, custom)
-  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler);
+  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation);
 }
 
 function logAssemblerStats(stats: BuildStats): void {
@@ -161,6 +164,7 @@ function activeModelName(config: DehaConfig): string {
     case 'ollama': return config.ollamaModel || '';
     case 'openrouter': return config.openrouterModel || '';
     case 'xai': return config.xaiModel || '';
+    case 'custom': return config.customModel || '';
     default: return '';
   }
 }
@@ -454,6 +458,7 @@ async function runAgentClaude(
   abortSignal?: AbortSignal,
   onMessage?: OnMessage,
   assembler?: TurnContextAssembler,
+  implementation?: ImplementationGuard,
 ): Promise<AgentResult> {
   const messages: Message[] = [...history];
   const startIdx = history.length;
@@ -655,23 +660,25 @@ async function runAgentClaude(
 
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
-      const result = await runTool(tc.name, tc.input, config, abortSignal);
+      const denied = implementation?.before(tc.name, tc.input);
+      const result = denied ?? await runTool(tc.name, tc.input, config, abortSignal);
+      const phaseNote = denied ? undefined : implementation?.after(tc.name, tc.input, result);
       const compactedResult = compactToolResultForModel(tc.name, result);
       const previewText = compactedResult.trim();
       const preview = previewText.length === 0
         ? chalk.red('(boş sonuç — timeout veya bağlantı hatası olabilir)')
         : chalk.gray(previewText.length > 200 ? previewText.slice(0, 200) + '…' : previewText);
       logger.write(chalk.dim('    → ') + preview);
-      toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${compactedResult}\n</tool_result>`);
+      toolResultBlocks.push(`<tool_result name="${tc.name}" id="${tc.id}">\n${compactedResult}${phaseNote ? '\n\n' + phaseNote : ''}\n</tool_result>`);
       pendingRecords.push({ name: tc.name, input: tc.input, result: compactedResult });
       finalText = text;
 
-      if (previewText.length > 0 && !isSilentInterimOutput(previewText)) {
+      if (!denied && previewText.length > 0 && !isSilentInterimOutput(previewText)) {
         updateActiveTask({ lastMeaningfulToolResult: `[${tc.name}]: ${safeSlice(previewText, 0, 400)}` });
       }
 
       // Error tracking
-      if (isToolError(compactedResult)) {
+      if (!denied && isToolError(compactedResult)) {
         consecutiveToolFailures++;
       } else {
         consecutiveToolFailures = 0;
@@ -735,6 +742,13 @@ async function runAgentClaude(
       logger.raw('\n');
       break;
     }
+    if (implementation?.shouldStop) {
+      finalText = implementation.stopMessage;
+      updateActiveTask({ taskState: 'INTERRUPTED' });
+      await pushMessage({ role: 'assistant', content: finalText });
+      logger.write(chalk.yellow(finalText));
+      break;
+    }
   }
 
   if (messages.length === 0 || messages[messages.length - 1].role !== 'assistant') {
@@ -761,6 +775,7 @@ async function runAgentOpenAI(
   abortSignal?: AbortSignal,
   onMessage?: OnMessage,
   assembler?: TurnContextAssembler,
+  implementation?: ImplementationGuard,
 ): Promise<AgentResult> {
   // Geçmiş mesajları OpenAI formatına dönüştür + mutual-pairing ile orphan tool mesajlarını temizle
   const startIdx = history.length;
@@ -1023,7 +1038,9 @@ async function runAgentOpenAI(
     // Tool'ları çalıştır ve sonuçları ekle
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
-      const result = await runTool(tc.name, tc.input, config, abortSignal);
+      const denied = implementation?.before(tc.name, tc.input);
+      const result = denied ?? await runTool(tc.name, tc.input, config, abortSignal);
+      const phaseNote = denied ? undefined : implementation?.after(tc.name, tc.input, result);
       const compactedResult = compactToolResultForModel(tc.name, result);
       const previewText = compactedResult.trim();
       const preview = previewText.length === 0
@@ -1031,12 +1048,12 @@ async function runAgentOpenAI(
         : chalk.gray(previewText.length > 200 ? previewText.slice(0, 200) + '…' : previewText);
       logger.write(chalk.dim('    → ') + preview);
 
-      if (previewText.length > 0 && !isSilentInterimOutput(previewText)) {
+      if (!denied && previewText.length > 0 && !isSilentInterimOutput(previewText)) {
         updateActiveTask({ lastMeaningfulToolResult: `[${tc.name}]: ${safeSlice(previewText, 0, 400)}` });
       }
 
       // Error tracking
-      if (isToolError(compactedResult)) {
+      if (!denied && isToolError(compactedResult)) {
         consecutiveToolFailures++;
       } else {
         consecutiveToolFailures = 0;
@@ -1047,11 +1064,18 @@ async function runAgentOpenAI(
       await pushMessage({
         role: 'tool',
         tool_call_id: tc.id,
-        content: compactedResult + (inspectionNotice ? '\n\n' + inspectionNotice : ''),
+        content: compactedResult + (phaseNote ? '\n\n' + phaseNote : '') + (inspectionNotice ? '\n\n' + inspectionNotice : ''),
       });
       if (inspectionNotice) logger.write(chalk.yellow('  ↻ Aynı inceleme sonucu tekrarlandı; modele mevcut kanıtı kullanması hatırlatıldı.'));
 
       finalText = text;
+    }
+    if (implementation?.shouldStop) {
+      finalText = implementation.stopMessage;
+      updateActiveTask({ taskState: 'INTERRUPTED' });
+      await pushMessage({ role: 'assistant', content: finalText });
+      logger.write(chalk.yellow(finalText));
+      break;
     }
 
     // Okuma-sadece tıkanma tespiti: bu round'da çağrılan TÜM araçlar salt inceleme miydi?

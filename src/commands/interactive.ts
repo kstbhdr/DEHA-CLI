@@ -645,6 +645,7 @@ function getActiveModel(config: DehaConfig): string {
     case 'ollama': return config.ollamaModel;
     case 'openrouter': return config.openrouterModel;
     case 'xai': return config.xaiModel;
+    case 'custom': return config.customModel;
     default: return config.provider;
   }
 }

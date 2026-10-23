@@ -45,6 +45,10 @@ export function renderTaskAnchor(budgetTokens: number, fallbackUserMessage: stri
 
   const header: string[] = [];
   header.push(`DURUM: ${task?.taskState ?? 'ACTIVE'}`);
+  if (task?.implementation && process.env.DEHA_IMPLEMENTATION_GUARD !== '0') {
+    const state = task.implementation;
+    header.push(`ÇALIŞMA AŞAMASI: ${state.phase}; keşif ${state.discoveryCalls}/${state.budget}; odaklı okuma hakkı ${state.focusedReads}; kod/veri dosyası değişikliği ${state.changedFiles.length}.`);
+  }
   if (task?.currentObjective && task.currentObjective !== original) {
     header.push(`MEVCUT HEDEF: ${oneLine(task.currentObjective, 600)}`);
   }

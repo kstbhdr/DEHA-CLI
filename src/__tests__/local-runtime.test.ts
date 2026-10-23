@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { executeToolAsync } from '../tools';
+import { executeTool, executeToolAsync } from '../tools';
 import { parseCommandArgs } from '../services/command-args';
 import { runCommand } from '../tools/terminal';
 import { getConfig } from '../config';
@@ -35,6 +35,31 @@ describe('Yerel geliştirme regresyonları', () => {
   it('aynı önekli kardeş dizini proje içinde saymaz', async () => {
     const result = await executeToolAsync('run_shell', { command: 'echo should-not-run', cwd: process.cwd() + '-sibling' });
     expect(result).toContain('proje dışına çıkamaz');
+  });
+  it('CLI dışında seçilen aktif projeye dosya yazar ve aynı projede çalıştırır', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'deha-external-project-'));
+    await resetSession(project);
+    const file = path.join(project, 'backend.cjs');
+    const written = await executeToolAsync('write_file', { path: file, content: 'console.log("PROJECT_EXEC_OK")' });
+    expect(written).toContain('Dosya yazıldı');
+    expect(fs.readFileSync(file, 'utf8')).toContain('PROJECT_EXEC_OK');
+    const executed = await executeToolAsync('run_shell', { command: `"${process.execPath}" backend.cjs`, cwd: project });
+    expect(executed).toContain('PROJECT_EXEC_OK');
+    expect(executed).not.toContain('HATA:');
+  });
+  it('göreli dosya yolları CLI klasörüne değil aktif projeye gider', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'deha-relative-project-'));
+    await resetSession(project);
+    const name = `.deha-probe-${Date.now()}.cjs`;
+    try {
+      await executeToolAsync('write_file', { path: name, content: 'console.log("RELATIVE_OK")' });
+      expect(fs.existsSync(path.join(project, name))).toBe(true);
+      expect(executeTool('read_file', { path: name })).toContain('RELATIVE_OK');
+    } finally {
+      // Only the unique probe file can have been created in the old wrong cwd.
+      const misplaced = path.join(process.cwd(), name);
+      if (fs.existsSync(misplaced)) fs.unlinkSync(misplaced);
+    }
   });
   it('planner gerçek rol sağlayıcısını, modelini ve endpointini kullanır', async () => {
     const config = getConfig({ provider: 'openai' });

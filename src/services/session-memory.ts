@@ -88,6 +88,10 @@ export interface ActiveTaskContext {
   startedAt?: string;
   updatedAt?: string;
   completedAt?: string;
+  implementation?: {
+    version: 1; phase: 'discovery' | 'implementation'; budget: number; discoveryCalls: number;
+    focusedReads: number; deniedCalls: number; changedFiles: string[];
+  };
 }
 
 // â”€â”€â”€ Session state â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
