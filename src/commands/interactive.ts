@@ -93,7 +93,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/stats')}                        Token kullanımı ve maliyet istatistikleri
   ${chalk.cyan('/test')}                         API ve pipeline sistem testi
   ${chalk.cyan('/judge <dosya> <görev>')}   Sadece Judge rolünü çalıştırarak bir dosyayı değerlendir
-  ${chalk.cyan('/queue [clear|remove <n>]')}     Bekleyen mesajları göster / düzenle
+  ${chalk.cyan('/queue [run|clear|remove <n>]')}     Bekleyen mesajları göster / düzenle
   ${chalk.cyan('/jobs [wait|cancel <id>]')}       Arka plan işlerini göster / yönet
   ${chalk.cyan('/exit')}                         Çıkış yap
 
@@ -482,8 +482,15 @@ export async function interactive(
       finally { activeAbortController = null; }
   };
 
+  // Önceki süreçten kalan bekleyen mesajlar (örn. temiz kapanmayan bir oturum)
+  // kuyruğa DOĞRUDAN beslenmiyor — kullanıcı seçmeden otomatik işlenmeye
+  // başlıyordu (özellikle bracketed-paste'i desteklemeyen terminallerde tek
+  // bir yapıştırmanın onlarca parçaya bölünüp arka arkaya çalıştığı durumda,
+  // kullanıcı deha'yı kapatıp tekrar açtığında "kendi kendine devam ediyor"
+  // gibi görünüyordu). Sadece gösterilir; göndermek için /queue run gerekir.
+  const restoredPending = getPendingInputs();
   const queue = new InputQueue({
-    initial: getPendingInputs(),
+    initial: [],
     changed: setPendingInputs,
     process: async input => {
       logger.write(chalk.dim(`\n  ▶ İşleniyor: ${input.replace(/\s+/g, ' ').slice(0, 100)}\n`));
@@ -522,18 +529,27 @@ export async function interactive(
         logger.write(pending.length
           ? pending.map((message, i) => `  ${i + 1}. ${message.replace(/\s+/g, ' ').slice(0, 150)}`).join('\n')
           : '  Sırada bekleyen mesaj yok.');
+        if (restoredPending.length) {
+          logger.write(chalk.dim(`  (+ önceki oturumdan ${restoredPending.length} mesaj — henüz yüklenmedi, /queue run ile eklenir)`));
+        }
       } else if (args[0] === 'clear' && args.length === 1) {
-        queue.clear(); logger.write('  Bekleyen mesajlar temizlendi.');
+        queue.clear(); restoredPending.length = 0; logger.write('  Bekleyen mesajlar temizlendi.');
       } else if (args[0] === 'remove' && args.length === 2 && /^\d+$/.test(args[1])) {
         logger.write(queue.remove(Number(args[1]) - 1) ? '  Mesaj sıradan çıkarıldı.' : '  Geçersiz sıra numarası.');
-      } else logger.write('  Kullanım: /queue | /queue clear | /queue remove <n>');
+      } else if (args[0] === 'run' && args.length === 1) {
+        if (!restoredPending.length) logger.write('  Geri yüklenecek önceki oturum mesajı yok.');
+        else { const items = restoredPending.splice(0); items.forEach(i => queue.enqueue(i)); logger.write(`  ✓ ${items.length} önceki mesaj kuyruğa eklendi.`); }
+      } else logger.write('  Kullanım: /queue | /queue run | /queue clear | /queue remove <n>');
       prompt(); return;
     }
     if (queue.running) logger.write(chalk.yellow(`  ⏳ Sıraya eklendi (#${queue.pending.length + 1}): ${trimmed.replace(/\s+/g, ' ').slice(0, 100)}`));
     queue.enqueue(input);
     prompt();
   });
-  if (queue.pending.length) logger.write(chalk.yellow(`  ↩ ${queue.pending.length} bekleyen mesaj geri yüklendi.\n`));
+  if (restoredPending.length) {
+    logger.write(chalk.yellow(`  ↩ Önceki oturumdan ${restoredPending.length} bekleyen mesaj bulundu (otomatik GÖNDERİLMEDİ).\n`) +
+      chalk.dim('    Görmek için /queue, göndermek için /queue run, silmek için /queue clear.\n'));
+  }
 
   rl.on('SIGINT', async () => { if (activeAbortController) activeAbortController.abort(); else { await exitCleanup(history, config, conversationId, sessionUsageSnapshot); process.exit(0); } });
   process.once('SIGTERM', async () => { await exitCleanup(history, config, conversationId, sessionUsageSnapshot); process.exit(0); });
@@ -619,7 +635,25 @@ function createPasteInput(): { stream: Transform; expand: (line: string) => stri
       while (buffer.length > 0) {
         if (!collectingPaste) {
           const start = buffer.indexOf(PASTE_START);
-          if (start < 0) { const keep = pasteStartSuffixLength(buffer); if (buffer.length <= keep) break; output += buffer.slice(0, buffer.length - keep); buffer = buffer.slice(buffer.length - keep); break; }
+          if (start < 0) {
+            // Terminal didn't send \x1b[200~/201~ bracketed-paste markers at all
+            // (e.g. Colab's exec terminal) — but under raw mode a single real
+            // clipboard paste still lands as ONE raw chunk with embedded \n's,
+            // while a human keystroke is its own chunk. Without this, every
+            // line of a pasted multi-line message became its own readline
+            // 'line' event, i.e. its own queued message (one giant instruction
+            // exploded into dozens of fragments that then auto-fired in order).
+            const newlineCount = (buffer.match(/\n/g) || []).length;
+            if (newlineCount >= 2) {
+              const lastNewline = buffer.lastIndexOf('\n');
+              const content = buffer.slice(0, lastNewline);
+              const id = String(nextId++); pasted.set(id, content);
+              output += `[Pasted Content ${content.length} chars #${id}]\n`;
+              buffer = buffer.slice(lastNewline + 1);
+              continue;
+            }
+            const keep = pasteStartSuffixLength(buffer); if (buffer.length <= keep) break; output += buffer.slice(0, buffer.length - keep); buffer = buffer.slice(buffer.length - keep); break;
+          }
           output += buffer.slice(0, start); buffer = buffer.slice(start + PASTE_START.length); collectingPaste = true;
         }
         const end = buffer.indexOf(PASTE_END); if (end < 0) break;
