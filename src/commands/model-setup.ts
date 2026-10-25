@@ -108,6 +108,16 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
       default: (ans: { provider: Provider }) => defaultModel(ans.provider, config),
     },
     {
+      type: 'number',
+      name: 'maxContextTokens',
+      message: 'Context window (token, 0 = model adından otomatik / bilinmiyorsa 32k):',
+      default: config.maxContextTokens,
+      filter: (value: unknown) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : config.maxContextTokens;
+      },
+    },
+    {
       type: 'password',
       name: 'apiKey',
       message: 'API Key (boş = mevcut):',
@@ -400,7 +410,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
     },
   ]);
 
-  type ChatAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string; openrouterProvider?: string; openrouterIgnoreProviders?: string };
+  type ChatAns    = { provider: Provider; model: string; maxContextTokens?: number; apiKey?: string; apiUrl?: string; openrouterProvider?: string; openrouterIgnoreProviders?: string };
   type RoleAns    = { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
   type VisionAns  = { provider: string;   model: string; apiKey?: string; apiUrl?: string };
   type ImageAns   = { provider: string;   model: string; apiKey?: string; apiUrl?: string };
@@ -451,7 +461,7 @@ export async function modelSetup(config: DehaConfig): Promise<void> {
 function applyToConfig(
   config: DehaConfig,
   answers: {
-    chat:     { provider: Provider; model: string; apiKey?: string; apiUrl?: string; openrouterProvider?: string; openrouterIgnoreProviders?: string };
+    chat:     { provider: Provider; model: string; maxContextTokens?: number; apiKey?: string; apiUrl?: string; openrouterProvider?: string; openrouterIgnoreProviders?: string };
     planner:  { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
     coder:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
     judge:    { provider: Provider; model: string; apiKey?: string; apiUrl?: string; maxTokens?: number; temperature?: number; openrouterProvider?: string; openrouterIgnoreProviders?: string };
@@ -474,6 +484,9 @@ function applyToConfig(
   // Chat
   config.provider = chat.provider;
   setModel(config, chat.provider, chat.model);
+  if (Number.isFinite(chat.maxContextTokens) && Number(chat.maxContextTokens) >= 0) {
+    config.maxContextTokens = Math.floor(Number(chat.maxContextTokens));
+  }
   if (chat.apiKey) setKey(config, chat.provider, chat.apiKey);
   if (chat.apiUrl) config.customApiUrl = chat.apiUrl;
   if (chat.openrouterProvider !== undefined) config.openrouterProvider = chat.openrouterProvider;
@@ -618,6 +631,7 @@ function persistConfig(config: DehaConfig): void {
     IMAGE_API_URL: config.imageApiUrl ?? '',
     PIPELINE_MAX_ITERATIONS: String(config.pipeline.maxIterations),
     DEHA_MAX_TOOL_ROUNDS: String(config.maxToolRounds),
+    DEHA_MAX_CONTEXT_TOKENS: String(config.maxContextTokens),
   };
 
   let content = existing;
