@@ -46,8 +46,14 @@ export function renderTaskAnchor(budgetTokens: number, fallbackUserMessage: stri
   const header: string[] = [];
   header.push(`DURUM: ${task?.taskState ?? 'ACTIVE'}`);
   if (task?.implementation && process.env.DEHA_IMPLEMENTATION_GUARD !== '0') {
-    const state = task.implementation;
-    header.push(`ÇALIŞMA AŞAMASI: ${state.phase}; keşif ${state.discoveryCalls}/${state.budget}; odaklı okuma hakkı ${state.focusedReads}; kod/veri dosyası değişikliği ${state.changedFiles.length}.`);
+    // Sadece tek yönlü aşama adı (discovery→implementation, görev başına BİR
+    // kez değişir) — ayrıntılı sayaçlar (discoveryCalls/focusedReads/
+    // changedFiles.length) BURAYA konursa her tool round'unda değişip prompt
+    // cache'ini (task-anchor, cache breakpoint'inden ÖNCEKİ sabit prefix'te)
+    // o görevin HER turunda bozuyordu. O sayaçlar zaten
+    // ImplementationGuard.before()/after() ile ilgili tool_result'un hemen
+    // yanına, zaten her round değişen native/tail bölüme ekleniyor.
+    header.push(`ÇALIŞMA AŞAMASI: ${task.implementation.phase}`);
   }
   if (task?.currentObjective && task.currentObjective !== original) {
     header.push(`MEVCUT HEDEF: ${oneLine(task.currentObjective, 600)}`);
