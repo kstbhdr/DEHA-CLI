@@ -45,6 +45,12 @@ export interface AgentResult {
 /** Turn sırasında üretilen her yeni mesajı ANINDA kalıcılaştırmak için — bkz. runAgent'ın onMessage parametresi. */
 export type OnMessage = (msg: Message) => void | Promise<void>;
 
+export interface AgentStage {
+  allowedTools?: string[];
+  tools?: { definition: (typeof DEHA_TOOLS)[number]; execute: (input: Record<string, unknown>) => string | Promise<string> }[];
+  onToolResult?: (name: string, input: Record<string, unknown>, result: string) => void | Promise<void>;
+}
+
 export async function runAgent(
   userMessage: string,
   config: DehaConfig,
@@ -52,10 +58,12 @@ export async function runAgent(
   abortSignal?: AbortSignal,
   customSystemPrompt?: string,
   onMessage?: OnMessage,
-  options: { taskAlreadyResolved?: boolean; sectioned?: boolean; implementationGuard?: boolean; completeTask?: boolean } = {},
+  options: { taskAlreadyResolved?: boolean; sectioned?: boolean; implementationGuard?: boolean; completeTask?: boolean; stage?: AgentStage; appendUserMessage?: boolean } = {},
 ): Promise<AgentResult> {
+  if (options.appendUserMessage) history = [...history, { role: 'user', content: userMessage }];
   const mcpTools = mcpManager.getAnthropicTools();
-  const allTools = [...DEHA_TOOLS.filter(t => backgroundJobsEnabled() || !BACKGROUND_JOB_NAMES.has(t.name)), ...mcpTools];
+  const baseTools = [...DEHA_TOOLS.filter(t => backgroundJobsEnabled() || !BACKGROUND_JOB_NAMES.has(t.name)), ...mcpTools];
+  const allTools = [...baseTools.filter(t => !options.stage?.allowedTools || options.stage.allowedTools.includes(t.name)), ...(options.stage?.tools?.map(t => t.definition) ?? [])];
 
   if (mcpTools.length > 0) {
     logger.write(chalk.dim(`  [${mcpTools.length} MCP aracı aktif]\n`));
@@ -93,11 +101,11 @@ export async function runAgent(
 
   // Claude → native tool calling
   if (config.provider === 'claude') {
-    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation, options.completeTask);
+    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation, options.completeTask, options.stage);
   }
 
   // OpenAI-uyumlu providerlar (DeepSeek, OpenAI, OpenRouter, xAI, custom)
-  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation, options.completeTask);
+  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation, options.completeTask, options.stage);
 }
 
 function logAssemblerStats(stats: BuildStats): void {
@@ -460,6 +468,7 @@ async function runAgentClaude(
   assembler?: TurnContextAssembler,
   implementation?: ImplementationGuard,
   completeTask = true,
+  stage?: AgentStage,
 ): Promise<AgentResult> {
   const messages: Message[] = [...history];
   const startIdx = history.length;
@@ -661,8 +670,11 @@ async function runAgentClaude(
 
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
-      const denied = implementation?.before(tc.name, tc.input);
-      const result = denied ?? await runTool(tc.name, tc.input, config, abortSignal);
+      const available = !stage?.allowedTools || stage.allowedTools.includes(tc.name) || stage.tools?.some(t => t.definition.name === tc.name);
+      const denied = !available ? `HATA: Tool ${tc.name} is not enabled for this role. Use its available coding tools.` : implementation?.before(tc.name, tc.input);
+      const local = stage?.tools?.find(t => t.definition.name === tc.name);
+      const result = denied ?? await (local ? local.execute(tc.input) : runTool(tc.name, tc.input, config, abortSignal));
+      if (!denied) await stage?.onToolResult?.(tc.name, tc.input, result);
       const phaseNote = denied ? undefined : implementation?.after(tc.name, tc.input, result);
       const compactedResult = compactToolResultForModel(tc.name, result);
       const previewText = compactedResult.trim();
@@ -778,6 +790,7 @@ async function runAgentOpenAI(
   assembler?: TurnContextAssembler,
   implementation?: ImplementationGuard,
   completeTask = true,
+  stage?: AgentStage,
 ): Promise<AgentResult> {
   // Geçmiş mesajları OpenAI formatına dönüştür + mutual-pairing ile orphan tool mesajlarını temizle
   const startIdx = history.length;
@@ -1040,8 +1053,11 @@ async function runAgentOpenAI(
     // Tool'ları çalıştır ve sonuçları ekle
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
-      const denied = implementation?.before(tc.name, tc.input);
-      const result = denied ?? await runTool(tc.name, tc.input, config, abortSignal);
+      const available = !stage?.allowedTools || stage.allowedTools.includes(tc.name) || stage.tools?.some(t => t.definition.name === tc.name);
+      const denied = !available ? `HATA: Tool ${tc.name} is not enabled for this role. Use its available coding tools.` : implementation?.before(tc.name, tc.input);
+      const local = stage?.tools?.find(t => t.definition.name === tc.name);
+      const result = denied ?? await (local ? local.execute(tc.input) : runTool(tc.name, tc.input, config, abortSignal));
+      if (!denied) await stage?.onToolResult?.(tc.name, tc.input, result);
       const phaseNote = denied ? undefined : implementation?.after(tc.name, tc.input, result);
       const compactedResult = compactToolResultForModel(tc.name, result);
       const previewText = compactedResult.trim();

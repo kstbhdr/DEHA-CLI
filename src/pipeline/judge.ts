@@ -64,6 +64,7 @@ export async function runJudge(
   abortSignal?: AbortSignal,
   staticContext: Message[] = [],
   applicationReport?: string,
+  agentExecution = false,
 ): Promise<JudgeVerdict> {
   const { pipeline } = config;
 
@@ -74,7 +75,8 @@ export async function runJudge(
     (applicationReport ? `\n\n## APPLICATION RESULTS AND CURRENT FILES\n${applicationReport}\nReview the whole task against the current files, including earlier iterations. Failed writes/edits or an incomplete task must FAIL. Model review alone is not evidence that tests ran.` : '');
 
   const messages: Message[] = [...staticContext, { role: 'user', content: userContent }];
-  const raw = await callRole(pipeline.judge, config, messages, JUDGE_PROMPT, onChunk, 'judge', undefined, abortSignal);
+  const prompt = JUDGE_PROMPT + (agentExecution ? '\n[AGENT CODER REVIEW] This Coder executed tools directly. FILE/EDIT blocks are not required. Review the provided tool execution evidence and current file snapshots. Do not reject a tool-based implementation solely because the final report contains no code blocks.' : '');
+  const raw = await callRole(pipeline.judge, config, messages, prompt, onChunk, 'judge', undefined, abortSignal);
 
   return parseVerdict(raw);
 }

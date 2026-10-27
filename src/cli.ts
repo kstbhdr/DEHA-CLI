@@ -59,6 +59,11 @@ export class DehaCLI {
       .command('build <task>')
       .description('Planner/Coder/Judge build akışını çalıştır')
       .option('--planner-provider <p>', 'Planner provider')
+      .option('--no-planner', 'Skip Planner')
+      .option('--no-judge', 'Skip Judge')
+      .option('--coder-mode <mode>', 'Coder: agent or blocks')
+      .option('--plan-only', 'Save a plan without running Coder or Judge')
+      .option('--use-saved-plan', 'Use the active project saved plan')
       .option('--planner-model <m>', 'Planner model')
       .option('--planner-key <k>', 'Planner API key')
       .option('--planner-url <u>', 'Planner custom API URL')
@@ -85,8 +90,9 @@ export class DehaCLI {
         if (opts.coderUrl)        config.pipeline.coder.apiUrl     = opts.coderUrl;
 
         try {
-          const result = await runPipeline(task, config);
-          if (!result.verdict.pass) process.exitCode = 1;
+          if (opts.coderMode && !['agent', 'blocks'].includes(opts.coderMode)) throw new Error('Coder mode must be agent or blocks.');
+          const result = await runPipeline(task, config, [], undefined, { planner: opts.planner === false ? false : undefined, judge: opts.judge === false ? false : undefined, coderMode: opts.coderMode, planOnly: opts.planOnly, useSavedPlan: opts.useSavedPlan });
+          if (!result.success) process.exitCode = 1;
         } catch (err: unknown) {
           logger.error('Pipeline hatası', err);
           process.exit(1);

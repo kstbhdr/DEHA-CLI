@@ -22,8 +22,10 @@ import { runPythonCode, detectPython } from '../tools/python';
 import { runSmokeTests, buildQuickChecks, printSmokeReport } from '../tools/smoke';
 import { takeScreenshot } from '../tools/browser';
 import { screenshotAndAnalyze } from '../tools/vision';
-import { modelSetup } from './model-setup';
+import { modelSetup, pipelineSetup } from './model-setup';
+import { parsePipelineInput } from '../pipeline/options';
 import { configForRole } from '../pipeline/role-config';
+import { CODER_TOOL_NAMES } from '../pipeline/coder';
 import { getUsageSince, getUsageSnapshot, printSessionSummary, printStats } from '../services/usage-tracker';
 // Tool router kaldırıldı — DEHA her zaman agent modunda çalışır (tool_choice: auto)
 import {
@@ -33,6 +35,7 @@ import {
 import {
   detectWorkDir,
   setWorkDir,
+  getWorkDir,
   setConversationId,
   appendMessage,
   buildContextMessages,
@@ -103,10 +106,13 @@ ${chalk.bold('@dosya.ts sözdizimi:')}
 `;
 
 const COMMAND_SUGGESTIONS = [
+  '/config', '/plan', '/code', '/task', '/coderchat',
   '/help', '/new', '/clear', '/model', '/thinking', '/security', '/agent', '/build', '/file', '/architecture',
   '/mcp', '/history', '/oldconversations', '/run', '/python', '/smoketest', '/screenshot',
   '/jobs', '/queue', '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
+
+const PIPELINE_HELP = '\n/config: rol modelleri, aşamalar, token bütçeleri\n/plan <görev>: yalnız planı hazırla ve kaydet\n/code [görev]: yalnız Coder; görev yoksa kayıtlı plan\n/task: planı göster (API yok)\n/coderchat: Coder modeli ile araçlı kodlama\n/build --no-judge <görev>: bu görevde Judge kapalı\n';
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
@@ -153,7 +159,7 @@ export async function interactive(
   const sessionUsageSnapshot = getUsageSnapshot();
   let activeAbortController: AbortController | null = null;
   let lastSuggestion = '';
-  let activeRole: 'chat' | 'planner' | 'judge' = 'chat';
+  let activeRole: 'chat' | 'planner' | 'coder' | 'judge' = 'chat';
   // /model gibi inquirer tabanlı modal sihirbazlar açıkken true. rl.pause()
   // tek başına yeterli değil: inquirer kendi raw-mode okuyucusunu stdin
   // üzerine kurunca, pasteInput.stream'e akan pipe hâlâ 'line' olaylarını
@@ -162,9 +168,10 @@ export async function interactive(
   // "mesaj" olarak gönderiliyordu). Bu bayrak o sızıntıyı kapatır.
   let modalActive = false;
   
-  const specializedHistories: Record<'planner' | 'judge', Message[]> = {
+  const specializedHistories: Record<'planner' | 'coder' | 'judge', Message[]> = {
     planner: [],
     judge: [],
+    coder: [],
   };
 
   const isAIActive = () => activeAbortController !== null;
@@ -218,7 +225,7 @@ export async function interactive(
   let closed = false;
   const prompt = () => {
     if (closed) return;
-    const labels = { chat: 'DEHA', planner: 'PLANNER', judge: 'JUDGE' };
+    const labels = { chat: 'DEHA', planner: 'PLANNER', coder: 'CODER', judge: 'JUDGE' };
     rl.setPrompt(queue.running ? chalk.yellow('SIRAYA ❯ ') : chalk.bold.cyan(`${labels[activeRole]} ❯ `));
     rl.prompt(true);
     lastSuggestion = getInlineSuggestion(rl.line);
@@ -235,7 +242,7 @@ export async function interactive(
         rl.close(); process.exit(0);
       }
 
-      if (trimmed === '/help') { logger.write(HELP_TEXT); return; }
+      if (trimmed === '/help') { logger.write(HELP_TEXT + PIPELINE_HELP); return; }
 
       if (trimmed === '/new') {
         if (history.length >= 2) saveConversation(history, config.provider, getActiveModel(config), { conversationId: conversationId ?? undefined });
@@ -264,10 +271,10 @@ export async function interactive(
       if (trimmed === '/stats') { printStats(); return; }
       if (trimmed === '/version' || isVersionQuestion(trimmed)) { logger.write(chalk.cyan(`${DEHA_VERSION_LABEL}\n`)); return; }
 
-      if (trimmed === '/model') {
+      if (trimmed === '/model' || trimmed === '/config') {
         modalActive = true;
         rl.pause();
-        try { await modelSetup(config); } catch (err: any) { if (err.name !== 'ExitPromptError') logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err))); }
+        try { if (trimmed === '/config') await pipelineSetup(config); else await modelSetup(config); } catch (err: any) { if (err.name !== 'ExitPromptError') logger.error(chalk.red('\n✗ ') + (err instanceof Error ? err.message : String(err))); }
         finally { rl.resume(); modalActive = false; }
         return;
       }
@@ -297,23 +304,33 @@ export async function interactive(
         return;
       }
 
-      if (trimmed.startsWith('/build ')) {
-        const task = modelTrimmed.slice(7).trim();
-        if (!task) { logger.write(chalk.yellow('ℹ /build <görev>\n')); return; }
+      if (trimmed === '/task') {
+        try { const { loadLatestPlan, planPath } = await import('../pipeline/task-plan'); logger.write(fs.readFileSync(planPath(loadLatestPlan(getWorkDir() || process.cwd())), 'utf8')); }
+        catch { logger.write(chalk.yellow('Kayıtlı plan yok. Önce /plan <görev> kullan.')); }
+        return;
+      }
+      const pipelineCommand = /^\/(build|plan|code)(?:\s|$)/.exec(trimmed);
+      if (pipelineCommand) {
         const abortController = new AbortController();
         activeAbortController = abortController;
         try {
+          const command = pipelineCommand[1];
+          const parsed = parsePipelineInput(modelTrimmed.slice(command.length + 1));
+          const task = parsed.task;
+          if (!task && command !== 'code') { logger.write(chalk.yellow(`ℹ /${command} <görev>\n`)); return; }
+          const options = { ...parsed.options, ...(command === 'plan' ? { planOnly: true } : {}), ...(command === 'code' ? { planner: false, judge: parsed.options.judge ?? false, useSavedPlan: !task } : {}) };
           const { runPipeline } = await import('../pipeline/orchestrator');
           // Sadece son 5 mesajı ve mıhlanmış context'i gönder
           const contextHistory = buildContextMessages(undefined, { minHotMessages: 20 });
           const summarizedHistory = summarizeOldToolResults(contextHistory, 10);
-          const pipelineResult = await runPipeline(task, config, summarizedHistory, abortController.signal);
+          const pipelineResult = await runPipeline(task, config, summarizedHistory, abortController.signal, options);
           // Pipeline sonucunu history'ye ekle — böylece "/build bitti, ne yaptın?" sorusu cevaplanabilir
-          const userBuildMsg: Message = { role: 'user', content: `/build ${task}` };
+          const userBuildMsg: Message = { role: 'user', content: modelTrimmed };
           const lines: string[] = [
-            `Build pipeline tamamlandı.`,
+            `Pipeline: ${pipelineResult.status}.`,
             `Görev: ${task}`,
-            `Sonuç: ${pipelineResult.verdict.pass ? 'PASS ✓' : 'FAIL ✗'} — Skor: ${pipelineResult.verdict.score} — İterasyon: ${pipelineResult.iterations}`,
+            `Sonuç: ${pipelineResult.success ? 'başarılı' : 'tamamlanmadı'} — Judge: ${pipelineResult.judgeRan ? pipelineResult.verdict.pass ? 'PASS' : 'FAIL' : 'çalıştırılmadı'} — İterasyon: ${pipelineResult.iterations}`,
+            `Plan: ${pipelineResult.taskFile}`,
           ];
           if (pipelineResult.verdict.feedback) {
             lines.push(`Judge özeti: ${pipelineResult.verdict.feedback.slice(0, 600)}`);
@@ -348,6 +365,7 @@ export async function interactive(
 
       if (trimmed === '/plannerchat') { activeRole = activeRole === 'planner' ? 'chat' : 'planner'; logger.write(chalk.magenta(`\n● Planner moduna ${activeRole === 'planner' ? 'girildi' : 'çıkıldı'}.\n`)); return; }
       if (trimmed === '/judgechat') { activeRole = activeRole === 'judge' ? 'chat' : 'judge'; logger.write(chalk.yellow(`\n● Judge moduna ${activeRole === 'judge' ? 'girildi' : 'çıkıldı'}.\n`)); return; }
+      if (trimmed === '/coderchat') { activeRole = activeRole === 'coder' ? 'chat' : 'coder'; logger.write(chalk.blue(`\nCoder: ${activeRole === 'coder' ? config.pipeline.coder.model : 'normal chat'}\n`)); return; }
 
       if (trimmed.startsWith('/architecture ')) {
         const filePath = trimmed.slice(14).trim();
@@ -404,10 +422,10 @@ export async function interactive(
 
       // ── Specialized Roles (Planner/Judge) ──
       if (activeRole !== 'chat') {
-        const roleConfig = activeRole === 'planner' ? config.pipeline.planner : config.pipeline.judge;
+        const roleConfig = config.pipeline[activeRole];
         const roleHistory = specializedHistories[activeRole];
-        const { PLANNER_PROMPT, JUDGE_PROMPT } = await import('../prompts.config');
-        const specializedSystemPrompt = activeRole === 'planner' ? PLANNER_PROMPT : JUDGE_PROMPT;
+        const { PLANNER_PROMPT, JUDGE_PROMPT, PIPELINE_CODER_PROMPT } = await import('../prompts.config');
+        const specializedSystemPrompt = activeRole === 'planner' ? PLANNER_PROMPT : activeRole === 'coder' ? PIPELINE_CODER_PROMPT : JUDGE_PROMPT;
 
         const userMsgObj: Message = { role: 'user', content: userMessage };
         roleHistory.push(userMsgObj);
@@ -419,7 +437,8 @@ export async function interactive(
           process.stdout.write('\n' + chalk.bold[activeRole === 'planner' ? 'magenta' : 'yellow'](`${activeRole.toUpperCase()}: `));
           const staticContext = buildStaticContextMessages();
           const { runAgent } = await import('./agent');
-          const agentResult = await runAgent(userMessage, configForRole(config, roleConfig), [...staticContext, ...summarizeOldToolResults(roleHistory, 10)], abortController.signal, specializedSystemPrompt);
+          const agentResult = await runAgent(userMessage, configForRole(config, roleConfig, activeRole), [...staticContext, ...summarizeOldToolResults(roleHistory, 10)], abortController.signal, specializedSystemPrompt, undefined,
+            activeRole === 'coder' ? { sectioned: true, implementationGuard: true, stage: { allowedTools: CODER_TOOL_NAMES } } : {});
           roleHistory.push(...agentResult.messages);
           logger.write(chalk.dim('─'.repeat(50)) + '\n');
         } catch (err: any) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Hata: ') + err.message + '\n'); }

@@ -1,7 +1,7 @@
 import { DehaConfig } from '../config';
 import { buildStaticContextMessages, getActiveTask } from '../services/session-memory';
 import { configForRole } from './role-config';
-import { PLANNER_PROMPT } from '../prompts.config';
+import { PLANNER_PROMPT, PIPELINE_PLANNER_PROMPT } from '../prompts.config';
 import { runAgent } from '../commands/agent';
 
 export async function runPlanner(
@@ -10,12 +10,13 @@ export async function runPlanner(
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
   pipelineStage = false,
+  toolCoder = false,
 ): Promise<string> {
   // Use the runAgent engine to allow the Planner to use tools before finishing the plan
   // Limit maxToolRounds based on config or a safe fallback to prevent infinite tool loops
   const role = config.pipeline.planner;
   abortSignal?.throwIfAborted();
-  const plannerConfig = configForRole(config, role);
+  const plannerConfig = configForRole(config, role, 'planner');
   
   // NOTE: runAgent uses logger.write internally to stream the response and tool outputs to the terminal.
   const result = await runAgent(
@@ -23,9 +24,9 @@ export async function runPlanner(
     plannerConfig,
     buildStaticContextMessages(),
     abortSignal,
-    PLANNER_PROMPT + (pipelineStage ? '\n[PIPELINE PLANNING STAGE] Return the complete implementation plan, exact existing snippets for edits, and validation commands. Do not implement files yourself: the configured Coder will implement your plan next. Plan completion only completes this stage, not the whole user task.' : ''),
+    (toolCoder ? PIPELINE_PLANNER_PROMPT : PLANNER_PROMPT) + (pipelineStage ? '\n[PIPELINE PLANNING STAGE] Return the complete implementation plan and validation criteria. Do not implement files yourself. Plan completion only completes this stage, not the whole user task.' : ''),
     undefined,
-    { taskAlreadyResolved: pipelineStage, completeTask: !pipelineStage },
+    { taskAlreadyResolved: pipelineStage, completeTask: !pipelineStage, appendUserMessage: true },
   );
   abortSignal?.throwIfAborted();
   if (pipelineStage && (!result.response.trim() || ['INTERRUPTED', 'BLOCKED', 'CANCELLED'].includes(getActiveTask()?.taskState || ''))) {

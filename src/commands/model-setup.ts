@@ -574,8 +574,8 @@ function getModelFromConfig(config: DehaConfig, provider: Provider): string {
   }
 }
 
-function persistConfig(config: DehaConfig): void {
-  const envPath = path.resolve(__dirname, '../../.env');
+export function persistConfig(config: DehaConfig, targetFile?: string): void {
+  const envPath = targetFile ?? path.resolve(__dirname, '../../.env');
   const existing = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf-8') : '';
 
   const updates: Record<string, string> = {
@@ -630,17 +630,25 @@ function persistConfig(config: DehaConfig): void {
     IMAGE_API_KEY: config.imageApiKey ?? '',
     IMAGE_API_URL: config.imageApiUrl ?? '',
     PIPELINE_MAX_ITERATIONS: String(config.pipeline.maxIterations),
+    PIPELINE_PLANNER_ENABLED: config.pipeline.plannerEnabled === false ? '0' : '1',
+    PIPELINE_JUDGE_ENABLED: config.pipeline.judgeEnabled === false ? '0' : '1',
+    PIPELINE_CODER_MODE: config.pipeline.coderMode ?? 'blocks',
+    PIPELINE_HISTORY_TOKENS: String(config.pipeline.historyTokens ?? 2000),
     DEHA_MAX_TOOL_ROUNDS: String(config.maxToolRounds),
     DEHA_MAX_CONTEXT_TOKENS: String(config.maxContextTokens),
   };
 
   let content = existing;
+  for (const name of ['planner', 'coder', 'judge'] as const) {
+    updates[name.toUpperCase() + '_MAX_CONTEXT_TOKENS'] = String(config.pipeline[name].maxContextTokens ?? '');
+    updates[name.toUpperCase() + '_MAX_TOOL_ROUNDS'] = String(config.pipeline[name].maxToolRounds ?? '');
+  }
   for (const [key, value] of Object.entries(updates)) {
     const escaped = value.replace(/\r?\n/g, ' ');
     const line = `${key}=${escaped}`;
     const pattern = new RegExp(`^${escapeRegex(key)}=.*$`, 'm');
     if (pattern.test(content)) {
-      content = content.replace(pattern, line);
+      content = content.replace(pattern, () => line);
     } else {
       content += `${content.endsWith('\n') || content.length === 0 ? '' : '\n'}${line}\n`;
     }
@@ -655,4 +663,54 @@ function escapeRegex(input: string): string {
 
 function normalizeVisionModel(model: string): string {
   return model === 'qwen/qwen3-32b' ? 'qwen/qwen3-vl-32b-instruct' : model;
+}
+
+/** Configure one role at a time without walking through unrelated image/chat settings. */
+export async function pipelineSetup(config: DehaConfig, save: (config: DehaConfig) => void = persistConfig): Promise<void> {
+  while (true) {
+    const { section } = await inquirer.prompt([{ type: 'list', name: 'section', message: 'Pipeline / rol ayarları:', choices: [
+      { name: `Akış ve bütçe (Planner ${config.pipeline.plannerEnabled === false ? 'kapalı' : 'açık'}, Judge ${config.pipeline.judgeEnabled === false ? 'kapalı' : 'açık'}, Coder ${config.pipeline.coderMode ?? 'blocks'})`, value: 'flow' },
+      ...(['planner', 'coder', 'judge'] as const).map(name => ({ name: `${name}: ${config.pipeline[name].provider} / ${config.pipeline[name].model}`, value: name })),
+      { name: 'Kaydet ve çık', value: 'done' },
+    ] }]);
+    if (section === 'done') { save(config); return; }
+    if (section === 'flow') {
+      const { profile } = await inquirer.prompt([{ type: 'list', name: 'profile', message: 'Çalışma şekli:', choices: [
+        { name: 'Tasarruf: Planner + araçlı Coder; Judge kapalı', value: 'economy' },
+        { name: 'Tam kontrol: Planner + araçlı Coder + Judge', value: 'full' },
+        { name: 'Yalnız araçlı Coder', value: 'coder' },
+        { name: 'Aşamaları ve bütçeleri ayrı seç', value: 'custom' },
+      ] }]);
+      if (profile !== 'custom') {
+        config.pipeline.plannerEnabled = profile !== 'coder';
+        config.pipeline.judgeEnabled = profile === 'full';
+        config.pipeline.coderMode = 'agent';
+        if (profile !== 'full') config.pipeline.maxIterations = 2;
+      } else {
+        const flow = await inquirer.prompt([
+          { type: 'confirm', name: 'plannerEnabled', message: 'Planner çalışsın mı?', default: config.pipeline.plannerEnabled !== false },
+          { type: 'confirm', name: 'judgeEnabled', message: 'Judge çalışsın mı?', default: config.pipeline.judgeEnabled !== false },
+          { type: 'list', name: 'coderMode', message: 'Coder çalışma şekli:', choices: [{ name: 'Araçlarla dosya oku / yaz / test et', value: 'agent' }, { name: 'FILE / EDIT blokları (önceki davranış)', value: 'blocks' }], default: config.pipeline.coderMode ?? 'blocks' },
+          { type: 'number', name: 'maxIterations', message: 'Maksimum düzeltme denemesi (1-5):', default: config.pipeline.maxIterations, validate: n => Number.isInteger(n) && n >= 1 && n <= 5 || '1-5 arası tam sayı gir.' },
+          { type: 'number', name: 'historyTokens', message: 'Planner için önceki sohbet bütçesi (token, 0=kapalı):', default: config.pipeline.historyTokens ?? 2000, validate: n => Number.isInteger(n) && n >= 0 || '0 veya pozitif tam sayı gir.' },
+        ]);
+        Object.assign(config.pipeline, flow);
+      }
+    } else if (section === 'planner' || section === 'coder' || section === 'judge') {
+      const roleName = section as 'planner' | 'coder' | 'judge';
+      const role = config.pipeline[roleName];
+      const answers = await inquirer.prompt<{ provider: Provider; model: string; apiKey: string; apiUrl?: string; maxTokens: number; maxToolRounds: number; maxContextTokens: number }>([
+        { type: 'list', name: 'provider', message: `${section} provider:`, choices: PROVIDERS, default: role.provider },
+        { type: 'input', name: 'model', message: 'Model adı:', default: (a: { provider: Provider }) => a.provider === role.provider ? role.model : defaultModel(a.provider, config), validate: s => String(s).trim().length > 0 || 'Model adı gerekli.' },
+        { type: 'password', name: 'apiKey', message: 'API key (boş = mevcut rol / global anahtar):', mask: '*', default: '' },
+        { type: 'input', name: 'apiUrl', message: 'API URL (boş = varsayılan):', default: role.apiUrl ?? '', when: (a: { provider: Provider }) => a.provider === 'custom' || a.provider === 'ollama' },
+        { type: 'number', name: 'maxTokens', message: 'Yanıt token limiti:', default: role.maxTokens ?? 4096, validate: n => Number.isInteger(n) && n > 0 || 'Pozitif tam sayı gir.' },
+        { type: 'number', name: 'maxToolRounds', message: 'Araç turu limiti:', default: role.maxToolRounds ?? 50, validate: n => Number.isInteger(n) && n > 0 || 'Pozitif tam sayı gir.' },
+        { type: 'number', name: 'maxContextTokens', message: 'Context token limiti (0=otomatik):', default: role.maxContextTokens ?? 0, validate: n => Number.isInteger(n) && n >= 0 || '0 veya pozitif tam sayı gir.' },
+      ]);
+      config.pipeline[roleName] = { ...role, ...answers, model: answers.model.trim(), apiKey: answers.apiKey.trim() || (answers.provider === role.provider ? role.apiKey : undefined), apiUrl: answers.apiUrl?.trim() || undefined };
+    }
+    save(config);
+    logger.write(chalk.green('✓ Pipeline ayarları kaydedildi. Normal chat modeli değişmedi.'));
+  }
 }

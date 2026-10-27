@@ -30,6 +30,8 @@ export interface RoleConfig {
   apiUrl?: string;      // custom provider için endpoint URL'i
   maxTokens?: number;
   temperature?: number;
+  maxToolRounds?: number;
+  maxContextTokens?: number;
   openrouterProvider?: string;  // OpenRouter sub-provider whitelist (e.g. "DeepInfra" or "DeepInfra,Chutes") — pins to only these, no fallback
   openrouterIgnoreProviders?: string;  // OpenRouter sub-provider blacklist (e.g. "DeepInfra,Novita") — excludes these, fallback among the rest still works
   openrouterZdr?: boolean;      // true ise yalnız Zero Data Retention provider'lara route eder
@@ -42,11 +44,16 @@ export interface PipelineConfig {
   coder: RoleConfig;
   judge: RoleConfig;
   maxIterations: number;
+  plannerEnabled?: boolean;
+  judgeEnabled?: boolean;
+  coderMode?: 'blocks' | 'agent';
+  historyTokens?: number;
 }
 
 // ─── Ana Config ─────────────────────────────────────────────────────────────
 
 export interface DehaConfig {
+  agentRole?: 'planner' | 'coder' | 'judge';
   roleOverride?: RoleConfig;
   provider: Provider;
 
@@ -230,9 +237,20 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
         openrouterIgnoreProviders: envStrOrUndefined(process.env.JUDGE_OPENROUTER_IGNORE_PROVIDERS),
       },
       maxIterations: safeParseMaxIterations(process.env.PIPELINE_MAX_ITERATIONS),
+      plannerEnabled: process.env.PIPELINE_PLANNER_ENABLED !== '0',
+      judgeEnabled: process.env.PIPELINE_JUDGE_ENABLED !== '0',
+      coderMode: process.env.PIPELINE_CODER_MODE === 'agent' ? 'agent' : 'blocks',
+      historyTokens: Math.max(0, safeParseInt(process.env.PIPELINE_HISTORY_TOKENS, 2000)),
     },
   };
 
+  for (const name of ['planner', 'coder', 'judge'] as const) {
+    const prefix = name.toUpperCase();
+    const context = process.env[prefix + '_MAX_CONTEXT_TOKENS'];
+    const rounds = process.env[prefix + '_MAX_TOOL_ROUNDS'];
+    if (context !== undefined && context !== '') base.pipeline[name].maxContextTokens = Math.max(0, safeParseInt(context, 0));
+    if (rounds !== undefined && rounds !== '') base.pipeline[name].maxToolRounds = Math.max(1, safeParseInt(rounds, 50));
+  }
   return { ...base, ...overrides };
 }
 

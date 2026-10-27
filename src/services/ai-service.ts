@@ -370,7 +370,7 @@ export async function sendWithTools(
   recordUsage(
     'anthropic',
     config.claudeModel,
-    'agent',
+    config.agentRole ?? 'agent',
     response.usage.input_tokens,
     response.usage.output_tokens,
     config,
@@ -494,8 +494,9 @@ export async function sendWithToolsOpenAICompat(
   toolChoice: 'auto' | 'required' = 'auto',
 ): Promise<{ text: string; toolCalls: ToolCall[]; rawAssistantMsg: OAIMessage; malformedToolCalls: number; finishReason: string | null }> {
   const role = roleFromConfig(config);
-  const apiKey = resolveApiKey(role, config);
-  const apiUrl = resolveApiUrl(role, config);
+  const apiKey = resolveApiKey(role, config) || (role.provider === 'ollama' ? 'ollama' : undefined);
+  const resolvedUrl = resolveApiUrl(role, config).replace(/\/+$/, '');
+  const apiUrl = role.provider === 'ollama' && !resolvedUrl.endsWith('/v1') ? resolvedUrl + '/v1' : resolvedUrl;
   if (!apiKey) throw new Error(`API key missing (${apiUrl})`);
   const toolMaxTokens = role.maxTokens ?? config.toolMaxTokens ?? config.maxTokens;
 
@@ -512,6 +513,7 @@ export async function sendWithToolsOpenAICompat(
     max_tokens: toolMaxTokens,
     temperature: config.temperature,
   };
+  if (role.provider === 'ollama') delete body.tool_choice;
 
   const openrouterOpts = buildOpenRouterProviderOptions(role.provider, config, config.openrouterProvider, config.openrouterIgnoreProviders);
   if (openrouterOpts) body.provider = openrouterOpts;
@@ -554,7 +556,7 @@ export async function sendWithToolsOpenAICompat(
   const finishReason: string | null = choice.finish_reason ?? null;
   const agentUsage = extractUsageTokens(response.data.usage, msg);
   if (agentUsage.input > 0 || agentUsage.output > 0) {
-    recordUsage(role.provider, role.model, 'agent', agentUsage.input, agentUsage.output, config, agentUsage.reasoning, agentUsage.cache);
+    recordUsage(role.provider, role.model, config.agentRole ?? 'agent', agentUsage.input, agentUsage.output, config, agentUsage.reasoning, agentUsage.cache);
   }
   writeOpenAICompatDebugFile('last-openai-tool-message.json', msg);
   const sanitizedAssistantMsg = sanitizeOpenAICompatAssistantMessage(
