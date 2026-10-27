@@ -24,8 +24,10 @@ import { takeScreenshot } from '../tools/browser';
 import { screenshotAndAnalyze } from '../tools/vision';
 import { modelSetup, pipelineSetup } from './model-setup';
 import { parsePipelineInput } from '../pipeline/options';
+import type { PipelineOptions } from '../pipeline/orchestrator';
 import { configForRole } from '../pipeline/role-config';
 import { CODER_TOOL_NAMES } from '../pipeline/coder';
+import { requiresImplementation } from '../services/implementation-guard';
 import { getUsageSince, getUsageSnapshot, printSessionSummary, printStats } from '../services/usage-tracker';
 // Tool router kaldırıldı — DEHA her zaman agent modunda çalışır (tool_choice: auto)
 import {
@@ -90,6 +92,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/smoketest <url>')}              HTTP smoke testi yap
   ${chalk.cyan('/screenshot <url>')}             Ekran görüntüsü al
   ${chalk.cyan('/vision <url>')}                 Screenshot + AI analizi
+  ${chalk.cyan('/smart')}                       Smart mod aç/kapat: kod gerektiren mesajlar otomatik Planner+Coder checkpoint akışına gider, diğerleri normal sohbet kalır
   ${chalk.cyan('/plannerchat')}                 Planner rolü ile direkt konuşma modunu aç/kapat
   ${chalk.cyan('/judgechat')}                   Judge rolü ile direkt konuşma modunu aç/kapat
   ${chalk.cyan('/pin <metin>')}                Önemli bilgileri context'in en başına (Cache) sabitler
@@ -109,10 +112,10 @@ const COMMAND_SUGGESTIONS = [
   '/config', '/plan', '/code', '/task', '/coderchat',
   '/help', '/new', '/clear', '/model', '/thinking', '/security', '/agent', '/build', '/file', '/architecture',
   '/mcp', '/history', '/oldconversations', '/run', '/python', '/smoketest', '/screenshot',
-  '/jobs', '/queue', '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
+  '/jobs', '/queue', '/vision', '/plannerchat', '/judgechat', '/smart', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
 
-const PIPELINE_HELP = '\n/config: rol modelleri, aşamalar, token bütçeleri\n/build --checkpoints <görev>: Planner onaylı aşamalar + araçlı Coder\n/plan <görev>: planı hazırla ve kaydet (checkpoint profilinde Coder keşfi dahil)\n/code [görev]: yeni görevde yalnız Coder; kayıtlı checkpoint planında Planner denetimi sürer\n/task: planı göster (API yok)\n/coderchat: Coder modeli ile araçlı kodlama\n/build --no-judge <görev>: bu görevde Judge kapalı\n';
+const PIPELINE_HELP = '\n/config: rol modelleri, aşamalar, token bütçeleri\n/build --checkpoints <görev>: Planner onaylı aşamalar + araçlı Coder\n/plan <görev>: planı hazırla ve kaydet (checkpoint profilinde Coder keşfi dahil)\n/code [görev]: yeni görevde yalnız Coder; kayıtlı checkpoint planında Planner denetimi sürer\n/task: planı göster (API yok)\n/coderchat: Coder modeli ile araçlı kodlama\n/build --no-judge <görev>: bu görevde Judge kapalı\n/smart: açıkken normal sohbet sürer, ama kod/düzeltme/uygulama isteyen mesajlar otomatik Planner+Coder checkpoint akışına yönlendirilir\n';
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
@@ -160,6 +163,10 @@ export async function interactive(
   let activeAbortController: AbortController | null = null;
   let lastSuggestion = '';
   let activeRole: 'chat' | 'planner' | 'coder' | 'judge' = 'chat';
+  // Açıkken normal sohbet sürer; ama requiresImplementation() kod/düzeltme/uygulama
+  // tespit ettiği mesajlar kullanıcı /build yazmadan otomatik Planner+Coder
+  // checkpoint pipeline'ına yönlendirilir (bkz. runPipelineTask çağrısı aşağıda).
+  let smartMode = false;
   // /model gibi inquirer tabanlı modal sihirbazlar açıkken true. rl.pause()
   // tek başına yeterli değil: inquirer kendi raw-mode okuyucusunu stdin
   // üzerine kurunca, pasteInput.stream'e akan pipe hâlâ 'line' olaylarını
@@ -226,9 +233,40 @@ export async function interactive(
   const prompt = () => {
     if (closed) return;
     const labels = { chat: 'DEHA', planner: 'PLANNER', coder: 'CODER', judge: 'JUDGE' };
-    rl.setPrompt(queue.running ? chalk.yellow('SIRAYA ❯ ') : chalk.bold.cyan(`${labels[activeRole]} ❯ `));
+    rl.setPrompt(queue.running ? chalk.yellow('SIRAYA ❯ ') : chalk.bold.cyan(`${labels[activeRole]}${smartMode ? chalk.yellow('⚡') : ''} ❯ `));
     rl.prompt(true);
     lastSuggestion = getInlineSuggestion(rl.line);
+  };
+
+  // /build, /plan, /code ve smart-mod otomatik yönlendirmesi ortak bu yoldan geçer.
+  const runPipelineTask = async (task: string, options: PipelineOptions, rawUserText: string) => {
+    const abortController = new AbortController();
+    activeAbortController = abortController;
+    try {
+      const { runPipeline } = await import('../pipeline/orchestrator');
+      // Sadece son 5 mesajı ve mıhlanmış context'i gönder
+      const contextHistory = buildContextMessages(undefined, { minHotMessages: 20 });
+      const summarizedHistory = summarizeOldToolResults(contextHistory, 10);
+      const pipelineResult = await runPipeline(task, config, summarizedHistory, abortController.signal, options);
+      // Pipeline sonucunu history'ye ekle — böylece "/build bitti, ne yaptın?" sorusu cevaplanabilir
+      const userBuildMsg: Message = { role: 'user', content: rawUserText };
+      const lines: string[] = [
+        ...(pipelineResult.plannerReviewed ? [`Planner: ${pipelineResult.checkpointsApproved} kontrol noktası onaylandı.`] : []),
+        `Pipeline: ${pipelineResult.status}.`,
+        `Görev: ${task}`,
+        `Sonuç: ${pipelineResult.success ? 'başarılı' : 'tamamlanmadı'} — Judge: ${pipelineResult.judgeRan ? pipelineResult.verdict.pass ? 'PASS' : 'FAIL' : 'çalıştırılmadı'} — İterasyon: ${pipelineResult.iterations}`,
+        `Plan: ${pipelineResult.taskFile}`,
+      ];
+      if (pipelineResult.verdict.feedback) {
+        lines.push(`Denetim özeti: ${pipelineResult.verdict.feedback.slice(0, 600)}`);
+      }
+      const assistantBuildMsg: Message = { role: 'assistant', content: lines.join('\n') };
+      history.push(userBuildMsg, assistantBuildMsg);
+      await appendMessage(userBuildMsg);
+      await appendMessage(assistantBuildMsg);
+    } catch (err: unknown) {
+      if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Pipeline hatası: ') + (err instanceof Error ? err.message : String(err)) + '\n');
+    } finally { activeAbortController = null; }
   };
 
   const processInput = async (input: string) => {
@@ -311,38 +349,12 @@ export async function interactive(
       }
       const pipelineCommand = /^\/(build|plan|code)(?:\s|$)/.exec(trimmed);
       if (pipelineCommand) {
-        const abortController = new AbortController();
-        activeAbortController = abortController;
-        try {
-          const command = pipelineCommand[1];
-          const parsed = parsePipelineInput(modelTrimmed.slice(command.length + 1));
-          const task = parsed.task;
-          if (!task && command !== 'code') { logger.write(chalk.yellow(`ℹ /${command} <görev>\n`)); return; }
-          const options = { ...parsed.options, ...(command === 'plan' ? { planOnly: true } : {}), ...(command === 'code' ? { planner: false, judge: parsed.options.judge ?? false, useSavedPlan: !task, checkpoints: task ? parsed.options.checkpoints ?? false : parsed.options.checkpoints } : {}) };
-          const { runPipeline } = await import('../pipeline/orchestrator');
-          // Sadece son 5 mesajı ve mıhlanmış context'i gönder
-          const contextHistory = buildContextMessages(undefined, { minHotMessages: 20 });
-          const summarizedHistory = summarizeOldToolResults(contextHistory, 10);
-          const pipelineResult = await runPipeline(task, config, summarizedHistory, abortController.signal, options);
-          // Pipeline sonucunu history'ye ekle — böylece "/build bitti, ne yaptın?" sorusu cevaplanabilir
-          const userBuildMsg: Message = { role: 'user', content: modelTrimmed };
-          const lines: string[] = [
-            ...(pipelineResult.plannerReviewed ? [`Planner: ${pipelineResult.checkpointsApproved} kontrol noktası onaylandı.`] : []),
-            `Pipeline: ${pipelineResult.status}.`,
-            `Görev: ${task}`,
-            `Sonuç: ${pipelineResult.success ? 'başarılı' : 'tamamlanmadı'} — Judge: ${pipelineResult.judgeRan ? pipelineResult.verdict.pass ? 'PASS' : 'FAIL' : 'çalıştırılmadı'} — İterasyon: ${pipelineResult.iterations}`,
-            `Plan: ${pipelineResult.taskFile}`,
-          ];
-          if (pipelineResult.verdict.feedback) {
-            lines.push(`Denetim özeti: ${pipelineResult.verdict.feedback.slice(0, 600)}`);
-          }
-          const assistantBuildMsg: Message = { role: 'assistant', content: lines.join('\n') };
-          history.push(userBuildMsg, assistantBuildMsg);
-          await appendMessage(userBuildMsg);
-          await appendMessage(assistantBuildMsg);
-        } catch (err: unknown) {
-          if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Pipeline hatası: ') + (err instanceof Error ? err.message : String(err)) + '\n');
-        } finally { activeAbortController = null; }
+        const command = pipelineCommand[1];
+        const parsed = parsePipelineInput(modelTrimmed.slice(command.length + 1));
+        const task = parsed.task;
+        if (!task && command !== 'code') { logger.write(chalk.yellow(`ℹ /${command} <görev>\n`)); return; }
+        const options = { ...parsed.options, ...(command === 'plan' ? { planOnly: true } : {}), ...(command === 'code' ? { planner: false, judge: parsed.options.judge ?? false, useSavedPlan: !task, checkpoints: task ? parsed.options.checkpoints ?? false : parsed.options.checkpoints } : {}) };
+        await runPipelineTask(task, options, modelTrimmed);
         return;
       }
 
@@ -367,6 +379,14 @@ export async function interactive(
       if (trimmed === '/plannerchat') { activeRole = activeRole === 'planner' ? 'chat' : 'planner'; logger.write(chalk.magenta(`\n● Planner moduna ${activeRole === 'planner' ? 'girildi' : 'çıkıldı'}.\n`)); return; }
       if (trimmed === '/judgechat') { activeRole = activeRole === 'judge' ? 'chat' : 'judge'; logger.write(chalk.yellow(`\n● Judge moduna ${activeRole === 'judge' ? 'girildi' : 'çıkıldı'}.\n`)); return; }
       if (trimmed === '/coderchat') { activeRole = activeRole === 'coder' ? 'chat' : 'coder'; logger.write(chalk.blue(`\nCoder: ${activeRole === 'coder' ? config.pipeline.coder.model : 'normal chat'}\n`)); return; }
+
+      if (trimmed === '/smart') {
+        smartMode = !smartMode;
+        logger.write(smartMode
+          ? chalk.green('\n⚡ Smart mod AÇILDI — ') + chalk.dim('normal konuşmaya devam edebilirsin; kod yazma/düzeltme/uygulama gerektiren mesajları Planner otomatik planlayıp kontrol noktalarına bölecek, Coder sırayla uygulayacak.\n')
+          : chalk.yellow('\n⚡ Smart mod KAPATILDI') + chalk.dim(' — tüm mesajlar normal sohbete gidiyor.\n'));
+        return;
+      }
 
       if (trimmed.startsWith('/architecture ')) {
         const filePath = trimmed.slice(14).trim();
@@ -444,6 +464,15 @@ export async function interactive(
           logger.write(chalk.dim('─'.repeat(50)) + '\n');
         } catch (err: any) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Hata: ') + err.message + '\n'); }
         finally { activeAbortController = null; }
+        return;
+      }
+
+      // ── Smart mod: kod/düzeltme/uygulama gerektiren mesajları kullanıcı /build
+      // yazmadan Planner+Coder checkpoint pipeline'ına yönlendir. Sıradan sohbet
+      // mesajları (requiresImplementation() false dönerse) normal chat/agent'a düşer.
+      if (smartMode && requiresImplementation(userMessage)) {
+        logger.write(chalk.dim('\n  ⚡ Smart mod: kod gerektiren istek algılandı — Planner plan/kontrol noktalarını hazırlıyor...\n'));
+        await runPipelineTask(userMessage, { checkpoints: true }, userMessage);
         return;
       }
 
