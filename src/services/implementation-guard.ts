@@ -23,7 +23,7 @@ export function discoveryBudget(request: string): number {
 
 export function requiresImplementation(request: string): boolean {
   if (/\b(?:read.only|review.only|analysis.only|no code changes|do not (?:edit|modify|write) (?:any )?files)\b|(?:sadece|yalnızca)\s+(?:incele|oku|analiz)/i.test(request)) return false;
-  return /\b(?:implement(?:ation)?|build|fix|refactor|create[^\n.]{0,70}(?:file|interface|benchmark))\b|kod\s+(?:yaz|oluştur)|(?:uygula|düzelt|geliştir)/i.test(request);
+  return /\b(?:implement(?:ation)?|build|fix|refactor|create[^\n.]{0,70}(?:file|interface|benchmark))\b|kod\s+(?:yaz|olu[sş]tur)|(?:uygula|d[uü]zelt|geli[sş]tir)/i.test(request);
 }
 
 function inspection(name: string, input: Record<string, unknown>): boolean {

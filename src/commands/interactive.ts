@@ -679,6 +679,14 @@ function containsPastedPlaceholder(input: string): boolean { PASTE_PLACEHOLDER_P
 
 function createPasteInput(): { stream: Transform; expand: (line: string) => string; cleanup: () => void; } {
   const pasted = new Map<string, string>(); let nextId = 1; let buffer = ''; let collectingPaste = false;
+  // Only a real raw-mode TTY can deliver one clipboard paste as a single
+  // chunk with embedded \n's indistinguishable from separate keystrokes.
+  // Piped/non-TTY input (scripts, CI, automated testing) has no such
+  // ambiguity — readline already splits it into lines correctly — so the
+  // fold-multiline-chunk heuristic below must not run there, or a multi-line
+  // piped script (e.g. "/smart\n<task>\n/exit\n") gets merged into one inert
+  // pasted blob instead of being executed as separate commands.
+  const isRawTty = !!process.stdin.isTTY;
   const stream = new Transform({
     transform(chunk, _encoding, callback) {
       buffer += chunk.toString('utf8'); let output = '';
@@ -693,7 +701,7 @@ function createPasteInput(): { stream: Transform; expand: (line: string) => stri
             // line of a pasted multi-line message became its own readline
             // 'line' event, i.e. its own queued message (one giant instruction
             // exploded into dozens of fragments that then auto-fired in order).
-            const newlineCount = (buffer.match(/\n/g) || []).length;
+            const newlineCount = isRawTty ? (buffer.match(/\n/g) || []).length : 0;
             if (newlineCount >= 2) {
               const lastNewline = buffer.lastIndexOf('\n');
               const content = buffer.slice(0, lastNewline);
