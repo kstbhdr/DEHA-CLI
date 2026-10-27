@@ -3,6 +3,7 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const http = require('node:http'), assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deha-economy-'));
+const testHome = path.join(dir, 'home'); fs.mkdirSync(testHome);
 fs.writeFileSync(path.join(dir, 'source.cjs'), 'module.exports = "source";');
 const counts = { planner: 0, coder: 0, judge: 0, chat: 0 }; let error, planId;
 const server = http.createServer(async (req, res) => {
@@ -44,7 +45,7 @@ const strip = text => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = 'http://127.0.0.1:' + server.address().port;
-  const env = { ...process.env, DEHA_PROVIDER: 'custom', CUSTOM_MODEL: 'chat-fixture', CUSTOM_API_KEY: 'local-chat', CUSTOM_API_URL: base + '/chat/v1',
+  const env = { ...process.env, USERPROFILE: testHome, HOME: testHome, DEHA_PROVIDER: 'custom', CUSTOM_MODEL: 'chat-fixture', CUSTOM_API_KEY: 'local-chat', CUSTOM_API_URL: base + '/chat/v1',
     PLANNER_PROVIDER: 'custom', PLANNER_MODEL: 'large-planner-fixture', PLANNER_API_KEY: 'local-planner', PLANNER_API_URL: base + '/planner/v1',
     CODER_PROVIDER: 'ollama', CODER_MODEL: 'qwen-9b-fixture', CODER_API_KEY: '', CODER_API_URL: base + '/coder', CODER_MAX_TOKENS: '2048', CODER_MAX_CONTEXT_TOKENS: '64000', CODER_MAX_TOOL_ROUNDS: '12',
     JUDGE_PROVIDER: 'custom', JUDGE_MODEL: 'judge-fixture', JUDGE_API_KEY: 'local-judge', JUDGE_API_URL: base + '/judge/v1',

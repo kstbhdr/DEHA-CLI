@@ -112,7 +112,7 @@ const COMMAND_SUGGESTIONS = [
   '/jobs', '/queue', '/vision', '/plannerchat', '/judgechat', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
 
-const PIPELINE_HELP = '\n/config: rol modelleri, aşamalar, token bütçeleri\n/plan <görev>: yalnız planı hazırla ve kaydet\n/code [görev]: yalnız Coder; görev yoksa kayıtlı plan\n/task: planı göster (API yok)\n/coderchat: Coder modeli ile araçlı kodlama\n/build --no-judge <görev>: bu görevde Judge kapalı\n';
+const PIPELINE_HELP = '\n/config: rol modelleri, aşamalar, token bütçeleri\n/build --checkpoints <görev>: Planner onaylı aşamalar + araçlı Coder\n/plan <görev>: planı hazırla ve kaydet (checkpoint profilinde Coder keşfi dahil)\n/code [görev]: yeni görevde yalnız Coder; kayıtlı checkpoint planında Planner denetimi sürer\n/task: planı göster (API yok)\n/coderchat: Coder modeli ile araçlı kodlama\n/build --no-judge <görev>: bu görevde Judge kapalı\n';
 
 const PASTE_START = '\x1b[200~';
 const PASTE_END = '\x1b[201~';
@@ -318,7 +318,7 @@ export async function interactive(
           const parsed = parsePipelineInput(modelTrimmed.slice(command.length + 1));
           const task = parsed.task;
           if (!task && command !== 'code') { logger.write(chalk.yellow(`ℹ /${command} <görev>\n`)); return; }
-          const options = { ...parsed.options, ...(command === 'plan' ? { planOnly: true } : {}), ...(command === 'code' ? { planner: false, judge: parsed.options.judge ?? false, useSavedPlan: !task } : {}) };
+          const options = { ...parsed.options, ...(command === 'plan' ? { planOnly: true } : {}), ...(command === 'code' ? { planner: false, judge: parsed.options.judge ?? false, useSavedPlan: !task, checkpoints: task ? parsed.options.checkpoints ?? false : parsed.options.checkpoints } : {}) };
           const { runPipeline } = await import('../pipeline/orchestrator');
           // Sadece son 5 mesajı ve mıhlanmış context'i gönder
           const contextHistory = buildContextMessages(undefined, { minHotMessages: 20 });
@@ -327,13 +327,14 @@ export async function interactive(
           // Pipeline sonucunu history'ye ekle — böylece "/build bitti, ne yaptın?" sorusu cevaplanabilir
           const userBuildMsg: Message = { role: 'user', content: modelTrimmed };
           const lines: string[] = [
+            ...(pipelineResult.plannerReviewed ? [`Planner: ${pipelineResult.checkpointsApproved} kontrol noktası onaylandı.`] : []),
             `Pipeline: ${pipelineResult.status}.`,
             `Görev: ${task}`,
             `Sonuç: ${pipelineResult.success ? 'başarılı' : 'tamamlanmadı'} — Judge: ${pipelineResult.judgeRan ? pipelineResult.verdict.pass ? 'PASS' : 'FAIL' : 'çalıştırılmadı'} — İterasyon: ${pipelineResult.iterations}`,
             `Plan: ${pipelineResult.taskFile}`,
           ];
           if (pipelineResult.verdict.feedback) {
-            lines.push(`Judge özeti: ${pipelineResult.verdict.feedback.slice(0, 600)}`);
+            lines.push(`Denetim özeti: ${pipelineResult.verdict.feedback.slice(0, 600)}`);
           }
           const assistantBuildMsg: Message = { role: 'assistant', content: lines.join('\n') };
           history.push(userBuildMsg, assistantBuildMsg);

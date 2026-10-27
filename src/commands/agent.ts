@@ -47,6 +47,7 @@ export type OnMessage = (msg: Message) => void | Promise<void>;
 
 export interface AgentStage {
   allowedTools?: string[];
+  beforeTool?: (name: string, input: Record<string, unknown>) => string | undefined;
   tools?: { definition: (typeof DEHA_TOOLS)[number]; execute: (input: Record<string, unknown>) => string | Promise<string> }[];
   onToolResult?: (name: string, input: Record<string, unknown>, result: string) => void | Promise<void>;
 }
@@ -671,7 +672,7 @@ async function runAgentClaude(
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
       const available = !stage?.allowedTools || stage.allowedTools.includes(tc.name) || stage.tools?.some(t => t.definition.name === tc.name);
-      const denied = !available ? `HATA: Tool ${tc.name} is not enabled for this role. Use its available coding tools.` : implementation?.before(tc.name, tc.input);
+      const denied = !available ? `HATA: Tool ${tc.name} is not enabled for this role. Use its available coding tools.` : stage?.beforeTool?.(tc.name, tc.input) ?? implementation?.before(tc.name, tc.input);
       const local = stage?.tools?.find(t => t.definition.name === tc.name);
       const result = denied ?? await (local ? local.execute(tc.input) : runTool(tc.name, tc.input, config, abortSignal));
       if (!denied) await stage?.onToolResult?.(tc.name, tc.input, result);
@@ -1054,7 +1055,7 @@ async function runAgentOpenAI(
     for (const tc of effectiveToolCalls) {
       printToolCall(tc.name, tc.input);
       const available = !stage?.allowedTools || stage.allowedTools.includes(tc.name) || stage.tools?.some(t => t.definition.name === tc.name);
-      const denied = !available ? `HATA: Tool ${tc.name} is not enabled for this role. Use its available coding tools.` : implementation?.before(tc.name, tc.input);
+      const denied = !available ? `HATA: Tool ${tc.name} is not enabled for this role. Use its available coding tools.` : stage?.beforeTool?.(tc.name, tc.input) ?? implementation?.before(tc.name, tc.input);
       const local = stage?.tools?.find(t => t.definition.name === tc.name);
       const result = denied ?? await (local ? local.execute(tc.input) : runTool(tc.name, tc.input, config, abortSignal));
       if (!denied) await stage?.onToolResult?.(tc.name, tc.input, result);

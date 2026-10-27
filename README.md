@@ -69,7 +69,7 @@ JUDGE_MODEL=grok-3
 
 ## Usage
 
-Interactive Chat keeps its own coding tools and model. `/config` selects independent role models, optional stages and token budgets. Use `/build <task>` for the configured workflow, or `/plan` then `/code` to save a plan and execute it with the Coder alone. See [pipeline behavior and verification](PIPELINE.md).
+Interactive Chat keeps its own coding tools and model. `/config` selects independent role models, optional stages and token budgets. The **Basit** profile uses Planner checkpoints and a tool-using Coder: each phase must be approved before the next opens. Use `/build --checkpoints <task>` to try it, or `/code` to resume the saved plan. See [pipeline behavior and verification](PIPELINE.md).
 
 ```bash
 # Interactive mode

@@ -15,7 +15,7 @@ function inside(root: string, target: string): boolean {
   return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
 }
 
-function targetPath(root: string, file: string): string {
+export function projectFilePath(root: string, file: string): string {
   const target = path.resolve(root, file);
   if (!inside(root, target)) throw new Error('File is outside the active project.');
   // Existing directory symlinks must not redirect a relative output outside the project.
@@ -36,7 +36,7 @@ export async function applyCoderOutput(
     signal?.throwIfAborted();
     let file = '';
     try {
-      file = targetPath(root, block.file);
+      file = projectFilePath(root, block.file);
       if (block.kind === 'create' && fs.existsSync(file)) throw new Error('NEW FILE cannot overwrite an existing file; use an EDIT block with its current content.');
       if (block.kind === 'edit' && !block.oldStr.trim()) throw new Error('EDIT requires a non-empty exact OLD snippet.');
       const result = block.kind === 'create'

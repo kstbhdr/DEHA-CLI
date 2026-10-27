@@ -62,6 +62,8 @@ export class DehaCLI {
       .option('--no-planner', 'Skip Planner')
       .option('--no-judge', 'Skip Judge')
       .option('--coder-mode <mode>', 'Coder: agent or blocks')
+      .option('--checkpoints', 'Planner checkpoints supervise tool Coder')
+      .option('--no-checkpoints', 'Use the standard pipeline')
       .option('--plan-only', 'Save a plan without running Coder or Judge')
       .option('--use-saved-plan', 'Use the active project saved plan')
       .option('--planner-model <m>', 'Planner model')
@@ -91,7 +93,7 @@ export class DehaCLI {
 
         try {
           if (opts.coderMode && !['agent', 'blocks'].includes(opts.coderMode)) throw new Error('Coder mode must be agent or blocks.');
-          const result = await runPipeline(task, config, [], undefined, { planner: opts.planner === false ? false : undefined, judge: opts.judge === false ? false : undefined, coderMode: opts.coderMode, planOnly: opts.planOnly, useSavedPlan: opts.useSavedPlan });
+          const result = await runPipeline(task, config, [], undefined, { planner: opts.planner === false ? false : undefined, judge: opts.judge === false ? false : undefined, coderMode: opts.coderMode, planOnly: opts.planOnly, useSavedPlan: opts.useSavedPlan, checkpoints: opts.checkpoints });
           if (!result.success) process.exitCode = 1;
         } catch (err: unknown) {
           logger.error('Pipeline hatası', err);

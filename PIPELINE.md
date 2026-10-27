@@ -2,7 +2,19 @@
 
 Normal Chat keeps its own model and coding tools. `/config` configures Planner, Coder and Judge individually without walking through unrelated Chat, Vision or Image settings. `/model` remains available for the complete settings wizard.
 
-## Economy profile
+## Simple checkpoint profile
+
+In `/config` choose **Basit: Planner kontrol noktaları + araçlı Coder**. Choose Planner and Coder models independently in the same menu. Then use `/build <task>`, or use `/build --checkpoints <task>` for a single invocation. Terminal syntax: `deha build "task" --checkpoints`. Existing profiles retain their behavior; `--no-checkpoints` selects the standard workflow for a new task.
+
+The small Coder performs a read-only discovery capped at six tool rounds. Planner then creates 1-8 sequential checkpoints with exact file scopes, implementation instructions, required commands and acceptance criteria. Planner has no tools: it is called once for planning, then for checkpoint reviews. Judge is not called in this profile.
+
+Coder implements only the current checkpoint, runs its declared commands and submits concrete evidence with `task_plan`. Submission never approves a checkpoint. Planner reviews actual disk snapshots and command results, then approves or returns correction instructions. Failed/missing checks, missing declared files, invalid review JSON and newly changed verification requirements keep the checkpoint locked, even if Planner says approve. Checks must run after the latest file-tool edit. File mutation tools reject paths outside the current checkpoint; shell is restricted to exact Planner-declared commands in the project root. This is workflow scoping, not an operating-system sandbox: approved commands can themselves write files.
+
+On rejection the same phase returns to Coder. Planner can revise its allowed files and commands. `PIPELINE_MAX_ITERATIONS` limits attempts **per checkpoint per invocation**; exhausted attempts stop with failure and keep later checkpoints locked. By default a phase has at most 20 Coder tool rounds; an explicit Coder role tool-round limit overrides this. A model review remains fallible, so concrete acceptance checks matter.
+
+Checkpoint state, feedback, review decisions and cumulative attempts are saved in the task plan after each transition. `/code` resumes an unfinished saved checkpoint plan, retaining Planner supervision and skipping approved checkpoints, even if the current profile has changed. A completed saved checkpoint plan makes no model requests. `/plan <task>` in this profile performs Coder discovery and Planner planning only. For a separate independent Judge review use `/judge`; to use the previous full pipeline choose its profile. Explicit `--judge`, block Coder mode and a new checkpoint task with `--no-planner` are rejected as incompatible.
+
+## Standard economy profile
 
 Open `/config`, select the workflow section, then choose **Tasarruf: Planner + araçlı Coder; Judge kapalı**. Configure the Planner with the model you want for planning and Coder with your smaller/local model. Each role has its own provider, model, endpoint, credentials, output token limit, tool-round limit and context limit. The Coder endpoint/model must support structured tool calls; parameter count alone does not establish that capability.
 
@@ -17,7 +29,7 @@ Judge is optional. The economy profile runs Planner once, then sends the compact
 | `/build --no-planner --no-judge <task>` | Runs only Coder for this invocation. |
 | `/build --judge <task>` | Enables Judge for this invocation even if disabled in settings. |
 | `/plan <task>` | Runs only Planner and saves a task plan; does not mark implementation complete. |
-| `/code` | Executes the saved plan without calling Planner again; Judge is off by default. A completed saved plan is a local no-op. |
+| `/code` | Resumes the saved plan; a checkpoint plan keeps Planner reviews. Standard plans use Coder alone by default. Completed plans are local no-ops. |
 | `/code <task>` | Runs Coder directly for a new task. |
 | `/task` | Displays the saved task.md locally, without API requests. |
 | `/coderchat` | Toggles direct tool coding with the configured Coder model. |
@@ -48,7 +60,9 @@ Judge PASS is a model review, not proof that runtime tests ran. Agent Coder can 
 
 ## Verification and rollback
 
-`npm run build`, `npm test -- --testTimeout=20000`, `node scripts/pipeline-smoke.cjs` and `node scripts/pipeline-economy-smoke.cjs` use local fixtures, not paid APIs. The economy smoke runs real `/plan`, `/code`, `/task` and `/coderchat` commands against simulated Planner/Ollama endpoints, verifies actual file/shell operations and asserts zero Judge requests. It does not load or benchmark an actual Qwen model.
+`npm run build`, `npm test -- --testTimeout=20000`, `node scripts/pipeline-smoke.cjs`, `node scripts/pipeline-economy-smoke.cjs` and `node scripts/pipeline-checkpoint-smoke.cjs` use local fixtures, not paid APIs. The checkpoint smoke verifies real file/shell operations, correction gates, malformed reviews and completed resume with zero Judge requests. Unit tests also cover resume after a failed later checkpoint and cancellation during review. These do not load or benchmark an actual Qwen model.
+
+The version before checkpoint supervision is `backup/pre-checkpoint-build-20261027` (b4d9bd4). To restore it after saving local changes: `git switch --detach backup/pre-checkpoint-build-20261027`, then `npm run build && npm link --ignore-scripts`.
 
 The version before optional workflows is `backup/pre-optional-pipeline-20261027` (5e13de6). Save local source changes before switching:
 

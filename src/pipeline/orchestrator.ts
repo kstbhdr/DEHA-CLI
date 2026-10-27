@@ -8,14 +8,16 @@ import { applyCoderOutput, currentFileEvidence, ApplicationResult } from './appl
 import { logger } from '../services/logger';
 import { buildStaticContextMessages, getWorkDir, setActiveTask, updateActiveTask, completeActiveTask } from '../services/session-memory';
 import { TaskPlan, createPlan, loadLatestPlan, pendingSteps, planPath, savePlan } from './task-plan';
+import { runCheckpointPipeline } from './checkpoints';
 
 export interface PipelineOptions {
   planner?: boolean; judge?: boolean; coderMode?: 'blocks' | 'agent';
-  planOnly?: boolean; useSavedPlan?: boolean;
+  planOnly?: boolean; useSavedPlan?: boolean; checkpoints?: boolean;
 }
 export interface PipelineResult {
   plan: string; finalCode: string; verdict: JudgeVerdict; iterations: number;
   success: boolean; judgeRan: boolean; status: 'planned' | 'applied' | 'reviewed' | 'failed'; taskFile: string;
+  plannerReviewed?: boolean; checkpointsApproved?: number;
 }
 export function pipelineHistory(history: Message[], tokens = 2000): string {
   const cap = Math.max(0, Math.floor(tokens * 3.5));
@@ -26,7 +28,7 @@ export async function runPipeline(task: string, config: DehaConfig, history: Mes
   signal?.throwIfAborted();
   const root = getWorkDir() || process.cwd();
   const saved = options.useSavedPlan ? loadLatestPlan(root) : undefined;
-  if (saved && !pendingSteps(saved) && ['applied', 'reviewed'].includes(saved.status) && (options.judge ?? config.pipeline.judgeEnabled) === false) {
+  if (saved && !saved.checkpoints && !pendingSteps(saved) && ['applied', 'reviewed'].includes(saved.status) && (options.judge ?? config.pipeline.judgeEnabled) === false) {
     logger.write(chalk.green('Saved task is already complete; no model requests made.'));
     return { plan: saved.plan, finalCode: '', verdict: { pass: false, score: 'not reviewed', feedback: 'Previously completed plan; Judge was not run again.', raw: '' }, iterations: 0, success: true, judgeRan: false, status: 'applied', taskFile: planPath(saved) };
   }
@@ -34,7 +36,10 @@ export async function runPipeline(task: string, config: DehaConfig, history: Mes
   if (!actualTask.trim()) throw new Error('A coding task or a saved plan is required.');
   setActiveTask(actualTask, 'Pipeline: prepare task plan');
   try {
-    const result = await stages(actualTask, config, history, signal, options, root, saved);
+    const checkpointMode = !!saved?.checkpoints?.length || (options.checkpoints ?? config.pipeline.checkpoints ?? false);
+    const result = checkpointMode
+      ? await runCheckpointPipeline(actualTask, config, buildStaticContextMessages(), pipelineHistory(history, config.pipeline.historyTokens ?? 2000), signal, options, root, saved)
+      : await stages(actualTask, config, history, signal, options, root, saved);
     if (result.success && result.status !== 'planned') completeActiveTask();
     else if (!result.success) updateActiveTask({ taskState: 'INTERRUPTED', lastMeaningfulToolResult: result.verdict.feedback });
     return result;

@@ -4,9 +4,9 @@ import { CODER_PROMPT } from '../prompts.config';
 import { PIPELINE_CODER_PROMPT } from '../prompts.config';
 import { runAgent } from '../commands/agent';
 import { configForRole } from './role-config';
-import { TaskPlan, TASK_PLAN_TOOL, planTool, planPath, pendingSteps } from './task-plan';
+import { TaskPlan, TASK_PLAN_TOOL, planTool, planPath, pendingSteps, checkpointContext } from './task-plan';
 import { getActiveTask } from '../services/session-memory';
-import { ApplicationResult } from './apply-output';
+import { ApplicationResult, projectFilePath } from './apply-output';
 import * as path from 'path';
 
 export const CODER_TOOL_NAMES = ['read_file', 'cat', 'list_dir', 'ls', 'search_in_files', 'grep', 'find_files', 'write_file', 'edit_file', 'insert_lines', 'delete_lines', 'run_shell', 'run_terminal', 'run_python', 'git', 'start_job', 'wait_job', 'list_jobs', 'cancel_job', 'brain'];
@@ -74,27 +74,43 @@ export async function runCoder(
   return callRole(pipeline.coder, config, messages, CODER_PROMPT + '\nWhen the plan contains a checklist, report completed steps after the code as STEP_DONE: <1-based index> | <concrete file/test evidence>. Never mark incomplete work done.', onChunk, 'coder', undefined, abortSignal);
 }
 
-export async function runCoderAgent(record: TaskPlan, config: DehaConfig, feedback: string | undefined, signal?: AbortSignal, context: Message[] = []): Promise<{ code: string; applications: ApplicationResult[]; toolEvidence: string }> {
+export async function runCoderAgent(record: TaskPlan, config: DehaConfig, feedback: string | undefined, signal?: AbortSignal, context: Message[] = [], checkpointIndex?: number): Promise<{ code: string; applications: ApplicationResult[]; toolEvidence: string }> {
   const changes = new Map<string, ApplicationResult>();
   const evidence: string[] = [];
+  const phase = checkpointIndex === undefined ? undefined : record.checkpoints![checkpointIndex];
+  const checks = new Map<string, boolean>();
   let executed = false;
+  const coderConfig = configForRole(config, config.pipeline.coder, 'coder');
+  if (phase && config.pipeline.coder.maxToolRounds === undefined) coderConfig.maxToolRounds = Math.min(coderConfig.maxToolRounds, 20);
   const result = await runAgent(
-    `Implement the saved task.\nTASK: ${record.task}\nPLAN FILE: ${planPath(record)}\nPLAN:\n${record.plan}\nPENDING STEPS:\n${pendingSteps(record) || 'Address the review feedback.'}` +
+    (phase ? checkpointContext(record, checkpointIndex!) + '\nImplement ONLY this checkpoint. Submit evidence using task_plan update_step done; Planner decides approval. Run each declared command with run_shell using the project root as cwd. Commands and mutation paths must match the checkpoint scope exactly.' : `Implement the saved task.\nTASK: ${record.task}\nPLAN FILE: ${planPath(record)}\nPLAN:\n${record.plan}\nPENDING STEPS:\n${pendingSteps(record) || 'Address the review feedback.'}`) +
       (feedback ? `\nREQUIRED FIXES:\n${feedback}` : ''),
-    configForRole(config, config.pipeline.coder, 'coder'), context, signal,
+    coderConfig, context, signal,
     PIPELINE_CODER_PROMPT + '\n[CODER STAGE] Your COMPLETE tag finishes only this stage; the pipeline checks pending task_plan steps separately.',
     undefined,
     { taskAlreadyResolved: true, completeTask: false, sectioned: true, implementationGuard: true, appendUserMessage: true, stage: {
-      allowedTools: CODER_TOOL_NAMES,
+      allowedTools: phase ? CODER_TOOL_NAMES.filter(n => !['run_terminal', 'run_python', 'git', 'start_job', 'wait_job', 'list_jobs', 'cancel_job', 'brain'].includes(n)) : CODER_TOOL_NAMES,
+      beforeTool: (name, input) => {
+        if (!phase) return undefined;
+        try {
+          if (['write_file', 'edit_file', 'insert_lines', 'delete_lines'].includes(name)) {
+            const target = projectFilePath(record.root, String(input.path ?? ''));
+            if (!phase.files.some(f => projectFilePath(record.root, f) === target)) return 'HATA: File is outside the current checkpoint scope. Ask Planner to revise the scope.';
+          }
+          if (name === 'run_shell' && (!phase.commands.includes(String(input.command)) || path.resolve(String(input.cwd ?? record.root)) !== path.resolve(record.root))) return 'HATA: Run only an exact declared checkpoint command in the project root. Ask Planner for missing commands.';
+        } catch (err) { return 'HATA: ' + String(err); }
+        return undefined;
+      },
       tools: [{ definition: TASK_PLAN_TOOL, execute: input => planTool(record, input) }],
       onToolResult: (name, input, output) => {
         const ok = !/^HATA:/i.test(output);
         if (['write_file', 'edit_file', 'insert_lines', 'delete_lines'].includes(name) && typeof input.path === 'string') {
           const file = path.resolve(record.root, input.path);
           changes.set(file, { file, success: ok, result: `[${name}] ${output}` });
-          if (ok) executed = true;
+          if (ok) { executed = true; if (phase) checks.clear(); }
         }
         if (['run_shell', 'run_terminal', 'run_python', 'smoke_test', 'start_job', 'wait_job'].includes(name)) {
+          if (phase && name === 'run_shell') checks.set(String(input.command), ok);
           if (ok) executed = true;
           evidence.push(`[${name}] ${output.slice(0, 1500)}`);
           if (evidence.length > 12) evidence.shift();
@@ -106,7 +122,10 @@ export async function runCoderAgent(record: TaskPlan, config: DehaConfig, feedba
   const applications = [...changes.values()];
   if (!executed) applications.push({ file: '', success: false, result: 'HATA: Coder did not execute any implementation or validation action.' });
   if (['INTERRUPTED', 'BLOCKED', 'CANCELLED'].includes(getActiveTask()?.taskState || '')) applications.push({ file: '', success: false, result: 'HATA: Coder stage was interrupted or blocked.' });
-  if (pendingSteps(record)) applications.push({ file: '', success: false, result: 'HATA: Saved task plan still has open steps:\n' + pendingSteps(record) });
+  if (phase) {
+    if (phase.status !== 'review') applications.push({ file: '', success: false, result: 'HATA: Submit concrete checkpoint evidence using task_plan before review.' });
+    for (const command of phase.commands) if (checks.get(command) !== true) applications.push({ file: '', success: false, result: 'HATA: Required checkpoint check did not pass: ' + command });
+  } else if (pendingSteps(record)) applications.push({ file: '', success: false, result: 'HATA: Saved task plan still has open steps:\n' + pendingSteps(record) });
   if (!applications.length) applications.push({ file: '', success: true, result: 'Coder execution completed; see tool evidence.' });
   return { code: result.response, applications, toolEvidence: evidence.join('\n').slice(-10000) };
 }

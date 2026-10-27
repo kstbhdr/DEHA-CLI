@@ -5,7 +5,8 @@ import * as path from 'path';
 import { getConfig, DehaConfig } from '../config';
 import * as ai from '../services/ai-service';
 import { runPipeline, pipelineHistory } from '../pipeline/orchestrator';
-import { loadLatestPlan, planPath } from '../pipeline/task-plan';
+import { loadLatestPlan, planPath, planTool } from '../pipeline/task-plan';
+import { parseCheckpoints } from '../pipeline/checkpoints';
 import { parsePipelineInput } from '../pipeline/options';
 import { pipelineSetup, persistConfig } from '../commands/model-setup';
 import inquirer from 'inquirer';
@@ -23,6 +24,15 @@ vi.mock('inquirer', () => ({ default: { prompt: vi.fn() } }));
 let dir: string;
 let config: DehaConfig;
 const pass = 'VERDICT: PASS\nSCORE: 9/10\n## REQUIRED FIXES\nNone';
+function toolReply(items: { name: string; input: Record<string, unknown> }[] = []) {
+  const toolCalls = items.map((item, i) => ({ ...item, id: 'checkpoint-' + i }));
+  const text = items.length ? '' : 'Stage submitted [STATUS: COMPLETE]';
+  return { text, toolCalls, rawAssistantMsg: { role: 'assistant' as const, content: text, ...(items.length ? { tool_calls: toolCalls.map(t => ({ id: t.id, type: 'function' as const, function: { name: t.name, arguments: JSON.stringify(t.input) } })) } : {}) }, malformedToolCalls: 0, finishReason: items.length ? 'tool_calls' : 'stop' };
+}
+const checkpointPlan = (commands: string[] = []) => JSON.stringify({ overview: 'Create the two files in order; preserve the public API.', checkpoints: [
+  { title: 'First', instructions: 'Create first.js', files: ['first.js'], commands, acceptance: ['first.js contains fixed implementation'] },
+  { title: 'Second', instructions: 'Create second.js', files: ['second.js'], commands: [], acceptance: ['second.js implements the second feature'] },
+] });
 const create = (file: string, code: string) => '```js\n// FILE: ' + file + '\n' + code + '\n```';
 const edit = (file: string, old: string, code: string) => `EDIT: ${file}\n<<<OLD>>>\n${old}\n<<<NEW>>>\n${code}\n<<<END>>>`;
 
@@ -133,6 +143,129 @@ describe('Planner -> Coder -> Judge pipeline', () => {
     expect(mapped).toMatchObject({ provider: 'claude', claudeModel: 'role-claude', anthropicApiKey: 'role-key', roleOverride: role });
     expect(config.provider).toBe('custom'); expect(config.customModel).toBe('chat-model');
     expect(config.roleOverride).toBeUndefined();
+  });
+});
+
+describe('Planner checkpoint supervision', () => {
+  it('rejects future writes, retries the same phase, and advances only after Planner approval', async () => {
+    let round = 0, reviews = 0;
+    const events: string[] = [];
+    vi.mocked(ai.sendWithToolsOpenAICompat).mockImplementation(async (_messages, cfg, tools) => {
+      expect(cfg.roleOverride?.model).toBe('coder-model');
+      if (++round === 1) { expect(tools.some(t => t.name === 'write_file')).toBe(false); events.push('discovery'); return toolReply(); }
+      if (round % 2 === 1) return toolReply();
+      const phase = round === 6 ? 2 : 1;
+      events.push('coder' + phase);
+      const items = [{ name: 'write_file', input: { path: phase === 2 ? 'second.js' : 'first.js', content: round === 2 ? 'wrong' : 'fixed implementation' } }];
+      if (round === 2) items.push({ name: 'write_file', input: { path: 'second.js', content: 'premature' } });
+      return toolReply([...items, { name: 'task_plan', input: { action: 'update_step', index: phase, status: 'done', evidence: 'Actual phase file has been created and inspected.' } }]);
+    });
+    const roles = vi.spyOn(ai, 'callRole').mockImplementation(async (role, _cfg, messages) => {
+      expect(role.model).toBe('planner-model');
+      if (!reviews++) { events.push('plan'); return checkpointPlan(); }
+      const record = loadLatestPlan(dir);
+      expect(record.steps[reviews === 4 ? 1 : 0].status).toBe('doing'); // Submission is never approval.
+      if (reviews === 2) {
+        expect(fs.existsSync(path.join(dir, 'second.js'))).toBe(false);
+        expect(planTool(record, { action: 'update_step', index: 2, status: 'done', evidence: 'Pretend future work is approved already.' })).toContain('HATA:');
+        expect(JSON.stringify(messages)).toContain('wrong'); events.push('revise1');
+        return JSON.stringify({ decision: 'revise', feedback: 'Replace wrong with fixed implementation.' });
+      }
+      events.push(reviews === 3 ? 'approve1' : 'approve2');
+      return JSON.stringify({ decision: 'approve', feedback: 'Actual file satisfies checkpoint acceptance.' });
+    });
+    const result = await runPipeline('Implement both features', config, [], undefined, { checkpoints: true });
+    expect(result).toMatchObject({ success: true, judgeRan: false, plannerReviewed: true, checkpointsApproved: 2, iterations: 3 });
+    expect(events).toEqual(['discovery', 'plan', 'coder1', 'revise1', 'coder1', 'approve1', 'coder2', 'approve2']);
+    expect(loadLatestPlan(dir).checkpoints!.map(c => c.attempts)).toEqual([2, 1]);
+    const repeat = await runPipeline('', config, [], undefined, { useSavedPlan: true });
+    expect(repeat.iterations).toBe(0); expect(roles).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(['malformed', 'missing check'])('keeps the next phase locked on %s and resumes the saved checkpoint without replanning', async reason => {
+    config.pipeline.maxIterations = 1;
+    let round = 0, planning = true;
+    const roles = vi.spyOn(ai, 'callRole').mockImplementation(async () => {
+      if (planning) { planning = false; return checkpointPlan(reason === 'missing check' ? ['node --check first.js'] : []); }
+      return reason === 'malformed' ? 'Everything looks fine!' : JSON.stringify({ decision: 'approve', feedback: 'Coder says it passed.' });
+    });
+    vi.mocked(ai.sendWithToolsOpenAICompat).mockImplementation(async () => {
+      if (++round === 1 || round % 2 === 1) return toolReply();
+      return toolReply([
+        { name: 'write_file', input: { path: 'first.js', content: 'fixed implementation' } },
+        { name: 'task_plan', input: { action: 'update_step', index: 1, status: 'done', evidence: 'Created first.js with the phase implementation.' } },
+      ]);
+    });
+    const first = await runPipeline('Two phases', config, [], undefined, { checkpoints: true });
+    expect(first.success).toBe(false); expect(first.checkpointsApproved).toBe(0);
+    expect(fs.existsSync(path.join(dir, 'second.js'))).toBe(false);
+    expect(loadLatestPlan(dir).checkpoints![0].status).toBe('changes_requested');
+    const resumed = await runPipeline('', config, [], undefined, { useSavedPlan: true, planner: false, judge: false });
+    expect(resumed.success).toBe(false);
+    expect(roles).toHaveBeenCalledTimes(3); // plan + two reviews; no second planning/discovery.
+  });
+
+  it('persists plan-only checkpoint mode and rejects malformed or escaping plans', async () => {
+    vi.spyOn(ai, 'callRole').mockResolvedValue(checkpointPlan());
+    const planned = await runPipeline('Two phases', config, [], undefined, { checkpoints: true, planOnly: true });
+    expect(planned.status).toBe('planned');
+    expect(vi.mocked(ai.sendWithToolsOpenAICompat)).toHaveBeenCalledTimes(1); // Cheap discovery only, no implementation.
+    const record = loadLatestPlan(dir);
+    expect(record.checkpoints).toHaveLength(2);
+    expect(fs.readFileSync(planned.taskFile, 'utf8')).toContain('Acceptance:');
+    expect(() => parseCheckpoints(checkpointPlan().replaceAll('first.js', '../escape.js'), dir)).toThrow();
+    expect(() => parseCheckpoints('{"overview":"x","checkpoints":[]}', dir)).toThrow();
+    expect(parsePipelineInput('--checkpoints Do work').options.checkpoints).toBe(true);
+  });
+  it('saves the simple profile and keeps model selection independent', async () => {
+    vi.mocked(inquirer.prompt).mockResolvedValueOnce({ section: 'flow' }).mockResolvedValueOnce({ profile: 'checkpoints' }).mockResolvedValueOnce({ section: 'done' });
+    const save = vi.fn(); await pipelineSetup(config, save);
+    expect(config.pipeline).toMatchObject({ checkpoints: true, plannerEnabled: true, judgeEnabled: false, coderMode: 'agent' });
+    expect(config.pipeline.coder.model).toBe('coder-model'); expect(config.customModel).toBe('chat-model');
+    const file = path.join(dir, 'checkpoint.env'); persistConfig(config, file);
+    expect(fs.readFileSync(file, 'utf8')).toContain('PIPELINE_CHECKPOINTS=1');
+    vi.stubEnv('PIPELINE_CHECKPOINTS', '1'); expect(getConfig().pipeline.checkpoints).toBe(true);
+  });
+  it('resumes a failed later checkpoint and skips the previously approved checkpoint', async () => {
+    config.pipeline.maxIterations = 1;
+    let round = 0, planner = 0;
+    const roles = vi.spyOn(ai, 'callRole').mockImplementation(async () => {
+      planner++;
+      if (planner === 1) return checkpointPlan();
+      if (planner === 3) return 'Invalid phase-2 review';
+      return JSON.stringify({ decision: 'approve', feedback: 'Actual file satisfies the current checkpoint.' });
+    });
+    vi.mocked(ai.sendWithToolsOpenAICompat).mockImplementation(async () => {
+      if (++round === 1 || round % 2 === 1) return toolReply();
+      const phase = round === 2 ? 1 : 2;
+      return toolReply([
+        { name: 'write_file', input: { path: phase === 1 ? 'first.js' : 'second.js', content: 'fixed implementation' } },
+        { name: 'task_plan', input: { action: 'update_step', index: phase, status: 'done', evidence: 'Wrote the exact file for this checkpoint.' } },
+      ]);
+    });
+    const failed = await runPipeline('Two phases', config, [], undefined, { checkpoints: true });
+    expect(failed).toMatchObject({ success: false, checkpointsApproved: 1 });
+    const first = loadLatestPlan(dir), id = first.id;
+    const resumed = await runPipeline('', config, [], undefined, { useSavedPlan: true, planner: false, judge: false });
+    expect(resumed).toMatchObject({ success: true, checkpointsApproved: 2, iterations: 1 });
+    const saved = loadLatestPlan(dir);
+    expect(saved.id).toBe(id); expect(saved.checkpoints!.map(c => c.attempts)).toEqual([1, 2]);
+    expect(roles).toHaveBeenCalledTimes(4); expect(round).toBe(7);
+  });
+  it('does not approve or advance when cancelled during Planner review', async () => {
+    const controller = new AbortController(); let calls = 0, round = 0;
+    vi.spyOn(ai, 'callRole').mockImplementation(async () => {
+      if (++calls === 1) return checkpointPlan();
+      controller.abort(); return JSON.stringify({ decision: 'approve', feedback: 'Do not apply this cancelled approval.' });
+    });
+    vi.mocked(ai.sendWithToolsOpenAICompat).mockImplementation(async () => {
+      if (++round !== 2) return toolReply();
+      return toolReply([{ name: 'write_file', input: { path: 'first.js', content: 'fixed' } }, { name: 'task_plan', input: { action: 'update_step', index: 1, status: 'done', evidence: 'Created the first checkpoint implementation.' } }]);
+    });
+    await expect(runPipeline('Two phases', config, [], controller.signal, { checkpoints: true })).rejects.toThrow();
+    expect(loadLatestPlan(dir).checkpoints![0].status).not.toBe('approved');
+    expect(fs.existsSync(path.join(dir, 'second.js'))).toBe(false);
+    expect(getActiveTask()?.taskState).toBe('CANCELLED');
   });
 });
 

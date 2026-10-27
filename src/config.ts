@@ -48,6 +48,7 @@ export interface PipelineConfig {
   judgeEnabled?: boolean;
   coderMode?: 'blocks' | 'agent';
   historyTokens?: number;
+  checkpoints?: boolean;
 }
 
 // ─── Ana Config ─────────────────────────────────────────────────────────────
@@ -241,6 +242,7 @@ export function getConfig(overrides: Partial<DehaConfig> = {}): DehaConfig {
       judgeEnabled: process.env.PIPELINE_JUDGE_ENABLED !== '0',
       coderMode: process.env.PIPELINE_CODER_MODE === 'agent' ? 'agent' : 'blocks',
       historyTokens: Math.max(0, safeParseInt(process.env.PIPELINE_HISTORY_TOKENS, 2000)),
+      checkpoints: process.env.PIPELINE_CHECKPOINTS === '1',
     },
   };
 

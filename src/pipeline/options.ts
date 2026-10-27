@@ -6,7 +6,9 @@ export function parsePipelineInput(value: string): { task: string; options: Pipe
   const options: PipelineOptions = {};
   while (task.startsWith('--')) {
     const token = /^(\S+)(?:\s+|$)/.exec(task)!;
-    if (token[1] === '--no-planner') options.planner = false;
+    if (token[1] === '--checkpoints') options.checkpoints = true;
+    else if (token[1] === '--no-checkpoints') options.checkpoints = false;
+    else if (token[1] === '--no-planner') options.planner = false;
     else if (token[1] === '--planner') options.planner = true;
     else if (token[1] === '--no-judge') options.judge = false;
     else if (token[1] === '--judge') options.judge = true;

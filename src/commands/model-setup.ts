@@ -633,6 +633,7 @@ export function persistConfig(config: DehaConfig, targetFile?: string): void {
     PIPELINE_PLANNER_ENABLED: config.pipeline.plannerEnabled === false ? '0' : '1',
     PIPELINE_JUDGE_ENABLED: config.pipeline.judgeEnabled === false ? '0' : '1',
     PIPELINE_CODER_MODE: config.pipeline.coderMode ?? 'blocks',
+    PIPELINE_CHECKPOINTS: config.pipeline.checkpoints ? '1' : '0',
     PIPELINE_HISTORY_TOKENS: String(config.pipeline.historyTokens ?? 2000),
     DEHA_MAX_TOOL_ROUNDS: String(config.maxToolRounds),
     DEHA_MAX_CONTEXT_TOKENS: String(config.maxContextTokens),
@@ -676,18 +677,21 @@ export async function pipelineSetup(config: DehaConfig, save: (config: DehaConfi
     if (section === 'done') { save(config); return; }
     if (section === 'flow') {
       const { profile } = await inquirer.prompt([{ type: 'list', name: 'profile', message: 'Çalışma şekli:', choices: [
+        { name: 'Basit: Planner kontrol noktaları + araçlı Coder (Judge kapalı)', value: 'checkpoints' },
         { name: 'Tasarruf: Planner + araçlı Coder; Judge kapalı', value: 'economy' },
         { name: 'Tam kontrol: Planner + araçlı Coder + Judge', value: 'full' },
         { name: 'Yalnız araçlı Coder', value: 'coder' },
         { name: 'Aşamaları ve bütçeleri ayrı seç', value: 'custom' },
       ] }]);
       if (profile !== 'custom') {
+        config.pipeline.checkpoints = profile === 'checkpoints';
         config.pipeline.plannerEnabled = profile !== 'coder';
         config.pipeline.judgeEnabled = profile === 'full';
         config.pipeline.coderMode = 'agent';
         if (profile !== 'full') config.pipeline.maxIterations = 2;
       } else {
         const flow = await inquirer.prompt([
+          { type: 'confirm', name: 'checkpoints', message: 'Planner kontrol noktalarıyla aşama aşama ilerlesin mi? (Planner + araçlı Coder, Judge kapalı)', default: config.pipeline.checkpoints ?? false },
           { type: 'confirm', name: 'plannerEnabled', message: 'Planner çalışsın mı?', default: config.pipeline.plannerEnabled !== false },
           { type: 'confirm', name: 'judgeEnabled', message: 'Judge çalışsın mı?', default: config.pipeline.judgeEnabled !== false },
           { type: 'list', name: 'coderMode', message: 'Coder çalışma şekli:', choices: [{ name: 'Araçlarla dosya oku / yaz / test et', value: 'agent' }, { name: 'FILE / EDIT blokları (önceki davranış)', value: 'blocks' }], default: config.pipeline.coderMode ?? 'blocks' },
@@ -695,6 +699,7 @@ export async function pipelineSetup(config: DehaConfig, save: (config: DehaConfi
           { type: 'number', name: 'historyTokens', message: 'Planner için önceki sohbet bütçesi (token, 0=kapalı):', default: config.pipeline.historyTokens ?? 2000, validate: n => Number.isInteger(n) && n >= 0 || '0 veya pozitif tam sayı gir.' },
         ]);
         Object.assign(config.pipeline, flow);
+        if (config.pipeline.checkpoints) Object.assign(config.pipeline, { plannerEnabled: true, judgeEnabled: false, coderMode: 'agent' });
       }
     } else if (section === 'planner' || section === 'coder' || section === 'judge') {
       const roleName = section as 'planner' | 'coder' | 'judge';

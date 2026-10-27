@@ -4,6 +4,7 @@ const fs = require('node:fs'); const os = require('node:os'); const path = requi
 const http = require('node:http'); const { spawn } = require('node:child_process');
 const cli = path.resolve(__dirname, '../dist/index.js');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deha-pipeline-smoke-'));
+const testHome = path.join(dir, 'home'); fs.mkdirSync(testHome);
 fs.writeFileSync(path.join(dir, 'existing.cjs'), 'module.exports = 1;\n');
 const counts = {}; let mode = 'pass', serverError;
 const create = (file, code) => '```js\n// FILE: ' + file + '\n' + code + '\n```';
@@ -82,7 +83,7 @@ function launch(args, env, interactive = false) {
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
-  const env = { ...process.env, DEHA_PROVIDER: 'custom', CUSTOM_MODEL: 'chat-model', CUSTOM_API_KEY: 'chat-key', CUSTOM_API_URL: base + '/chat/v1',
+  const env = { ...process.env, USERPROFILE: testHome, HOME: testHome, DEHA_PROVIDER: 'custom', CUSTOM_MODEL: 'chat-model', CUSTOM_API_KEY: 'chat-key', CUSTOM_API_URL: base + '/chat/v1',
     DEHA_MAX_CONTEXT_TOKENS: '64000', DEHA_AUTO_START_SERVICES: '0', DEHA_MCP_AUTOCONNECT: '0', DEHA_CHECK_UPDATES: '0', NO_COLOR: '1', FORCE_COLOR: '0', PIPELINE_MAX_ITERATIONS: '2' };
   for (const role of ['planner', 'coder', 'judge']) {
     const upper = role.toUpperCase();
