@@ -63,28 +63,31 @@ export async function runJudge(
   onChunk?: (chunk: string) => void,
   abortSignal?: AbortSignal,
   staticContext: Message[] = [],
+  applicationReport?: string,
 ): Promise<JudgeVerdict> {
   const { pipeline } = config;
 
   const userContent =
     `## ORIGINAL TASK\n${task}\n\n` +
     `## PLANNER'S PLAN\n${plan}\n\n` +
-    `## CODER'S OUTPUT\n\`\`\`\n${code}\n\`\`\``;
+    `## CODER'S OUTPUT\n\`\`\`\n${code}\n\`\`\`` +
+    (applicationReport ? `\n\n## APPLICATION RESULTS AND CURRENT FILES\n${applicationReport}\nReview the whole task against the current files, including earlier iterations. Failed writes/edits or an incomplete task must FAIL. Model review alone is not evidence that tests ran.` : '');
 
   const messages: Message[] = [...staticContext, { role: 'user', content: userContent }];
-  const raw = await callRole(pipeline.judge, config, messages, JUDGE_PROMPT, onChunk, 'judge');
+  const raw = await callRole(pipeline.judge, config, messages, JUDGE_PROMPT, onChunk, 'judge', undefined, abortSignal);
 
   return parseVerdict(raw);
 }
 
 function parseVerdict(raw: string): JudgeVerdict {
-  const passMatch  = /VERDICT:\s*(PASS|FAIL)/i.exec(raw);
-  const scoreMatch = /SCORE:\s*([\d.]+\/10)/i.exec(raw);
+  const passMatch  = /^\s*VERDICT:\s*(PASS|FAIL)\b/im.exec(raw);
+  const scoreMatch = /^\s*SCORE:\s*(\d+(?:\.\d+)?\s*\/\s*10)\s*$/im.exec(raw);
 
-  const pass  = passMatch ? passMatch[1].toUpperCase() === 'PASS' : false;
+  const numericScore = scoreMatch ? Number.parseFloat(scoreMatch[1]) : NaN;
+  const pass = passMatch?.[1].toUpperCase() === 'PASS' && numericScore >= 7 && numericScore <= 10;
   const score = scoreMatch ? scoreMatch[1] : '?/10';
 
-  const fixSection = raw.match(/## REQUIRED FIXES\n([\s\S]*?)(?=##|$)/i);
+  const fixSection = raw.match(/## REQUIRED FIXES\s*\r?\n([\s\S]*?)(?=\r?\n##|$)/i);
   const feedback   = fixSection ? fixSection[1].trim() : raw;
 
   return { pass, score, feedback, raw };

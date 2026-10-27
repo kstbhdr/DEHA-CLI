@@ -62,5 +62,5 @@ export async function runCoder(
   }
 
   const messages: Message[] = [...staticContext, { role: 'user', content: userContent }];
-  return callRole(pipeline.coder, config, messages, CODER_PROMPT, onChunk, 'coder');
+  return callRole(pipeline.coder, config, messages, CODER_PROMPT, onChunk, 'coder', undefined, abortSignal);
 }

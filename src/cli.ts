@@ -58,20 +58,35 @@ export class DehaCLI {
     this.program
       .command('build <task>')
       .description('Planner/Coder/Judge build akışını çalıştır')
+      .option('--planner-provider <p>', 'Planner provider')
+      .option('--planner-model <m>', 'Planner model')
+      .option('--planner-key <k>', 'Planner API key')
+      .option('--planner-url <u>', 'Planner custom API URL')
       .option('--coder-provider <p>',   'Coder provider')
       .option('--coder-model <m>',      'Coder model')
       .option('--coder-key <k>',        'Coder API key')
       .option('--coder-url <u>',        'Coder custom API URL')
+      .option('--judge-provider <p>', 'Judge provider')
+      .option('--judge-model <m>', 'Judge model')
+      .option('--judge-key <k>', 'Judge API key')
+      .option('--judge-url <u>', 'Judge custom API URL')
       .action(async (task: string, opts) => {
         const config = this.buildConfig();
 
+        for (const name of ['planner', 'judge'] as const) {
+          if (opts[name + 'Provider']) config.pipeline[name].provider = opts[name + 'Provider'] as Provider;
+          if (opts[name + 'Model']) config.pipeline[name].model = opts[name + 'Model'];
+          if (opts[name + 'Key']) config.pipeline[name].apiKey = opts[name + 'Key'];
+          if (opts[name + 'Url']) config.pipeline[name].apiUrl = opts[name + 'Url'];
+        }
         if (opts.coderProvider)   config.pipeline.coder.provider   = opts.coderProvider as Provider;
         if (opts.coderModel)      config.pipeline.coder.model      = opts.coderModel;
         if (opts.coderKey)        config.pipeline.coder.apiKey     = opts.coderKey;
         if (opts.coderUrl)        config.pipeline.coder.apiUrl     = opts.coderUrl;
 
         try {
-          await runPipeline(task, config);
+          const result = await runPipeline(task, config);
+          if (!result.verdict.pass) process.exitCode = 1;
         } catch (err: unknown) {
           logger.error('Pipeline hatası', err);
           process.exit(1);

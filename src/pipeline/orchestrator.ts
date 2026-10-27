@@ -2,11 +2,11 @@ import chalk from 'chalk';
 import { DehaConfig, getProviderLabel } from '../config';
 import { Message } from '../services/ai-service';
 import { runPlanner } from './planner';
-import { decideNeedPlan, runCoder } from './coder';
+import { runCoder } from './coder';
 import { JudgeVerdict, runJudge } from './judge';
-import { parseEditBlocks, applyEditBlocks, parseNewFileBlocks, applyNewFileBlocks } from '../tools/edit';
+import { applyCoderOutput, currentFileEvidence } from './apply-output';
 import { logger } from '../services/logger';
-import { buildStaticContextMessages } from '../services/session-memory';
+import { buildStaticContextMessages, getWorkDir, setActiveTask, updateActiveTask, completeActiveTask } from '../services/session-memory';
 
 export interface PipelineResult {
   plan: string;
@@ -35,9 +35,26 @@ export async function runPipeline(
   history: Message[] = [],
   abortSignal?: AbortSignal,
 ): Promise<PipelineResult> {
+  abortSignal?.throwIfAborted();
+  setActiveTask(task, 'Planner: prepare implementation plan');
+  try {
+    const result = await runPipelineStages(task, config, history, abortSignal);
+    if (result.verdict.pass) completeActiveTask();
+    else updateActiveTask({ taskState: 'INTERRUPTED', lastMeaningfulToolResult: result.verdict.feedback });
+    return result;
+  } catch (err) {
+    updateActiveTask({ taskState: abortSignal?.aborted ? 'CANCELLED' : 'INTERRUPTED' });
+    throw err;
+  }
+}
+
+async function runPipelineStages(task: string, config: DehaConfig, history: Message[], abortSignal?: AbortSignal): Promise<PipelineResult> {
   const { pipeline } = config;
   const maxIterations = Math.max(1, Math.min(pipeline.maxIterations || 5, 5));
-  const staticContext = buildStaticContextMessages();
+  const staticContext = [...buildStaticContextMessages(), ...history];
+  const root = getWorkDir() || process.cwd();
+  const touchedFiles = new Set<string>();
+  const coderOutputs: string[] = [];
   
   logger.write(chalk.bold('\n╔══ DEHA TEAM PIPELINE ═════════════════════════╗'));
   logger.write(chalk.bold(`║  Task: `) + chalk.white(task.slice(0, 44).padEnd(44)) + chalk.bold('║'));
@@ -52,8 +69,7 @@ export async function runPipeline(
     raw: '',
   };
 
-  const planDecision = await decideNeedPlan(task, config);
-  if (planDecision.needPlan) {
+  {
     logger.write(chalk.magenta.bold('\n[1/3] 📐 PLANNER » CODER : ' + chalk.dim('Mimari plan hazırlanıyor...')));
     roleHeader(
       'PLANNER',
@@ -65,14 +81,13 @@ export async function runPipeline(
     // Planner'a tüm geçmişi (history) ve görevi (task) gönder
     const plannerTask = `Interactive Session Context:\n${history.map(m => `${m.role}: ${m.content}`).join('\n')}\n\nCurrent Mission:\n${task}`;
 
-    await runPlanner(plannerTask, config, (chunk) => {
+    const returnedPlan = await runPlanner(plannerTask, config, (chunk) => {
       process.stdout.write(chalk.magenta(chunk));
       plannerOutput += chunk;
-    }, abortSignal);
+    }, abortSignal, true);
     process.stdout.write('\n');
-    plan = plannerOutput.trim() || plan;
-  } else {
-    logger.write(chalk.dim(`\n  📐 Planner atlandı: ${planDecision.reason || 'coder direkt başlayabilir'}`));
+    plan = returnedPlan.trim() || plannerOutput.trim();
+    if (!plan) throw new Error('Planner returned an empty plan.');
   }
 
   let judgeFeedback: string | undefined;
@@ -94,30 +109,27 @@ export async function runPipeline(
       getProviderLabel(pipeline.coder.provider),
       pipeline.coder.model,
     );
+    updateActiveTask({ currentObjective: `Coder: iteration ${iteration}/${maxIterations}`, taskState: 'ACTIVE' });
 
     let coderOutput = '';
-    await runCoder(plan, config, judgeFeedback, code || undefined, (chunk) => {
+    const returnedCode = await runCoder(plan, config, judgeFeedback, code || undefined, (chunk) => {
       process.stdout.write(chalk.blue(chunk));
       coderOutput += chunk;
     }, abortSignal, staticContext);
+    abortSignal?.throwIfAborted();
     process.stdout.write('\n');
-    code = coderOutput;
+    coderOutput = returnedCode || coderOutput;
+    coderOutputs.push(coderOutput);
+    code = coderOutputs.map((output, i) => `## CODER ITERATION ${i + 1}\n${output}`).join('\n\n');
 
-    // Apply New Files
-    const newFiles = parseNewFileBlocks(coderOutput);
-    if (newFiles.length > 0) {
-      logger.write(chalk.dim(`\n  📂 ${newFiles.length} yeni dosya oluşturuluyor...`));
-      const results = applyNewFileBlocks(newFiles);
-      results.forEach((r) => logger.write(chalk.dim(`     ${r}`)));
+    const applications = await applyCoderOutput(coderOutput, root, config, abortSignal);
+    for (const applied of applications) {
+      logger.write(chalk.dim(`     ${applied.result}`));
+      if (applied.file) touchedFiles.add(applied.file);
     }
-
-    // Apply Edits
-    const editBlocks = parseEditBlocks(coderOutput);
-    if (editBlocks.length > 0) {
-      logger.write(chalk.dim(`\n  🖊️  ${editBlocks.length} EDIT bloğu uygulanıyor...`));
-      const results = applyEditBlocks(editBlocks);
-      results.forEach((r) => logger.write(chalk.dim(`     ${r}`)));
-    }
+    const failures = applications.filter(r => !r.success);
+    const applicationReport = applications.map(r => r.result).join('\n') +
+      '\n\nCURRENT FILES (disk evidence, not test execution):\n' + currentFileEvidence(touchedFiles);
 
     logger.write(chalk.yellow.bold(`\n[3/3] ⚖️  JUDGE » TEAM : ` + chalk.dim('Kod denetleniyor...')));
     roleHeader(
@@ -126,14 +138,19 @@ export async function runPipeline(
       pipeline.judge.model,
     );
     let judgeOutput = '';
+    updateActiveTask({ currentObjective: `Judge: review iteration ${iteration}/${maxIterations}` });
     verdict = await runJudge(task, plan, code, config, (chunk) => {
       process.stdout.write(chalk.yellow(chunk));
       judgeOutput += chunk;
-    }, abortSignal, staticContext);
+    }, abortSignal, staticContext, applicationReport);
+    abortSignal?.throwIfAborted();
+    if (failures.length) {
+      verdict = { ...verdict, pass: false, feedback: failures.map(r => r.result).join('\n') + '\n' + verdict.feedback };
+    }
     process.stdout.write('\n');
 
     if (verdict.pass) break;
-    judgeFeedback = verdict.feedback || judgeOutput || verdict.raw;
+    judgeFeedback = (verdict.feedback || judgeOutput || verdict.raw) + '\n\n' + applicationReport;
   }
 
   // ── Özet ─────────────────────────────────────────────────────────────────

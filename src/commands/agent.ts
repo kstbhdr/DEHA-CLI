@@ -52,7 +52,7 @@ export async function runAgent(
   abortSignal?: AbortSignal,
   customSystemPrompt?: string,
   onMessage?: OnMessage,
-  options: { taskAlreadyResolved?: boolean; sectioned?: boolean; implementationGuard?: boolean } = {},
+  options: { taskAlreadyResolved?: boolean; sectioned?: boolean; implementationGuard?: boolean; completeTask?: boolean } = {},
 ): Promise<AgentResult> {
   const mcpTools = mcpManager.getAnthropicTools();
   const allTools = [...DEHA_TOOLS.filter(t => backgroundJobsEnabled() || !BACKGROUND_JOB_NAMES.has(t.name)), ...mcpTools];
@@ -93,11 +93,11 @@ export async function runAgent(
 
   // Claude → native tool calling
   if (config.provider === 'claude') {
-    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation);
+    return runAgentClaude(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation, options.completeTask);
   }
 
   // OpenAI-uyumlu providerlar (DeepSeek, OpenAI, OpenRouter, xAI, custom)
-  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation);
+  return runAgentOpenAI(userMessage, enrichedConfig, history, allTools, abortSignal, onMessage, assembler, implementation, options.completeTask);
 }
 
 function logAssemblerStats(stats: BuildStats): void {
@@ -459,6 +459,7 @@ async function runAgentClaude(
   onMessage?: OnMessage,
   assembler?: TurnContextAssembler,
   implementation?: ImplementationGuard,
+  completeTask = true,
 ): Promise<AgentResult> {
   const messages: Message[] = [...history];
   const startIdx = history.length;
@@ -577,7 +578,7 @@ async function runAgentClaude(
       finalText = text;
       const status = parseStatusTag(text);
       if (status === 'COMPLETE') {
-        completeActiveTask();
+        if (completeTask) completeActiveTask();
       } else if (status === 'BLOCKED') {
         updateActiveTask({ taskState: 'BLOCKED' });
       }
@@ -776,6 +777,7 @@ async function runAgentOpenAI(
   onMessage?: OnMessage,
   assembler?: TurnContextAssembler,
   implementation?: ImplementationGuard,
+  completeTask = true,
 ): Promise<AgentResult> {
   // Geçmiş mesajları OpenAI formatına dönüştür + mutual-pairing ile orphan tool mesajlarını temizle
   const startIdx = history.length;
@@ -937,7 +939,7 @@ async function runAgentOpenAI(
       finalText = text;
       const status = parseStatusTag(text);
       if (status === 'COMPLETE') {
-        completeActiveTask();
+        if (completeTask) completeActiveTask();
       } else if (status === 'BLOCKED') {
         updateActiveTask({ taskState: 'BLOCKED' });
       }

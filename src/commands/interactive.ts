@@ -23,6 +23,7 @@ import { runSmokeTests, buildQuickChecks, printSmokeReport } from '../tools/smok
 import { takeScreenshot } from '../tools/browser';
 import { screenshotAndAnalyze } from '../tools/vision';
 import { modelSetup } from './model-setup';
+import { configForRole } from '../pipeline/role-config';
 import { getUsageSince, getUsageSnapshot, printSessionSummary, printStats } from '../services/usage-tracker';
 // Tool router kaldırıldı — DEHA her zaman agent modunda çalışır (tool_choice: auto)
 import {
@@ -418,7 +419,7 @@ export async function interactive(
           process.stdout.write('\n' + chalk.bold[activeRole === 'planner' ? 'magenta' : 'yellow'](`${activeRole.toUpperCase()}: `));
           const staticContext = buildStaticContextMessages();
           const { runAgent } = await import('./agent');
-          const agentResult = await runAgent(userMessage, { ...config, ...roleConfig }, [...staticContext, ...summarizeOldToolResults(roleHistory, 10)], abortController.signal, specializedSystemPrompt);
+          const agentResult = await runAgent(userMessage, configForRole(config, roleConfig), [...staticContext, ...summarizeOldToolResults(roleHistory, 10)], abortController.signal, specializedSystemPrompt);
           roleHistory.push(...agentResult.messages);
           logger.write(chalk.dim('─'.repeat(50)) + '\n');
         } catch (err: any) { if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Hata: ') + err.message + '\n'); }

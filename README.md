@@ -69,6 +69,8 @@ JUDGE_MODEL=grok-3
 
 ## Usage
 
+Interactive Chat keeps its own coding tools and model. Use `/build <task>` inside DEHA or `deha build "<task>"` to run all three configured roles in order: Planner, Coder, Judge. See [pipeline behavior and verification](PIPELINE.md).
+
 ```bash
 # Interactive mode
 deha

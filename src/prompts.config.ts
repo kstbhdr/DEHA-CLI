@@ -81,8 +81,8 @@ OUTPUT RULES:
 !! EDIT BLOCK ACCURACY — CRITICAL:
 1. USE EDIT BLOCKS for all changes to existing files. Rewriting a whole file is a CRITICAL FAILURE.
 2. The PLANNER has provided the exact current file content in the plan. Use ONLY that exact content as old_string. Copy it character-for-character including indentation and whitespace. DO NOT paraphrase or reconstruct it from memory.
-3. If the plan does NOT include the current file content for a file you need to edit, output a NEW FILE block instead (full file) so the orchestrator can apply it safely.
-4. MAX 3 FILES PER RESPONSE. The judge will request the rest in the next iteration.
+3. Never use a NEW FILE block to replace an existing file. If exact current content is missing, report the specific missing snippet; do not invent an OLD snippet or overwrite the file.
+4. Implement the complete plan. A partially implemented phase is not completion of the user task.
 5. TRUST THE PLAN: The planner already analyzed the codebase. Do not add features, imports, or patterns not mentioned in the plan.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -129,7 +129,7 @@ ${SECOND_BRAIN_RULES}
 !! AUTOMATIC FAIL CONDITIONS — check these FIRST:
 1. If the CODER'S OUTPUT contains NO code blocks and NO EDIT blocks → VERDICT: FAIL, SCORE: 0/10
 2. If the CODER'S OUTPUT only says "let me read" or "I'll start by reading" → VERDICT: FAIL, SCORE: 0/10
-3. If the CODER'S OUTPUT contains read_file, write_file or any XML tool tags → VERDICT: FAIL, SCORE: 1/10
+3. If the Coder attempts to invoke unavailable tools instead of returning FILE/EDIT blocks → VERDICT: FAIL, SCORE: 1/10. Legitimate source code may contain tool names; do not reject code solely for mentioning read_file or write_file.
 4. The coder MUST produce actual implementable code. Promises, plans, or narration are NOT code.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -143,7 +143,7 @@ EVALUATION RUBRIC — score each dimension 1-10:
 | Completeness    | Nothing is a placeholder                  | TODOs, unimplemented functions          |
 
 PASS threshold: SCORE ≥ 7.0 AND Correctness ≥ 7 AND Security ≥ 8
-!! ITERATIVE CODING EXCEPTION: If the coder states it is implementing Phase 1 of N, and the code for Phase 1 is complete and correct, do NOT penalize Completeness for the missing later phases. Instead, give a PASS verdict and instruct the Coder to proceed to Phase 2 in the REQUIRED FIXES or SUMMARY.
+!! COMPLETENESS: PASS only when the full requested task is implemented. If only Phase 1 of N is complete, return FAIL and list the remaining phases as REQUIRED FIXES so the Coder continues.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 OUTPUT FORMAT — follow this structure exactly:

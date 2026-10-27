@@ -90,7 +90,9 @@ export async function callRole(
   onChunk?: (chunk: string) => void,
   roleLabel: RoleLabel = 'chat',
   onReasoning?: (chunk: string) => void,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
+  abortSignal?.throwIfAborted();
   const apiKey = resolveApiKey(role, globalConfig);
   const maxTokens = role.maxTokens ?? globalConfig.maxTokens;
   const temperature = role.temperature ?? globalConfig.temperature;
@@ -107,13 +109,13 @@ export async function callRole(
   switch (role.provider) {
     case 'claude':
       return onChunk
-        ? streamClaude(messages, role.model, apiKey, maxTokens, systemPrompt, onChunk, track)
-        : sendClaude(messages, role.model, apiKey, maxTokens, systemPrompt, track);
+        ? streamClaude(messages, role.model, apiKey, maxTokens, systemPrompt, onChunk, track, abortSignal)
+        : sendClaude(messages, role.model, apiKey, maxTokens, systemPrompt, track, abortSignal);
 
     case 'ollama':
       return onChunk
-        ? streamOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature, onChunk)
-        : sendOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature);
+        ? streamOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature, onChunk, abortSignal)
+        : sendOllama(messages, role.model, apiUrl, systemPrompt, maxTokens, temperature, abortSignal);
 
     case 'openai':
     case 'deepseek':
@@ -121,8 +123,8 @@ export async function callRole(
     case 'xai':
     case 'custom':
       return onChunk
-        ? streamOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, onChunk, track, openrouterProvider, undefined, openrouterIgnoreProviders)
-        : sendOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, track, openrouterProvider, openrouterIgnoreProviders);
+        ? streamOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, onChunk, track, openrouterProvider, onReasoning, openrouterIgnoreProviders, abortSignal)
+        : sendOpenAICompat(apiUrl, apiKey, role.provider, role.model, messages, systemPrompt, maxTokens, temperature, globalConfig, track, openrouterProvider, openrouterIgnoreProviders, abortSignal);
 
     default:
       throw new Error(`Unknown provider: ${role.provider}`);
@@ -845,13 +847,14 @@ async function sendClaude(
   maxTokens: number,
   systemPrompt: string,
   track?: TrackFn,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model, max_tokens: maxTokens, system: toClaudeSystem(systemPrompt),
     messages: toClaudeMessages(messages, true),
-  });
+  }, { signal: abortSignal });
   track?.(response.usage.input_tokens, response.usage.output_tokens, 0, response.usage.cache_read_input_tokens ?? 0);
   const block = response.content[0];
   if (block.type !== 'text') throw new Error('Unexpected response type');
@@ -866,6 +869,7 @@ async function streamClaude(
   systemPrompt: string,
   onChunk: (chunk: string) => void,
   track?: TrackFn,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set.');
   const client = new Anthropic({ apiKey });
@@ -873,7 +877,7 @@ async function streamClaude(
   const stream = client.messages.stream({
     model, max_tokens: maxTokens, system: toClaudeSystem(systemPrompt),
     messages: toClaudeMessages(messages, true),
-  });
+  }, { signal: abortSignal });
   for await (const event of stream) {
     if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
       onChunk(event.delta.text);
@@ -898,6 +902,7 @@ async function sendOpenAICompat(
   track?: TrackFn,
   openrouterProvider?: string,
   openrouterIgnoreProviders?: string,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   let oaiMessages: OAIMessage[] = [
@@ -919,6 +924,7 @@ async function sendOpenAICompat(
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     timeout: REQUEST_TIMEOUT_MS,
+    signal: abortSignal,
   });
   const msg = extractFirstChoice(`${baseUrl}/chat/completions`, response.data).message;
   const usage = extractUsageTokens(response.data.usage, msg);
@@ -941,6 +947,7 @@ async function streamOpenAICompat(
   openrouterProvider?: string,
   onReasoning?: (chunk: string) => void,
   openrouterIgnoreProviders?: string,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   if (!apiKey) throw new Error(`API key missing (${baseUrl})`);
   let oaiMessages: OAIMessage[] = [
@@ -965,6 +972,7 @@ async function streamOpenAICompat(
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     responseType: 'stream',
     timeout: REQUEST_TIMEOUT_MS,
+    signal: abortSignal,
   });
   return parseSSEStream(response.data, onChunk, track, onReasoning);
 }
@@ -976,6 +984,7 @@ async function sendOllama(
   systemPrompt: string,
   maxTokens: number,
   temperature: number,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const response = await postWithRetry(
     `${host}/api/chat`,
@@ -988,7 +997,7 @@ async function sendOllama(
       stream: false,
       options: { temperature, num_predict: maxTokens },
     },
-    { timeout: REQUEST_TIMEOUT_MS },
+    { timeout: REQUEST_TIMEOUT_MS, signal: abortSignal },
   );
   return response.data.message.content;
 }
@@ -1001,6 +1010,7 @@ async function streamOllama(
   maxTokens: number,
   temperature: number,
   onChunk: (chunk: string) => void,
+  abortSignal?: AbortSignal,
 ): Promise<string> {
   const response = await postWithRetry(
     `${host}/api/chat`,
@@ -1013,7 +1023,7 @@ async function streamOllama(
       stream: true,
       options: { temperature, num_predict: maxTokens },
     },
-    { responseType: 'stream', timeout: REQUEST_TIMEOUT_MS },
+    { responseType: 'stream', timeout: REQUEST_TIMEOUT_MS, signal: abortSignal },
   );
   let full = '';
   return new Promise((resolve, reject) => {
