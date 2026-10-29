@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { randomUUID } from 'crypto';
 import axios from 'axios';
 import * as http from 'http';
 import * as https from 'https';
@@ -32,6 +33,17 @@ const keepAliveAgentHttps = new https.Agent({ keepAlive: true });
  * the request eventually fails and the agent loop can report an error.
  */
 const REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
+
+/**
+ * xAI's prompt caching is fully automatic (no cache_control markers like
+ * Anthropic) but cache entries live per server, so requests with no routing
+ * hint can bounce between servers and miss a cache another server already
+ * has for the same prefix. xAI's own docs recommend a stable `x-grok-conv-id`
+ * header per conversation to stick to one server. One process-lifetime id is
+ * enough here — every xai call in this run (Planner/Judge/Chat) shares it.
+ * https://docs.x.ai/developers/advanced-api-usage/prompt-caching/maximizing-cache-hits
+ */
+const XAI_CONV_ID = randomUUID();
 
 async function postWithRetry(url: string, data: any, config: any, retries = 2): Promise<any> {
   const mergedConfig = {
@@ -924,7 +936,7 @@ async function sendOpenAICompat(
   if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, provider, config);
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...(provider === 'xai' ? { 'x-grok-conv-id': XAI_CONV_ID } : {}) },
     timeout: REQUEST_TIMEOUT_MS,
     signal: abortSignal,
   });
@@ -971,7 +983,7 @@ async function streamOpenAICompat(
   if (openrouterOpts) body.provider = openrouterOpts;
   applyOpenAICompatProviderOptions(body, provider, config);
   const response = await postWithRetry(`${baseUrl}/chat/completions`, body, {
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', ...(provider === 'xai' ? { 'x-grok-conv-id': XAI_CONV_ID } : {}) },
     responseType: 'stream',
     timeout: REQUEST_TIMEOUT_MS,
     signal: abortSignal,
