@@ -689,6 +689,48 @@ function listRecursive(base: string, dir: string, depth: number, maxDepth: numbe
 // Tehlikeli/yıkıcı komut kalıpları — agent asla bunları çalıştıramaz
 let autoAllowDangerousCommands = false;
 
+// Colab gibi gözetimsiz ortamlarda bu inquirer onay promptu süresiz askıda
+// kalıp görevi tıkıyordu — kullanıcı yanındaysa normal şekilde seçer, kimse
+// yoksa N dakika sonra "HER ŞEYE izin ver" otomatik seçilir. Mesaja canlı
+// geri sayım (sayaç) basılır.
+const APPROVAL_TIMEOUT_MS = Math.max(10_000, Number(process.env.DEHA_APPROVAL_TIMEOUT_MS) || 5 * 60_000);
+
+async function promptWithTimeout<T extends { action: string }>(question: Record<string, unknown>, timeoutValue: string): Promise<T> {
+  const inquirer = await import('inquirer').then(m => m.default || m);
+  const baseMessage = question.message as string;
+  const deadline = Date.now() + APPROVAL_TIMEOUT_MS;
+  const promptPromise = inquirer.prompt([question]) as unknown as Promise<T> & { ui: { activePrompt?: { opt: { message: string }; render: () => void }; close: () => void } };
+  const ui = promptPromise.ui;
+
+  return new Promise<T>(resolve => {
+    let settled = false;
+    const finish = (value: T) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(interval);
+      resolve(value);
+    };
+    const tick = () => {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        try { ui?.close(); } catch { /* zaten kapanmış olabilir */ }
+        logger.write(chalk.yellow(`\n⏱ ${Math.round(APPROVAL_TIMEOUT_MS / 60_000)} dakika içinde yanıt verilmedi — "HER ŞEYE izin ver" otomatik seçildi.\n`));
+        finish({ action: timeoutValue } as T);
+        return;
+      }
+      if (ui?.activePrompt) {
+        const mins = Math.floor(remaining / 60_000);
+        const secs = Math.floor((remaining % 60_000) / 1000).toString().padStart(2, '0');
+        ui.activePrompt.opt.message = `${baseMessage}\n${chalk.dim(`⏳ Yanıt verilmezse otomatik "HER ŞEYE izin ver": ${mins}:${secs}`)}`;
+        try { ui.activePrompt.render(); } catch { /* prompt henüz hazır olmayabilir */ }
+      }
+    };
+    const interval = setInterval(tick, 1000);
+    tick();
+    promptPromise.then(answers => finish(answers)).catch(() => finish({ action: timeoutValue } as T));
+  });
+}
+
 const FORBIDDEN_PATTERNS = [
   /(\|\s*)?rm\s+(-rf?\s+)?(\/(\s|$)|\/\*|~(\s|$)|\$HOME|\$PWD|\.\s*$)/i,
   /(\|\s*)?dd\s+if=/i,
@@ -742,12 +784,10 @@ async function ensureSafeFileAccess(filePath: string, operationName: string): Pr
   if (!isSensitive) return;
   
   if (!autoAllowDangerousCommands) {
-    const inquirer = await import('inquirer').then(m => m.default || m);
-    const { action } = await inquirer.prompt([
-      {
+    const { action } = await promptWithTimeout<{ action: string }>({
         type: 'list',
         name: 'action',
-        message: chalk.yellow(`\n⚠️ HASSAS DOSYA DEĞİŞİKLİĞİ TESPİT EDİLDİ:\n`) + 
+        message: chalk.yellow(`\n⚠️ HASSAS DOSYA DEĞİŞİKLİĞİ TESPİT EDİLDİ:\n`) +
                  chalk.white(`   Dosya: `) + chalk.cyan(filePath) + '\n' +
                  chalk.white(`   İşlem: `) + chalk.red(operationName) + '\n\n' +
                  chalk.bold('Ajan bu dosyanın içeriğini değiştirmek istiyor. İzin veriyor musunuz?'),
@@ -756,8 +796,7 @@ async function ensureSafeFileAccess(filePath: string, operationName: string): Pr
           { name: '✅ Sadece bu seferlik izin ver', value: 'once' },
           { name: '🔥 Bu oturum boyunca HER ŞEYE izin ver (Bir daha sorma)', value: 'always' },
         ],
-      }
-    ]);
+      }, 'always');
 
     if (action === 'cancel') {
       throw new Error(`❌ Kullanıcı güvenlik nedeniyle '${filePath}' dosyasına '${operationName}' işlemini reddetti.`);
@@ -774,12 +813,10 @@ async function ensureSafeShellCommand(command: string): Promise<void> {
   const check = isSafeCommand(command);
   if (!check.safe) {
     if (!autoAllowDangerousCommands) {
-      const inquirer = await import('inquirer').then(m => m.default || m);
-      const { action } = await inquirer.prompt([
-        {
+      const { action } = await promptWithTimeout<{ action: string }>({
           type: 'list',
           name: 'action',
-          message: chalk.yellow(`\n⚠️ TEHLİKELİ KOMUT TESPİT EDİLDİ:\n`) + 
+          message: chalk.yellow(`\n⚠️ TEHLİKELİ KOMUT TESPİT EDİLDİ:\n`) +
                    chalk.white(`   Komut: `) + chalk.cyan(command) + '\n' +
                    chalk.white(`   Sebep: `) + chalk.red(check.reason) + '\n\n' +
                    chalk.bold('Bu komutu çalıştırmak istiyor musunuz?'),
@@ -788,8 +825,7 @@ async function ensureSafeShellCommand(command: string): Promise<void> {
             { name: '✅ Sadece bu seferlik izin ver', value: 'once' },
             { name: '🔥 Bu oturum boyunca HER ŞEYE izin ver (Bir daha sorma)', value: 'always' },
           ],
-        }
-      ]);
+        }, 'always');
 
       if (action === 'cancel') {
         throw new Error(`❌ Kullanıcı güvenlik nedeniyle bu komutu reddetti.\nAgent shell komutları sınırlıdır. Dosya işlemleri için write_file/edit_file/read_file tool'larını kullanın.`);
@@ -1009,12 +1045,10 @@ async function toolGit(inp: { command: string; cwd?: string }): Promise<string> 
   const isSafe = (safeCommands.includes(baseCmd) || readOnlyBranch) && !args.some(arg => /^--output(?:=|$)/.test(arg));
   
   if (!isSafe && !autoAllowDangerousCommands) {
-      const inquirer = await import('inquirer').then(m => m.default || m);
-      const { action } = await inquirer.prompt([
-        {
+      const { action } = await promptWithTimeout<{ action: string }>({
           type: 'list',
           name: 'action',
-          message: chalk.yellow(`\n⚠️ GIT DEĞİŞİKLİK KOMUTU:\n`) + 
+          message: chalk.yellow(`\n⚠️ GIT DEĞİŞİKLİK KOMUTU:\n`) +
                    chalk.white(`   Komut: `) + chalk.cyan(`git ${cmd}`) + '\n\n' +
                    chalk.bold('Bu işlemi onaylıyor musunuz?'),
           choices: [
@@ -1022,8 +1056,7 @@ async function toolGit(inp: { command: string; cwd?: string }): Promise<string> 
             { name: '✅ İzin ver', value: 'once' },
             { name: '🔥 Her zaman izin ver', value: 'always' },
           ],
-        }
-      ]);
+        }, 'always');
 
       if (action === 'cancel') {
         throw new Error(`❌ Kullanıcı git işlemini iptal etti.`);

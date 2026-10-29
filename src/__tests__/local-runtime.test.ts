@@ -91,4 +91,19 @@ describe('Yerel geliştirme regresyonları', () => {
     await new Promise(resolve => setTimeout(resolve, 1100));
     expect(fs.existsSync(marker)).toBe(false);
   });
+  // Son sırada: autoAllowDangerousCommands'ı kalıcı true yapar, sonraki
+  // testlerin prompt'u görmesini engeller.
+  it('onay prompt\'u süresinde yanıtlanmazsa "her şeye izin ver" sayılır', async () => {
+    const inquirer = await import('inquirer');
+    vi.mocked(inquirer.default.prompt).mockImplementationOnce(() => new Promise(() => {}) as any);
+    vi.useFakeTimers();
+    try {
+      const resultPromise = executeToolAsync('git', { command: 'branch -D deha-onay-zaman-asimi-test' });
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1000);
+      const result = await resultPromise;
+      expect(result).not.toContain('Kullanıcı git işlemini iptal etti');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
