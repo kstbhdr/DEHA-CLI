@@ -104,6 +104,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/queue [run|clear|remove <n>]')}     Bekleyen mesajları göster / düzenle
   ${chalk.cyan('/jobs [wait|cancel <id>]')}       Arka plan işlerini göster / yönet
   ${chalk.cyan('/guard [reset]')}               Keşif bütçesi (discovery limit) durumunu göster / elle sıfırla
+  ${chalk.cyan('/ask <soru>')}               Çalışan görevi kesmeden, ne yaptığı hakkında yan soru sor
   ${chalk.cyan('/exit')}                         Çıkış yap
 
 ${chalk.bold('@dosya.ts sözdizimi:')}
@@ -114,7 +115,7 @@ const COMMAND_SUGGESTIONS = [
   '/config', '/plan', '/code', '/task', '/coderchat',
   '/help', '/new', '/clear', '/model', '/thinking', '/security', '/agent', '/build', '/file', '/architecture',
   '/mcp', '/history', '/oldconversations', '/run', '/python', '/smoketest', '/screenshot',
-  '/jobs', '/queue', '/guard', '/vision', '/plannerchat', '/judgechat', '/smart', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
+  '/jobs', '/queue', '/guard', '/ask', '/vision', '/plannerchat', '/judgechat', '/smart', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
 
 const PIPELINE_HELP = '\n/config: rol modelleri, aşamalar, token bütçeleri\n/build --checkpoints <görev>: Planner onaylı aşamalar + araçlı Coder\n/plan <görev>: planı hazırla ve kaydet (checkpoint profilinde Coder keşfi dahil)\n/code [görev]: yeni görevde yalnız Coder; kayıtlı checkpoint planında Planner denetimi sürer\n/task: planı göster (API yok)\n/coderchat: Coder modeli ile araçlı kodlama\n/build --no-judge <görev>: bu görevde Judge kapalı\n/smart: açıkken normal sohbet sürer, ama kod/düzeltme/uygulama isteyen mesajlar otomatik Planner+Coder checkpoint akışına yönlendirilir\n';
@@ -134,7 +135,7 @@ export async function interactive(
     chalk.dim('  |  Model: ') + chalk.yellow(getActiveModel(config)) + '\n',
   );
   logger.write(chalk.dim('Çıkmak için /exit  •  Yardım için /help\n'));
-  logger.write(chalk.dim('Çalışırken gönderdiğin mesajlar sıraya alınır  •  Sırayı görmek için /queue\n'));
+  logger.write(chalk.dim('Çalışırken gönderdiğin mesajlar sıraya alınır  •  Sırayı görmek için /queue  •  Kesmeden yan soru için /ask\n'));
 
   startServices().then(s => {
     const parts: string[] = [];
@@ -269,6 +270,26 @@ export async function interactive(
     } catch (err: unknown) {
       if (!abortController.signal.aborted) logger.error(chalk.red('\n✗ Pipeline hatası: ') + (err instanceof Error ? err.message : String(err)) + '\n');
     } finally { activeAbortController = null; }
+  };
+
+  // Ana görev (pipeline/agent) çalışırken de kuyruğa girmeden hemen cevaplanır —
+  // kullanıcı işi kesmeden "ne yapıyorsun / neden böyle yaptın" gibi yan sorular sorabilir.
+  const handleAskCommand = async (question: string) => {
+    if (!question.trim()) { logger.write(chalk.yellow('  Kullanım: /ask <soru>\n')); return; }
+    const task = getActiveTask();
+    const statusBlock = task && task.taskState === 'ACTIVE'
+      ? `Şu anda arka planda çalışan bir görev var.\nOrijinal istek: ${task.originalUserRequest}\nŞu anki hedef: ${task.currentObjective}\n${task.lastMeaningfulToolResult ? `Son araç çıktısı: ${task.lastMeaningfulToolResult}\n` : ''}`
+      : 'Şu anda çalışan bir görev yok.';
+    logger.write(chalk.magenta('\n  💬 yan soru düşünülüyor...\n'));
+    try {
+      const answer = await sendMessage([{ role: 'user', content:
+        `Kullanıcı, çalışmakta olan ana görevi KESMEDEN sana yan bir soru soruyor. Bu soruyu kısaca cevapla; ana görevi değiştirme, durdurma veya onun yerine geçme — sadece bilgi ver.\n\n${statusBlock}\nKullanıcının sorusu: ${question}` },
+      ], config);
+      const clean = answer.replace(/\[STATUS:\s*(?:COMPLETE|BLOCKED|CONTINUE)\]/gi, '').trim();
+      logger.write(chalk.magenta('  💬 YAN SORU CEVABI:\n') + formatResponse(clean) + '\n');
+    } catch (err) {
+      logger.error('Yan soru cevaplanamadı: ' + (err instanceof Error ? err.message : String(err)));
+    }
   };
 
   const processInput = async (input: string) => {
@@ -592,6 +613,12 @@ export async function interactive(
           chalk.dim('  Sıfırlamak için: /guard reset'));
       }
       prompt(); return;
+    }
+    if (/^\/ask(?:\s|$)/.test(trimmed)) {
+      void handleAskCommand(trimmed.slice(4).trim())
+        .catch(error => logger.error(String(error.message)))
+        .finally(prompt);
+      return;
     }
     if (/^\/queue(?:\s|$)/.test(trimmed)) {
       const args = trimmed.split(/\s+/).slice(1);
