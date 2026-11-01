@@ -6,7 +6,7 @@ const READ_TOOLS = new Set(['read_file', 'cat', 'list_dir', 'ls', 'search_in_fil
 const WRITE_TOOLS = new Set(['write_file', 'edit_file', 'insert_lines', 'delete_lines']);
 export const IMPLEMENTATION_GUARD_PROMPT = `
 [IMPLEMENTATION EXECUTION POLICY]
-This task requires implementation, not an unlimited architecture audit. The CLI enforces a bounded discovery phase; tool results and <task> report its state. After discovery is exhausted, broad/repeated inspections and brain view/set_plan are rejected. Implement the next minimal, testable part using evidence already gathered. Do not bypass a rejection through a shell alias or Python.
+This task requires implementation, not an unlimited architecture audit. The CLI enforces a bounded discovery phase; tool results and <task> report its state. After discovery is exhausted, broad/repeated inspections and brain view are rejected — but brain set_plan/rewrite/update_step always work, so keep the plan current even once discovery is closed. Implement the next minimal, testable part using evidence already gathered. Do not bypass a rejection through a shell alias or Python.
 You may read an exact file/range needed for the next edit or a concrete runtime error: read_file with a specific path and a purpose explaining that edit/error. Two focused reads are allowed initially and after each successful code/data file edit. Use read_file to check whether a new file exists; a missing file may be created with write_file. No need to repeat directory discovery before creating it.
 Write working notes if requested, but notes/plan updates alone do not count as implementation. Mark completed brain steps with update_step. Never create dummy files merely to satisfy the policy. If the next real edit is impossible, report ONE concrete missing file/function/error as a blocker. Do not claim the requested implementation or benchmark is complete based only on setup/tests of the old code.`;
 
@@ -28,7 +28,7 @@ export function requiresImplementation(request: string): boolean {
 
 function inspection(name: string, input: Record<string, unknown>): boolean {
   if (READ_TOOLS.has(name)) return true;
-  if (name === 'brain') return ['view', 'set_plan'].includes(String(input.action));
+  if (name === 'brain') return input.action === 'view';
   if (name === 'fetch_url') return !input.method || String(input.method).toUpperCase() === 'GET';
   if (name === 'git') return /^\s*(?:git\s+)?(?:status|log|show|diff|ls-files|blame)\b/.test(String(input.command));
   if (['run_shell', 'run_terminal', 'start_job', 'run_python'].includes(name)) {

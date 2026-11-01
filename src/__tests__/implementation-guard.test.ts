@@ -41,7 +41,8 @@ describe('Runtime implementation phase', () => {
   it('notes/plan rewrites do not unlock discovery; successful code edits allow targeted reads', () => {
     const gate = new ImplementationGuard(1); gate.before('read_file', { path: 'source.py' });
     gate.after('write_file', { path: 'WORKING_NOTES.md' }, 'Dosya yazıldı');
-    expect(gate.before('brain', { action: 'set_plan', steps: ['Read again'] })).toContain('[DISCOVERY LIMIT]');
+    expect(gate.before('brain', { action: 'set_plan', steps: ['Read again'] })).toBeUndefined();
+    expect(gate.before('brain', { action: 'view' })).toContain('[DISCOVERY LIMIT]');
     gate.after('write_file', { path: 'backend.py' }, 'HATA: permission denied');
     expect(getActiveTask()?.implementation?.changedFiles).toEqual([]);
     gate.after('write_file', { path: 'backend.py' }, 'Dosya yazıldı');
