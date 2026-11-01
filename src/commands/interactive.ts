@@ -51,6 +51,7 @@ import {
   getPendingInputs,
   setPendingInputs,
   getActiveTask,
+  updateActiveTask,
   clearActiveTask,
   flushOnExit,
   hydrateSession,
@@ -102,6 +103,7 @@ ${chalk.bold('Komutlar:')}
   ${chalk.cyan('/judge <dosya> <görev>')}   Sadece Judge rolünü çalıştırarak bir dosyayı değerlendir
   ${chalk.cyan('/queue [run|clear|remove <n>]')}     Bekleyen mesajları göster / düzenle
   ${chalk.cyan('/jobs [wait|cancel <id>]')}       Arka plan işlerini göster / yönet
+  ${chalk.cyan('/guard [reset]')}               Keşif bütçesi (discovery limit) durumunu göster / elle sıfırla
   ${chalk.cyan('/exit')}                         Çıkış yap
 
 ${chalk.bold('@dosya.ts sözdizimi:')}
@@ -112,7 +114,7 @@ const COMMAND_SUGGESTIONS = [
   '/config', '/plan', '/code', '/task', '/coderchat',
   '/help', '/new', '/clear', '/model', '/thinking', '/security', '/agent', '/build', '/file', '/architecture',
   '/mcp', '/history', '/oldconversations', '/run', '/python', '/smoketest', '/screenshot',
-  '/jobs', '/queue', '/vision', '/plannerchat', '/judgechat', '/smart', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
+  '/jobs', '/queue', '/guard', '/vision', '/plannerchat', '/judgechat', '/smart', '/pin', '/unpin', '/stats', '/test', '/judge', '/exit',
 ];
 
 const PIPELINE_HELP = '\n/config: rol modelleri, aşamalar, token bütçeleri\n/build --checkpoints <görev>: Planner onaylı aşamalar + araçlı Coder\n/plan <görev>: planı hazırla ve kaydet (checkpoint profilinde Coder keşfi dahil)\n/code [görev]: yeni görevde yalnız Coder; kayıtlı checkpoint planında Planner denetimi sürer\n/task: planı göster (API yok)\n/coderchat: Coder modeli ile araçlı kodlama\n/build --no-judge <görev>: bu görevde Judge kapalı\n/smart: açıkken normal sohbet sürer, ama kod/düzeltme/uygulama isteyen mesajlar otomatik Planner+Coder checkpoint akışına yönlendirilir\n';
@@ -571,6 +573,25 @@ export async function interactive(
         .catch(error => logger.error(String(error.message)))
         .finally(prompt);
       return;
+    }
+    if (/^\/guard(?:\s|$)/.test(trimmed)) {
+      const arg = trimmed.slice(6).trim();
+      const task = getActiveTask();
+      const impl = task?.implementation;
+      if (arg === 'reset') {
+        if (!task) logger.write(chalk.yellow('  Aktif görev yok, sıfırlanacak bir şey yok.'));
+        else {
+          updateActiveTask({ implementation: undefined });
+          logger.write(chalk.green('  ✓ Keşif bütçesi sıfırlandı.') + chalk.dim(' Şu an çalışan bir tur varsa onu etkilemez; bir sonraki mesajından itibaren geçerli olur.'));
+        }
+      } else if (!impl) {
+        logger.write(chalk.dim('  Keşif bütçesi devrede değil (henüz hiç implementasyon görevi başlamadı ya da guard kapalı).'));
+      } else {
+        logger.write(
+          `  Faz: ${impl.phase === 'discovery' ? 'keşif' : 'implementasyon'}  •  Keşif: ${impl.discoveryCalls}/${impl.budget}  •  Reddedilen: ${impl.deniedCalls}/6  •  Odaklı okuma hakkı: ${impl.focusedReads}  •  Değişen dosya: ${impl.changedFiles.length}\n` +
+          chalk.dim('  Sıfırlamak için: /guard reset'));
+      }
+      prompt(); return;
     }
     if (/^\/queue(?:\s|$)/.test(trimmed)) {
       const args = trimmed.split(/\s+/).slice(1);
