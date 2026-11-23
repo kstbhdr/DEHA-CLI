@@ -129,6 +129,7 @@ export async function interactive(
   config: DehaConfig,
   initialHistory: Message[] = [],
   initialConversationId?: string,
+  options: { resume?: boolean } = {},
 ): Promise<void> {
   logger.write(BANNER);
   logger.write(
@@ -221,11 +222,13 @@ export async function interactive(
   };
   pasteInput.stream.on('keypress', onGlobalKeypress);
 
-  const restored = await initializeInteractiveSession(process.cwd(), initialHistory, initialConversationId);
+  const restored = await initializeInteractiveSession(process.cwd(), initialHistory, initialConversationId,
+    { resume: options.resume || initialHistory.length > 0 });
   const history: Message[] = [...restored.messages];
   let conversationId: string | null = restored.conversationId;
   if (sessionScope()) logger.write(chalk.dim(`  🔒 İzole oturum: ${sessionScope()} (bu dizinde başka bir deha da çalışıyor; brain/görev ayrı)\n`));
   if (history.length) logger.write(chalk.dim(`  ↩ ${history.length} mesaj ve kayıtlı görev bağlamı yüklendi\n`));
+  else if (restored.previousMessages) logger.write(chalk.dim(`  ✦ Yeni sohbet. Önceki sohbet (${restored.previousMessages} mesaj) kayıtlı — devam için: deha --continue  veya  /oldconversations\n`));
 
   // DEHA_SECOND_BRAIN_PATH env varı tanımlıysa otomatik yükle
   const secondBrainPath = process.env.DEHA_SECOND_BRAIN_PATH;

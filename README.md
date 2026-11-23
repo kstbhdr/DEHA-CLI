@@ -72,8 +72,11 @@ JUDGE_MODEL=grok-3
 Interactive Chat keeps its own coding tools and model. `/config` selects independent role models, optional stages and token budgets. The **Basit** profile uses Planner checkpoints and a tool-using Coder: each phase must be approved before the next opens. Use `/build --checkpoints <task>` to try it, or `/code` to resume the saved plan. See [pipeline behavior and verification](PIPELINE.md).
 
 ```bash
-# Interactive mode
+# Interactive mode (her açılış yeni, boş sohbet)
 deha
+
+# Bu dizindeki son sohbete kaldığı yerden devam et (görev + brain + mesajlar)
+deha --continue
 
 # One-shot question
 deha chat "How does async/await work in Python?"

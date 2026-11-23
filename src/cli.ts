@@ -38,7 +38,8 @@ export class DehaCLI {
       .version(DEHA_VERSION_LABEL, '-v, --version', 'Sürümü göster')
       .option('-p, --provider <provider>', 'Provider: claude|openai|deepseek|ollama|openrouter|xai|custom')
       .option('-k, --api-key <key>', 'API anahtarını doğrudan gir')
-      .option('-u, --url <url>', 'Custom API endpoint URL (custom provider için)');
+      .option('-u, --url <url>', 'Custom API endpoint URL (custom provider için)')
+      .option('--continue', 'Bu dizindeki son sohbete kaldığı yerden devam et');
 
     // ── deha chat "soru" ──────────────────────────────────────────────────
     this.program
@@ -348,7 +349,7 @@ export class DehaCLI {
     // ── deha (default: interaktif mod) ────────────────────────────────────
     this.program.action(async () => {
       const config = this.buildConfig();
-      await interactive(config);
+      await interactive(config, [], undefined, { resume: !!this.program.opts().continue });
     });
   }
 

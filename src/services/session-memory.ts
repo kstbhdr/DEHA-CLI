@@ -215,6 +215,8 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf-8')) as SessionState;
       if (Array.isArray(saved.messages) && shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
+        // Hiç kullanılmadan kapanan yeni sohbet, önceki sohbetin checkpoint'ini gölgelemesin.
+        if (isEmptySession(saved) && saved.conversationLifecycle === 'CREATED') break;
         _state = { ...emptySession(resolvedDir), ...saved, workDir: resolvedDir };
         return;
       }
@@ -244,6 +246,20 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
   }
 
   _state = emptySession(resolvedDir);
+}
+
+/**
+ * Yeni, boş sohbet (düz `deha` açılışı). resetSession'dan farkı: önceki sohbeti
+ * "bilerek temizlendi" diye işaretlemez ve Redis'i silmez — önceki sohbet
+ * checkpoint'te durur, `deha --continue` ile geri gelir.
+ */
+export function startFreshSession(workDir: string = process.cwd()): void {
+  _state = { ...emptySession(path.resolve(workDir)), workspace: null };
+  _writeWarmBuffer();
+}
+
+function isEmptySession(s: Partial<SessionState>): boolean {
+  return !s.messages?.length && !s.activeTask && !s.pendingInputs?.length;
 }
 
 function emptySession(workDir: string): SessionState {
@@ -645,7 +661,8 @@ export function clearPinnedMessages(): void {
 export function setWorkDir(dir: string): void {
   _state.workDir = dir;
   _writeWarmBuffer();
-  if (!_state.summary && dir && fs.existsSync(dir)) {
+  // Özet dosyası önceki sohbetin aktif görevini taşır; yeni/boş sohbete aktarma.
+  if (!_state.summary && _state.messages.length > 0 && dir && fs.existsSync(dir)) {
     try {
       const summaryPath = path.join(dir, summaryFileName());
       if (fs.existsSync(summaryPath)) {

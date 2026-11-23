@@ -1,15 +1,25 @@
 import type { Message } from './ai-service';
 import { createConversationId, loadConversationSnapshot } from '../conversations/manager';
-import { claimSessionSlot, getSessionSnapshot, hydrateSession, loadSession, resetSession, setConversationId, setWorkDir, setActiveTask } from './session-memory';
+import { claimSessionSlot, startFreshSession, getSessionSnapshot, hydrateSession, loadSession, resetSession, setConversationId, setWorkDir, setActiveTask } from './session-memory';
 import { recoverBrainFile } from './sectioned-context/store';
 
 /** Load before ANY setter: setters persist and can overwrite the checkpoint. */
 export async function initializeInteractiveSession(
   workDir: string, transcript: Message[] = [], conversationId?: string,
-): Promise<{ messages: Message[]; conversationId: string }> {
+  options: { resume?: boolean } = { resume: true },
+): Promise<{ messages: Message[]; conversationId: string; previousMessages?: number }> {
   // Aynı dizinde paralel çalışan deha süreçleri birbirinin görev/brain'ini yüklemesin.
   claimSessionSlot(workDir);
   await loadSession(workDir);
+  if (!options.resume && transcript.length === 0) {
+    // Düz `deha` = yeni sohbet. Önceki sohbet checkpoint'te kalır
+    // (deha --continue / /oldconversations / deha resume <id> ile döner).
+    const previousMessages = getSessionSnapshot().messages.length;
+    startFreshSession(workDir);
+    const id = conversationId || createConversationId();
+    setConversationId(id);
+    return { messages: [], conversationId: id, previousMessages };
+  }
   const warm = getSessionSnapshot();
   let restoreLegacyBrain = warm.workspace === undefined && warm.conversationLifecycle !== 'EXPLICITLY CLEARED' && !!(warm.messages.length || warm.activeTask);
   if (transcript.length > 0) {
