@@ -183,14 +183,14 @@ DEHA_CTX_RATIOS=5,15,10,70     # görev, plan, değişiklik, tool
 
 ### Aynı dizinde paralel ajanlar
 
-Session buffer, Redis anahtarı ve `brain.md` varsayılan olarak proje dizinine göre anahtarlanır. Aynı dizinde (örn. aynı Colab proje klasörü) birden fazla `deha` örneğini aynı anda çalıştırırsan, hepsi aynı dosyayı paylaşır ve birinin görevi/brain'i diğerine sızar. Her terminale farklı bir scope vererek izole et:
+Aynı dizinde (örn. aynı Colab proje klasörü) aynı anda birden fazla `deha` açarsan her süreç **otomatik olarak** kendi slotunu alır (`.deha/locks/slot-N.pid`, PID kilidi). İlk süreç slot 1'i (`session-buffer.json`, `brain.md`, `.deha_summary.md`) kullanır; 2., 3. süreç `slot2`, `slot3` dosyalarını (`brain.slot2.md` …) kullanır. Görev, brain, discovery guard ve proje özeti birbirine sızmaz. Süreç kapanınca kilit bırakılır, çöken süreçlerin kilitleri devralınır; tek ajan yeniden açıldığında eskisi gibi kaldığı yerden devam eder.
+
+Hangi terminalin hangi slotu alacağını sabitlemek istersen (yeniden başlatınca slotlar yer değiştirmesin diye):
 
 ```bash
 DEHA_SESSION_SCOPE=agent1 deha   # terminal 1
 DEHA_SESSION_SCOPE=agent2 deha   # terminal 2
 ```
-
-Scope verilmezse (çoğu kullanım) davranış değişmez — tek ajan aynı dizinde yeniden açıldığında eskisi gibi devam eder.
 
 ## Güvenlik Filtresi
 

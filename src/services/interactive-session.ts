@@ -1,12 +1,14 @@
 import type { Message } from './ai-service';
 import { createConversationId, loadConversationSnapshot } from '../conversations/manager';
-import { getSessionSnapshot, hydrateSession, loadSession, resetSession, setConversationId, setWorkDir, setActiveTask } from './session-memory';
+import { claimSessionSlot, getSessionSnapshot, hydrateSession, loadSession, resetSession, setConversationId, setWorkDir, setActiveTask } from './session-memory';
 import { recoverBrainFile } from './sectioned-context/store';
 
 /** Load before ANY setter: setters persist and can overwrite the checkpoint. */
 export async function initializeInteractiveSession(
   workDir: string, transcript: Message[] = [], conversationId?: string,
 ): Promise<{ messages: Message[]; conversationId: string }> {
+  // Aynı dizinde paralel çalışan deha süreçleri birbirinin görev/brain'ini yüklemesin.
+  claimSessionSlot(workDir);
   await loadSession(workDir);
   const warm = getSessionSnapshot();
   let restoreLegacyBrain = warm.workspace === undefined && warm.conversationLifecycle !== 'EXPLICITLY CLEARED' && !!(warm.messages.length || warm.activeTask);

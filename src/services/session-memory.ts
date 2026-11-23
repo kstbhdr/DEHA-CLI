@@ -23,7 +23,65 @@ import { latestProjectCheckpoint, writeCheckpoint } from '../conversations/check
  * (paylaşımlı, tek-ajan) davranış değişmeden kalır.
  */
 export function sessionScope(): string {
-  return (process.env.DEHA_SESSION_SCOPE || '').trim();
+  return (process.env.DEHA_SESSION_SCOPE || '').trim() || _claimedScope;
+}
+
+let _claimedScope = '';
+let _claimedLock: string | null = null;
+
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * DEHA_SESSION_SCOPE verilmemişse aynı dizindeki her canlı deha sürecine
+ * otomatik, ayrı bir slot verir (PID kilidi: <workDir>/.deha/locks/slot-N.pid).
+ * İlk süreç slot 1'i (eski dosya adları: session-buffer.json, brain.md) alır —
+ * tek ajan yeniden açıldığında eskisi gibi kaldığı yerden devam eder. Aynı anda
+ * açılan 2., 3. ... süreç slot2, slot3 ... olur ve kendi buffer/brain/özetini
+ * kullanır. Süreç kapanınca kilit bırakılır; ölü süreçlerin kilitleri devralınır.
+ */
+export function claimSessionSlot(workDir: string = process.cwd()): string {
+  if ((process.env.DEHA_SESSION_SCOPE || '').trim()) return sessionScope();
+  if (_claimedLock) return _claimedScope;
+  const lockDir = path.join(getSessionBufferDir(workDir), 'locks');
+  try { fs.mkdirSync(lockDir, { recursive: true }); } catch { return _claimedScope; }
+  const take = (file: string, slot: number): string => {
+    _claimedLock = file;
+    _claimedScope = slot === 1 ? '' : `slot${slot}`;
+    _state.scope = _claimedScope;
+    process.once('exit', releaseSessionSlot);
+    return _claimedScope;
+  };
+  for (let slot = 1; slot <= 64; slot++) {
+    const file = path.join(lockDir, `slot-${slot}.pid`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        fs.writeFileSync(file, String(process.pid), { flag: 'wx' });
+        return take(file, slot);
+      } catch {
+        let owner = NaN;
+        try { owner = parseInt(fs.readFileSync(file, 'utf-8'), 10); } catch { /* yarışta silinmiş olabilir */ }
+        if (owner === process.pid) return take(file, slot); // modül yeniden yüklendi, aynı süreç
+        if (pidAlive(owner)) break; // slot dolu → sonrakine geç
+        try { fs.unlinkSync(file); } catch { /* başka süreç devraldı */ }
+      }
+    }
+  }
+  return _claimedScope;
+}
+
+export function releaseSessionSlot(): void {
+  if (!_claimedLock) return;
+  try { if (fs.readFileSync(_claimedLock, 'utf-8').trim() === String(process.pid)) fs.unlinkSync(_claimedLock); } catch { }
+  _claimedLock = null;
+}
+
+/** Proje özeti (.deha_summary.md) de slot'a özeldir; içinde aktif görev yazar. */
+function summaryFileName(): string {
+  const scope = sessionScope();
+  return scope ? `.deha_summary.${scope}.md` : '.deha_summary.md';
 }
 
 export function getSessionBufferDir(workDir: string = _state?.workDir || process.cwd()): string {
@@ -589,7 +647,7 @@ export function setWorkDir(dir: string): void {
   _writeWarmBuffer();
   if (!_state.summary && dir && fs.existsSync(dir)) {
     try {
-      const summaryPath = path.join(dir, '.deha_summary.md');
+      const summaryPath = path.join(dir, summaryFileName());
       if (fs.existsSync(summaryPath)) {
         _state.summary = fs.readFileSync(summaryPath, 'utf-8').replace(/^# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: .*\n\n/, '');
       }
@@ -699,7 +757,7 @@ export async function summarizeOld(
       : truncateText(`${stickyContext}${newSummary}`, MAX_SUMMARY_CHARS);
 
     if (_state.workDir && fs.existsSync(_state.workDir)) {
-      fs.writeFileSync(path.join(_state.workDir, '.deha_summary.md'), `# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
+      fs.writeFileSync(path.join(_state.workDir, summaryFileName()), `# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
     }
 
     _state.messages = msgs.slice(-minHot);

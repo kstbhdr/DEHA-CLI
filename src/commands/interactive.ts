@@ -60,6 +60,7 @@ import {
   clearPinnedMessages,
   addArchitectureFile,
   clearArchitectureFiles,
+  sessionScope,
 } from '../services/session-memory';
 import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
@@ -223,6 +224,7 @@ export async function interactive(
   const restored = await initializeInteractiveSession(process.cwd(), initialHistory, initialConversationId);
   const history: Message[] = [...restored.messages];
   let conversationId: string | null = restored.conversationId;
+  if (sessionScope()) logger.write(chalk.dim(`  🔒 İzole oturum: ${sessionScope()} (bu dizinde başka bir deha da çalışıyor; brain/görev ayrı)\n`));
   if (history.length) logger.write(chalk.dim(`  ↩ ${history.length} mesaj ve kayıtlı görev bağlamı yüklendi\n`));
 
   // DEHA_SECOND_BRAIN_PATH env varı tanımlıysa otomatik yükle
