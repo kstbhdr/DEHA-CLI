@@ -12,7 +12,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getWorkspaceContextRaw, setWorkspaceContextRaw, getWorkDir } from '../session-memory';
+import { getWorkspaceContextRaw, setWorkspaceContextRaw, getWorkDir, sessionScope } from '../session-memory';
+
+function brainFileName(): string {
+  const scope = sessionScope();
+  return scope ? `brain.${scope}.md` : 'brain.md';
+}
 
 export type StepStatus = 'todo' | 'doing' | 'done' | 'blocked';
 
@@ -117,7 +122,7 @@ export function resetWorkspace(): void {
 /** Migrate surviving brain.md from older sessions that lost the JSON workspace. */
 export function recoverBrainFile(): boolean {
   try {
-    const raw = fs.readFileSync(path.join(getWorkDir(), '.deha', 'brain.md'), 'utf-8');
+    const raw = fs.readFileSync(path.join(getWorkDir(), '.deha', brainFileName()), 'utf-8');
     if (!raw.startsWith('# DEHA Brain')) return false;
     const brain = emptyWorkspace().brain;
     let section = '';
@@ -142,6 +147,6 @@ export function writeBrainFile(markdown: string): void {
   try {
     const dir = path.join(getWorkDir() || process.cwd(), '.deha');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'brain.md'), markdown, 'utf-8');
+    fs.writeFileSync(path.join(dir, brainFileName()), markdown, 'utf-8');
   } catch { /* best-effort */ }
 }

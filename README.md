@@ -181,6 +181,17 @@ DEHA_SECTIONED_CONTEXT=1       # 0 = eski davranış
 DEHA_CTX_RATIOS=5,15,10,70     # görev, plan, değişiklik, tool
 ```
 
+### Aynı dizinde paralel ajanlar
+
+Session buffer, Redis anahtarı ve `brain.md` varsayılan olarak proje dizinine göre anahtarlanır. Aynı dizinde (örn. aynı Colab proje klasörü) birden fazla `deha` örneğini aynı anda çalıştırırsan, hepsi aynı dosyayı paylaşır ve birinin görevi/brain'i diğerine sızar. Her terminale farklı bir scope vererek izole et:
+
+```bash
+DEHA_SESSION_SCOPE=agent1 deha   # terminal 1
+DEHA_SESSION_SCOPE=agent2 deha   # terminal 2
+```
+
+Scope verilmezse (çoğu kullanım) davranış değişmez — tek ajan aynı dizinde yeniden açıldığında eskisi gibi devam eder.
+
 ## Güvenlik Filtresi
 
 `run_shell` tool'u ile çalıştırılan komutlar otomatik olarak taranır. Aşağıdaki kalıplar **engellenir**:

@@ -14,18 +14,32 @@ import { latestProjectCheckpoint, writeCheckpoint } from '../conversations/check
 
 // â”€â”€â”€ Sabitler & Yollar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
+/**
+ * Aynı proje dizininde paralel çalışan birden fazla deha örneği (örn. 3-4 agent
+ * ile ARC benchmark izleme), DEHA_SESSION_SCOPE verilmezse AYNI session-buffer
+ * dosyasını, Redis anahtarını ve brain.md'yi paylaşır — biri görevi/brain'i
+ * güncelleyince diğerleri onu "miras alır". Her terminale farklı bir
+ * DEHA_SESSION_SCOPE (örn. agent1, agent2) vererek izole edilir; boşsa eski
+ * (paylaşımlı, tek-ajan) davranış değişmeden kalır.
+ */
+export function sessionScope(): string {
+  return (process.env.DEHA_SESSION_SCOPE || '').trim();
+}
+
 export function getSessionBufferDir(workDir: string = _state?.workDir || process.cwd()): string {
   return path.join(path.resolve(workDir), '.deha');
 }
 
 export function getSessionBufferFile(workDir: string = _state?.workDir || process.cwd()): string {
-  return path.join(getSessionBufferDir(workDir), 'session-buffer.json');
+  const scope = sessionScope();
+  return path.join(getSessionBufferDir(workDir), scope ? `session-buffer.${scope}.json` : 'session-buffer.json');
 }
 
 export function getProjectDirectoryKey(dir: string = _state?.workDir || process.cwd()): string {
   try {
     const normalized = path.resolve(dir).toLowerCase();
-    return crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 16);
+    const scope = sessionScope();
+    return crypto.createHash('sha256').update(scope ? `${normalized}::${scope}` : normalized).digest('hex').slice(0, 16);
   } catch {
     return 'default';
   }
@@ -99,6 +113,8 @@ export interface ActiveTaskContext {
 export interface SessionState {
   sessionId: string;
   conversationId?: string;
+  /** DEHA_SESSION_SCOPE'dan gelir; aynı dizinde paralel ajanları izole eder (bkz. sessionScope()). */
+  scope?: string;
   /** Waiting user input; separate from model history until it is processed. */
   pendingInputs?: string[];
   conversationLifecycle: ConversationLifecycle;
@@ -117,6 +133,7 @@ export interface SessionState {
 
 let _state: SessionState = {
   sessionId: Date.now().toString(36),
+  scope: sessionScope(),
   conversationLifecycle: 'CREATED',
   activeTask: null,
   previousTask: null,
@@ -145,7 +162,7 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
       }
     } catch { /* Try the backup, then Redis. */ }
   }
-  const recovered = latestProjectCheckpoint(resolvedDir);
+  const recovered = latestProjectCheckpoint(resolvedDir, sessionScope());
   if (recovered) {
     _state = { ...emptySession(resolvedDir), ...recovered, workDir: resolvedDir };
     return;
@@ -172,7 +189,7 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
 }
 
 function emptySession(workDir: string): SessionState {
-  return { sessionId: crypto.randomUUID(), conversationLifecycle: 'CREATED', activeTask: null,
+  return { sessionId: crypto.randomUUID(), scope: sessionScope(), conversationLifecycle: 'CREATED', activeTask: null,
     previousTask: null, messages: [], summary: '', pinnedContext: [], architectureFiles: [],
     workDir, flushedCount: 0, compressCount: 0 };
 }
@@ -196,6 +213,7 @@ export function setPendingInputs(inputs: string[]): void {
 }
 
 export function shouldLoadSessionForCurrentDir(saved: Partial<SessionState>, targetDir: string = process.cwd()): boolean {
+  if ((saved.scope || '') !== sessionScope()) return false;
   if (!saved.workDir) return true;
   try {
     return path.resolve(saved.workDir).toLowerCase() === path.resolve(targetDir).toLowerCase();
@@ -531,6 +549,7 @@ export async function resetSession(workDir = process.cwd()): Promise<void> {
   const resolvedDir = path.resolve(workDir);
   _state = {
     sessionId: Date.now().toString(36),
+    scope: sessionScope(),
     conversationLifecycle: 'EXPLICITLY CLEARED',
     activeTask: null,
     previousTask: null,
