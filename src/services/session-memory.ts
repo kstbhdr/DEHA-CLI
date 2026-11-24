@@ -217,14 +217,14 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
       if (Array.isArray(saved.messages) && shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
         // Hiç kullanılmadan kapanan yeni sohbet, önceki sohbetin checkpoint'ini gölgelemesin.
         if (isEmptySession(saved) && saved.conversationLifecycle === 'CREATED') break;
-        _state = { ...emptySession(resolvedDir), ...saved, workDir: resolvedDir };
+        _state = { ...emptySession(resolvedDir), ...withoutArchive(saved), workDir: resolvedDir };
         return;
       }
     } catch { /* Try the backup, then Redis. */ }
   }
   const recovered = latestProjectCheckpoint(resolvedDir, sessionScope());
   if (recovered) {
-    _state = { ...emptySession(resolvedDir), ...recovered, workDir: resolvedDir };
+    _state = { ...emptySession(resolvedDir), ...withoutArchive(recovered), workDir: resolvedDir };
     return;
   }
   const redis = await getRedis();
@@ -235,7 +235,7 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
       try {
         const saved = JSON.parse(raw) as Partial<SessionState>;
         if (shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
-          _state = { ...emptySession(resolvedDir), ...saved, workDir: resolvedDir };
+          _state = { ...emptySession(resolvedDir), ...withoutArchive(saved), workDir: resolvedDir };
           if (_state.messages.length > 0 && _state.conversationLifecycle !== 'EXPLICITLY CLEARED') {
             _state.conversationLifecycle = 'ACTIVE';
           }
@@ -256,6 +256,12 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
 export function startFreshSession(workDir: string = process.cwd()): void {
   _state = { ...emptySession(path.resolve(workDir)), workspace: null };
   _writeWarmBuffer();
+}
+
+/** Checkpoint'teki arşiv (eski mesajlar) yalnız listeleme içindir; belleğe/buffer'a taşınmaz. */
+function withoutArchive<T extends Partial<SessionState>>(s: T): T {
+  const { archivedMessages: _archived, ...rest } = s as T & { archivedMessages?: unknown };
+  return rest as T;
 }
 
 function isEmptySession(s: Partial<SessionState>): boolean {
@@ -601,7 +607,7 @@ export async function hydrateSession(
   // A transcript alone cannot carry brain/task state. Start clean when opening
   // another conversation; use its own snapshot when one exists.
   _state = options.snapshot
-    ? { ...emptySession(options.workDir || process.cwd()), ...JSON.parse(JSON.stringify(options.snapshot)) }
+    ? { ...emptySession(options.workDir || process.cwd()), ...JSON.parse(JSON.stringify(withoutArchive(options.snapshot))) }
     : { ...emptySession(options.workDir || process.cwd()), workspace: null };
   _state.messages = [...messages];
   _state.flushedCount = 0;

@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { Message } from '../services/ai-service';
 import { getSessionSnapshot, SessionState } from '../services/session-memory';
-import { readCheckpoint, writeCheckpoint } from './checkpoint';
+import { fullTranscript, readCheckpoint, writeCheckpoint } from './checkpoint';
 
 export interface ConversationMeta {
   id: string;           // dosya adı (uzantısız)
@@ -85,7 +85,7 @@ export function listConversations(limit = 200, workDir?: string): ConversationMe
   const all = files.map((file) => {
     const raw = readConversation(file);
     return raw ? parseMeta(raw, file, path.join(dir, `${file}.md`)) : null;
-  }).filter((c): c is ConversationMeta => c !== null);
+  }).filter((c): c is ConversationMeta => c !== null && c.messageCount > 0);
 
   const filtered = resolvedFilter
     ? all.filter((c) => !c.workDir || path.resolve(c.workDir) === resolvedFilter)
@@ -98,9 +98,10 @@ export function listConversations(limit = 200, workDir?: string): ConversationMe
 
 export function readConversation(id: string): string | null {
   const snapshot = readCheckpoint(id) as (SessionState & { provider?: string; model?: string; checkpointSavedAt?: string }) | null;
-  if (snapshot) return buildMarkdown(snapshot.messages, {
+  const transcript = snapshot ? fullTranscript(snapshot) : [];
+  if (snapshot) return buildMarkdown(transcript, {
     date: snapshot.checkpointSavedAt || new Date(0).toISOString(),
-    title: makeTitle(snapshot.messages.find(m => m.role === 'user')?.content || snapshot.activeTask?.originalUserRequest || 'Sohbet'),
+    title: makeTitle(transcript.find(m => m.role === 'user')?.content || snapshot.activeTask?.originalUserRequest || 'Sohbet'),
     provider: snapshot.provider || '?', model: snapshot.model || '?', workDir: snapshot.workDir,
   });
   const filePath = path.join(getConvDir(), `${id}.md`);
@@ -116,7 +117,7 @@ export function getConversationMeta(id: string): ConversationMeta | null {
 
 export function loadConversationMessages(id: string): Message[] | null {
   const snapshot = loadConversationSnapshot(id);
-  if (snapshot) return snapshot.messages;
+  if (snapshot) return fullTranscript(snapshot);
   const raw = readConversation(id);
   if (!raw) return null;
 
