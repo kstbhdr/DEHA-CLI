@@ -61,6 +61,7 @@ import {
   addArchitectureFile,
   clearArchitectureFiles,
   sessionScope,
+  conversationOwnedElsewhere,
 } from '../services/session-memory';
 import { getMaxContextTokens } from '../services/token-counter';
 import { startServices, stopServices } from '../services/process-manager';
@@ -447,7 +448,11 @@ export async function interactive(
 
       if (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history')) {
         const selection = await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
-        if (selection) {
+        const owner = selection ? conversationOwnedElsewhere(selection.id, process.cwd()) : null;
+        if (selection && owner) {
+          logger.write(chalk.yellow(`  ⚠ Bu sohbet şu an başka bir terminalde (${owner}) açık. Aynı sohbete iki ajan yazarsa mesajlar/brain karışır.\n`) +
+            chalk.dim('    O terminalde devam et ya da orayı kapatıp tekrar dene.\n'));
+        } else if (selection) {
           const restored = await initializeInteractiveSession(process.cwd(), selection.messages, selection.id);
           history.length = 0; history.push(...restored.messages);
           conversationId = restored.conversationId;

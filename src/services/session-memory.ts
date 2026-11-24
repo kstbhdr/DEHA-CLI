@@ -43,10 +43,17 @@ function pidAlive(pid: number): boolean {
  * kullanır. Süreç kapanınca kilit bırakılır; ölü süreçlerin kilitleri devralınır.
  */
 export function claimSessionSlot(workDir: string = process.cwd()): string {
-  if ((process.env.DEHA_SESSION_SCOPE || '').trim()) return sessionScope();
-  if (_claimedLock) return _claimedScope;
+  if (_claimedLock) return sessionScope();
   const lockDir = path.join(getSessionBufferDir(workDir), 'locks');
-  try { fs.mkdirSync(lockDir, { recursive: true }); } catch { return _claimedScope; }
+  try { fs.mkdirSync(lockDir, { recursive: true }); } catch { return sessionScope(); }
+  const explicit = (process.env.DEHA_SESSION_SCOPE || '').trim();
+  if (explicit) {
+    // Elle verilen scope da kilit yazar ki diğer süreçler bu oturumun hangi
+    // sohbeti tuttuğunu görebilsin (bkz. conversationOwnedElsewhere).
+    const file = path.join(lockDir, `scope-${explicit.replace(/[^\w.-]/g, '_')}.pid`);
+    try { fs.writeFileSync(file, String(process.pid)); _claimedLock = file; process.once('exit', releaseSessionSlot); } catch { }
+    return explicit;
+  }
   const take = (file: string, slot: number): string => {
     _claimedLock = file;
     _claimedScope = slot === 1 ? '' : `slot${slot}`;
@@ -76,6 +83,32 @@ export function releaseSessionSlot(): void {
   if (!_claimedLock) return;
   try { if (fs.readFileSync(_claimedLock, 'utf-8').trim() === String(process.pid)) fs.unlinkSync(_claimedLock); } catch { }
   _claimedLock = null;
+}
+
+/**
+ * Bu sohbet şu an aynı dizindeki BAŞKA canlı bir deha sürecinde açık mı?
+ * İki süreç aynı sohbete yazarsa mesajlar/brain tek kayıtta karışır.
+ * Açıksa o sürecin slot adını döner (slot 1 için "slot1").
+ */
+export function conversationOwnedElsewhere(conversationId: string, workDir: string = _state.workDir || process.cwd()): string | null {
+  if (!conversationId) return null;
+  const lockDir = path.join(getSessionBufferDir(workDir), 'locks');
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(lockDir); } catch { return null; }
+  for (const name of entries) {
+    const m = /^(?:slot-(\d+)|scope-(.+))\.pid$/.exec(name);
+    if (!m) continue;
+    let pid = NaN;
+    try { pid = parseInt(fs.readFileSync(path.join(lockDir, name), 'utf-8'), 10); } catch { continue; }
+    if (pid === process.pid || !pidAlive(pid)) continue;
+    const scope = m[1] ? (m[1] === '1' ? '' : `slot${m[1]}`) : m[2];
+    const buffer = path.join(getSessionBufferDir(workDir), scope ? `session-buffer.${scope}.json` : 'session-buffer.json');
+    try {
+      const saved = JSON.parse(fs.readFileSync(buffer, 'utf-8')) as Partial<SessionState>;
+      if (saved.conversationId === conversationId) return scope || 'slot1';
+    } catch { }
+  }
+  return null;
 }
 
 /** Proje özeti (.deha_summary.md) de slot'a özeldir; içinde aktif görev yazar. */
@@ -222,7 +255,7 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
       }
     } catch { /* Try the backup, then Redis. */ }
   }
-  const recovered = latestProjectCheckpoint(resolvedDir, sessionScope());
+  const recovered = latestProjectCheckpoint(resolvedDir, sessionScope(), id => !!conversationOwnedElsewhere(id, resolvedDir));
   if (recovered) {
     _state = { ...emptySession(resolvedDir), ...withoutArchive(recovered), workDir: resolvedDir };
     return;
@@ -809,6 +842,8 @@ export async function flushOnExit(): Promise<void> {
 }
 
 function _writeWarmBuffer(): void {
+  // Yüklenen bir sohbetin (başka slotta kaydedilmiş) etiketi bu sürece geçmesin.
+  _state.scope = sessionScope();
   // Independent of the project directory: survives a missing/corrupt local buffer
   // and is discoverable before a long-running agent turn has returned.
   try { writeCheckpoint(_state); } catch { /* The local checkpoint remains available. */ }

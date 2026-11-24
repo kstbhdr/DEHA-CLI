@@ -17,6 +17,7 @@ import { doctor } from './commands/doctor';
 import { initCommand } from './commands/init';
 import { runSystemTest } from './commands/test-runner';
 import { loadConversationMessages, getConversationMeta } from './conversations/manager';
+import { conversationOwnedElsewhere } from './services/session-memory';
 import * as path from 'path';
 import { DEHA_VERSION_LABEL } from './version';
 import { logger } from './services/logger';
@@ -308,6 +309,11 @@ export class DehaCLI {
         const messages = loadConversationMessages(id);
         if (!messages) {
           logger.error(`Sohbet bulunamadı: ${id}`);
+          process.exit(1);
+        }
+        const owner = conversationOwnedElsewhere(id, process.cwd());
+        if (owner) {
+          logger.error(`Bu sohbet şu an başka bir terminalde (${owner}) açık — aynı sohbete iki ajan yazarsa karışır. O terminalde devam et.`);
           process.exit(1);
         }
         const meta = getConversationMeta(id);

@@ -69,13 +69,13 @@ export function writeCheckpoint(state: SessionState): void {
   fs.renameSync(`${file}.tmp`, file);
 }
 
-export function latestProjectCheckpoint(workDir: string, scope = ''): SessionState | null {
+export function latestProjectCheckpoint(workDir: string, scope = '', exclude: (id: string) => boolean = () => false): SessionState | null {
   try {
     const ids = [...new Set(fs.readdirSync(checkpointDir())
       .filter(f => /\.session\.json(?:\.bak)?$/.test(f))
       .map(f => f.replace(/\.session\.json(?:\.bak)?$/, '')))];
     const candidates = ids.map(readCheckpoint).filter((s): s is SessionState => !!s &&
-      !!s.workDir && path.resolve(s.workDir) === path.resolve(workDir) && (s.scope || '') === scope);
+      !!s.workDir && path.resolve(s.workDir) === path.resolve(workDir) && (s.scope || '') === scope && !exclude(s.conversationId || ''));
     candidates.sort((a, b) => {
       const stamp = (s: SessionState) => (s as SessionState & { checkpointSavedAt?: string }).checkpointSavedAt || s.conversationId || '';
       return stamp(b).localeCompare(stamp(a));
