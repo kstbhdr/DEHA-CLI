@@ -21,14 +21,13 @@ import axios from 'axios';
 import { safeSlice } from './text-utils';
 import type { Message } from './ai-service';
 import { getVectorStore, StoredMessage } from './vector-store';
+import { getMemoryNamespace } from './session-memory';
 
 // ─── Sabitler ────────────────────────────────────────────────────────────────
 
 const HOT_WINDOW = 5;           // bağlama doğrudan eklenecek son N mesaj
 const SEMANTIC_TOP_K = 3;       // Redis'ten getirilecek alakalı mesaj sayısı
-const SESSION_ID = Date.now().toString(36) + Math.random().toString(36).slice(2);
 const REDIS_PREFIX = 'deha:msg:';
-const REDIS_SESSION_INDEX = `deha:session:${SESSION_ID}`;
 
 // ─── Redis bağlantısı (opsiyonel) ─────────────────────────────────────────
 
@@ -68,7 +67,7 @@ async function getRedis(): Promise<RedisClient | null> {
 
 // ─── In-memory fallback (Redis yoksa) ────────────────────────────────────────
 
-const _memStore: StoredMessage[] = [];
+const _memStore = new Map<string, StoredMessage[]>();
 
 // ─── Embedding üretimi ────────────────────────────────────────────────────────
 
@@ -126,6 +125,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
  * Yeni mesajı Redis'e kaydeder + Vector Store'a arka planda yazar.
  */
 export async function addMessage(message: Message): Promise<void> {
+  const namespace = getMemoryNamespace();
   const content = message.content || (message.tool_calls ? JSON.stringify(message.tool_calls) : '');
   const embedding = await generateEmbedding(content);
   const stored: StoredMessage = {
@@ -147,13 +147,15 @@ export async function addMessage(message: Message): Promise<void> {
       'embedding', JSON.stringify(stored.embedding),
       'timestamp', stored.timestamp.toString(),
     );
-    await redis.sadd(REDIS_SESSION_INDEX, stored.id);
+    await redis.sadd(`deha:memory:${namespace}`, stored.id);
   } else {
-    _memStore.push(stored);
+    const entries = _memStore.get(namespace) || [];
+    entries.push(stored);
+    _memStore.set(namespace, entries);
   }
 
   // Vector store'a arka planda yaz (ChromaDB veya JSON)
-  const vs = await getVectorStore();
+  const vs = await getVectorStore(namespace);
   vs.add(stored).catch(() => {});
 }
 
@@ -192,13 +194,14 @@ async function _semanticSearch(
   topK: number,
   exclude: Set<string>,
 ): Promise<StoredMessage[]> {
+  const namespace = getMemoryNamespace();
   const queryEmb = await generateEmbedding(query);
 
   let allMessages: StoredMessage[] = [];
 
   const redis = await getRedis();
   if (redis) {
-    const ids = await redis.smembers(REDIS_SESSION_INDEX);
+    const ids = await redis.smembers(`deha:memory:${namespace}`);
     const results = await Promise.all(
       ids.map(async (id) => {
         const raw = await redis.hgetall(REDIS_PREFIX + id);
@@ -214,7 +217,7 @@ async function _semanticSearch(
     );
     allMessages = results.filter((r): r is StoredMessage => r !== null);
   } else {
-    allMessages = [..._memStore];
+    allMessages = [...(_memStore.get(namespace) || [])];
   }
 
   // Timestamp'e göre sırala (Redis smembers sıra garantisi vermez)
@@ -253,7 +256,7 @@ export async function getMemoryStatus(): Promise<{ redis: boolean; vectorStore: 
   const vs = await getVectorStore();
   const vsName = vs.constructor.name === 'ChromaVectorStore' ? 'chromadb' : 'json';
   const count = redis
-    ? (await redis.smembers(REDIS_SESSION_INDEX)).length
-    : _memStore.length;
+    ? (await redis.smembers(`deha:memory:${getMemoryNamespace()}`)).length
+    : (_memStore.get(getMemoryNamespace()) || []).length;
   return { redis: redis !== null, vectorStore: vsName, stored: count };
 }

@@ -1,5 +1,27 @@
 # Yerel DEHA geliştirme kurulumu
 
+Her sohbetin brain, tampon ve özeti ilgili proje içinde ayrı saklanır:
+`.deha/sessions/<sohbet-id>/brain.md`, `session-buffer.json` ve `summary.md`.
+Aynı projede açılan iki agent da farklı sohbet kimlikleri ve farklı dosyalar kullanır.
+Başlangıçta brain dosyasının tam yolu gösterilir. Proje yolu sohbet sırasında değişirse
+sonraki kayıtlar o proje içindeki aynı sohbet klasörüne yazılır.
+
+Düz `deha`, `/new` ve `/clear` temiz sohbet başlatır. `deha resume <id>` sohbetin
+kendi proje dizinini ve hafızasını geri yükler. Aktif sohbeti başka bir süreçte tekrar
+açmak veya aynı `DEHA_SESSION_SCOPE` ile eşzamanlı yazmak engellenir.
+Redis/vektör hafızası da sohbet ve projeye göre ayrılır; global eski brain/özet
+dosyaları yeni sohbetlere otomatik aktarılmaz. Eski kayıtlar silinmez; eski JSON'da
+workspace eksikse, açıkça devam ettirilen eski oturum için eski brain dosyası kurtarılabilir.
+Önceden birbirine karışmış bir kaydın içeriği otomatik ayrıştırılmaz.
+
+`/oldconversations` ve araması aktif projeyle sınırlıdır. Diğer projelerin ve proje
+etiketi olmayan eski sohbetlerin listesi açıkça `/oldconversations all` ile görülebilir.
+Sohbet ID'leri UUID içerir; aynı saniyede başlatılan agentlar aynı kayda yazmaz.
+
+`npm run build` ardından `node scripts/isolation-smoke.cjs`, gerçek paralel süreçlerle
+brain/tampon ayrımını, proje değişimini, aktif sohbete ikinci erişimin reddini ve
+zorla kapatılan sohbetin kendi projesinde kurtarılmasını test eder.
+
 Geliştirme klasörü: `C:\Users\Administrator\DEHA-CLI`.
 Global `deha` komutu `npm link` ile bu klasöre bağlıdır.
 Kaynak değiştirdikten sonra `npm run build` çalıştırın ve açık DEHA oturumunu yeniden başlatın.

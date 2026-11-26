@@ -17,21 +17,66 @@ import { latestProjectCheckpoint, writeCheckpoint } from '../conversations/check
 /**
  * Aynı proje dizininde paralel çalışan birden fazla deha örneği (örn. 3-4 agent
  * ile ARC benchmark izleme), DEHA_SESSION_SCOPE verilmezse AYNI session-buffer
- * dosyasını, Redis anahtarını ve brain.md'yi paylaşır — biri görevi/brain'i
- * güncelleyince diğerleri onu "miras alır". Her terminale farklı bir
- * DEHA_SESSION_SCOPE (örn. agent1, agent2) vererek izole edilir; boşsa eski
- * (paylaşımlı, tek-ajan) davranış değişmeden kalır.
+ * dosyasını paylaşmaması için slotlar --continue işaretçisini ayırır.
+ * Asıl tampon, brain ve özet her zaman sohbet kimliğine özeldir.
  */
 export function sessionScope(): string {
-  return (process.env.DEHA_SESSION_SCOPE || '').trim() || _claimedScope;
+  return (process.env.DEHA_SESSION_SCOPE || '').trim().replace(/[^\w.-]/g, '_') || _claimedScope;
 }
 
 let _claimedScope = '';
 let _claimedLock: string | null = null;
+let _conversationLock: string | null = null;
+
+function conversationLockFile(id: string): string {
+  return path.join(os.homedir(), '.deha', 'locks', 'conversations', `${crypto.createHash('sha256').update(id).digest('hex')}.pid`);
+}
+
+/** Atomic ownership applies across projects and scopes, including explicit resume. */
+export function claimConversation(id: string): void {
+  const file = conversationLockFile(id);
+  if (_conversationLock === file) return;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  if (!tryClaimPidFile(file)) throw new Error(`Sohbet başka bir süreçte açık veya kilit alınamadı: ${id}`);
+  releaseConversation();
+  _conversationLock = file;
+}
+
+function releaseConversation(): void {
+  if (!_conversationLock) return;
+  try { if (fs.readFileSync(_conversationLock, 'utf8').trim() === String(process.pid)) fs.unlinkSync(_conversationLock); } catch { }
+  _conversationLock = null;
+}
+
+process.once('exit', releaseConversation);
+process.once('exit', releaseSessionSlot);
 
 function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/** Serialize stale-lock removal so two contenders cannot delete a new owner's lock. */
+function tryClaimPidFile(file: string): boolean {
+  try { fs.writeFileSync(file, String(process.pid), { flag: 'wx' }); return true; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+  const readOwner = () => {
+    try { return Number(fs.readFileSync(file, 'utf8').trim()); } catch { return 0; }
+  };
+  const owner = readOwner();
+  if (owner === process.pid) return true;
+  // An empty lock may still be in the middle of its first write. Never remove it.
+  if (!Number.isInteger(owner) || owner <= 0 || pidAlive(owner)) return false;
+  const reaper = `${file}.reap`;
+  try { fs.writeFileSync(reaper, String(process.pid), { flag: 'wx' }); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false; throw error; }
+  try {
+    const current = readOwner();
+    if (!Number.isInteger(current) || current <= 0 || pidAlive(current)) return false;
+    fs.unlinkSync(file);
+    try { fs.writeFileSync(file, String(process.pid), { flag: 'wx' }); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false; throw error; }
+  } finally { fs.unlinkSync(reaper); }
 }
 
 /**
@@ -43,40 +88,30 @@ function pidAlive(pid: number): boolean {
  * kullanır. Süreç kapanınca kilit bırakılır; ölü süreçlerin kilitleri devralınır.
  */
 export function claimSessionSlot(workDir: string = process.cwd()): string {
-  if (_claimedLock) return sessionScope();
   const lockDir = path.join(getSessionBufferDir(workDir), 'locks');
-  try { fs.mkdirSync(lockDir, { recursive: true }); } catch { return sessionScope(); }
-  const explicit = (process.env.DEHA_SESSION_SCOPE || '').trim();
+  if (_claimedLock && path.dirname(_claimedLock) === lockDir) return sessionScope();
+  releaseSessionSlot();
+  fs.mkdirSync(lockDir, { recursive: true });
+  const explicit = (process.env.DEHA_SESSION_SCOPE || '').trim().replace(/[^\w.-]/g, '_');
   if (explicit) {
     // Elle verilen scope da kilit yazar ki diğer süreçler bu oturumun hangi
     // sohbeti tuttuğunu görebilsin (bkz. conversationOwnedElsewhere).
     const file = path.join(lockDir, `scope-${explicit.replace(/[^\w.-]/g, '_')}.pid`);
-    try { fs.writeFileSync(file, String(process.pid)); _claimedLock = file; process.once('exit', releaseSessionSlot); } catch { }
+    if (!tryClaimPidFile(file)) throw new Error(`Oturum kapsamı kullanımda: ${explicit}`);
+    _claimedLock = file;
     return explicit;
   }
   const take = (file: string, slot: number): string => {
     _claimedLock = file;
     _claimedScope = slot === 1 ? '' : `slot${slot}`;
     _state.scope = _claimedScope;
-    process.once('exit', releaseSessionSlot);
     return _claimedScope;
   };
   for (let slot = 1; slot <= 64; slot++) {
     const file = path.join(lockDir, `slot-${slot}.pid`);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        fs.writeFileSync(file, String(process.pid), { flag: 'wx' });
-        return take(file, slot);
-      } catch {
-        let owner = NaN;
-        try { owner = parseInt(fs.readFileSync(file, 'utf-8'), 10); } catch { /* yarışta silinmiş olabilir */ }
-        if (owner === process.pid) return take(file, slot); // modül yeniden yüklendi, aynı süreç
-        if (pidAlive(owner)) break; // slot dolu → sonrakine geç
-        try { fs.unlinkSync(file); } catch { /* başka süreç devraldı */ }
-      }
-    }
+    if (tryClaimPidFile(file)) return take(file, slot);
   }
-  return _claimedScope;
+  throw new Error('İzole oturum için boş slot bulunamadı.');
 }
 
 export function releaseSessionSlot(): void {
@@ -92,6 +127,10 @@ export function releaseSessionSlot(): void {
  */
 export function conversationOwnedElsewhere(conversationId: string, workDir: string = _state.workDir || process.cwd()): string | null {
   if (!conversationId) return null;
+  try {
+    const owner = Number(fs.readFileSync(conversationLockFile(conversationId), 'utf8').trim());
+    if (owner !== process.pid && (!owner || pidAlive(owner))) return `PID ${owner || '?'}`;
+  } catch { }
   const lockDir = path.join(getSessionBufferDir(workDir), 'locks');
   let entries: string[] = [];
   try { entries = fs.readdirSync(lockDir); } catch { return null; }
@@ -111,24 +150,33 @@ export function conversationOwnedElsewhere(conversationId: string, workDir: stri
   return null;
 }
 
-/** Proje özeti (.deha_summary.md) de slot'a özeldir; içinde aktif görev yazar. */
+/** Summary belongs to the conversation, never to a reusable process slot. */
 function summaryFileName(): string {
-  const scope = sessionScope();
-  return scope ? `.deha_summary.${scope}.md` : '.deha_summary.md';
+  return path.join(getSessionStorageDir(), 'summary.md');
 }
 
 export function getSessionBufferDir(workDir: string = _state?.workDir || process.cwd()): string {
   return path.join(path.resolve(workDir), '.deha');
 }
 
-export function getSessionBufferFile(workDir: string = _state?.workDir || process.cwd()): string {
+function legacyBufferFile(workDir: string): string {
   const scope = sessionScope();
   return path.join(getSessionBufferDir(workDir), scope ? `session-buffer.${scope}.json` : 'session-buffer.json');
 }
 
+/** Every conversation owns its files, even when multiple agents share a project. */
+export function getSessionStorageDir(workDir: string = _state.workDir || process.cwd(), id = _state.conversationId || _state.sessionId): string {
+  const safeId = /^[\w-]+$/.test(id) ? id : crypto.createHash('sha256').update(id).digest('hex');
+  return path.join(getSessionBufferDir(workDir), 'sessions', safeId);
+}
+
+export function getSessionBufferFile(workDir: string = _state.workDir || process.cwd()): string {
+  return path.join(getSessionStorageDir(workDir), 'session-buffer.json');
+}
+
 export function getProjectDirectoryKey(dir: string = _state?.workDir || process.cwd()): string {
   try {
-    const normalized = path.resolve(dir).toLowerCase();
+    const normalized = process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir);
     const scope = sessionScope();
     return crypto.createHash('sha256').update(scope ? `${normalized}::${scope}` : normalized).digest('hex').slice(0, 16);
   } catch {
@@ -141,8 +189,6 @@ export function getProjectRedisKey(dir: string = _state?.workDir || process.cwd(
   return `deha:session:project:${projectKey}`;
 }
 
-const SESSION_BUFFER_DIR = path.join(process.cwd(), '.deha');
-const SESSION_BUFFER_FILE = path.join(SESSION_BUFFER_DIR, 'session-buffer.json');
 const COLD_STORAGE_DIR = path.join(os.homedir(), '.deha', 'conversations');
 const FLUSH_THRESHOLD = 20;
 const MIN_ALWAYS_HOT_MESSAGES = 20;
@@ -243,14 +289,24 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
   const resolvedDir = path.resolve(targetDir);
   // Synchronous disk checkpoints are newer than the asynchronous Redis cache.
   // Never let an older Redis record overwrite a successfully saved workspace.
-  const bufferFile = getSessionBufferFile(resolvedDir);
+  const bufferFile = legacyBufferFile(resolvedDir);
   for (const file of [bufferFile, `${bufferFile}.bak`]) {
     try {
       const saved = JSON.parse(fs.readFileSync(file, 'utf-8')) as SessionState;
-      if (Array.isArray(saved.messages) && shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
+      if (Array.isArray(saved.messages) && shouldLoadSessionForCurrentDir(saved, resolvedDir) && !conversationOwnedElsewhere(saved.conversationId || '', resolvedDir)) {
         // Hiç kullanılmadan kapanan yeni sohbet, önceki sohbetin checkpoint'ini gölgelemesin.
         if (isEmptySession(saved) && saved.conversationLifecycle === 'CREATED') break;
-        _state = { ...emptySession(resolvedDir), ...withoutArchive(saved), workDir: resolvedDir };
+        let current = saved;
+        if (saved.conversationId) {
+          const canonical = path.join(getSessionStorageDir(resolvedDir, saved.conversationId), 'session-buffer.json');
+          for (const candidate of [canonical, `${canonical}.bak`]) {
+            try {
+              const own = JSON.parse(fs.readFileSync(candidate, 'utf8')) as SessionState;
+              if (own.conversationId === saved.conversationId && Array.isArray(own.messages) && shouldLoadSessionForCurrentDir(own, resolvedDir)) { current = own; break; }
+            } catch { }
+          }
+        }
+        _state = { ...emptySession(resolvedDir), ...withoutArchive(current), workDir: resolvedDir };
         return;
       }
     } catch { /* Try the backup, then Redis. */ }
@@ -263,11 +319,11 @@ export async function loadSession(targetDir: string = process.cwd()): Promise<vo
   const redis = await getRedis();
   if (redis) {
     const projectKey = getProjectRedisKey(resolvedDir);
-    const raw = await redis.get(projectKey) || await redis.get('deha:session:latest');
+    const raw = await redis.get(projectKey);
     if (raw) {
       try {
         const saved = JSON.parse(raw) as Partial<SessionState>;
-        if (shouldLoadSessionForCurrentDir(saved, resolvedDir)) {
+        if (Array.isArray(saved.messages) && shouldLoadSessionForCurrentDir(saved, resolvedDir) && !conversationOwnedElsewhere(saved.conversationId || '', resolvedDir)) {
           _state = { ...emptySession(resolvedDir), ...withoutArchive(saved), workDir: resolvedDir };
           if (_state.messages.length > 0 && _state.conversationLifecycle !== 'EXPLICITLY CLEARED') {
             _state.conversationLifecycle = 'ACTIVE';
@@ -312,6 +368,7 @@ export function getSessionSnapshot(): SessionState {
 }
 
 export function setConversationId(id: string): void {
+  claimConversation(id);
   _state.conversationId = id;
   _writeWarmBuffer();
 }
@@ -327,9 +384,10 @@ export function setPendingInputs(inputs: string[]): void {
 
 export function shouldLoadSessionForCurrentDir(saved: Partial<SessionState>, targetDir: string = process.cwd()): boolean {
   if ((saved.scope || '') !== sessionScope()) return false;
-  if (!saved.workDir) return true;
+  if (!saved.workDir) return false;
   try {
-    return path.resolve(saved.workDir).toLowerCase() === path.resolve(targetDir).toLowerCase();
+    const normalize = (dir: string) => process.platform === 'win32' ? path.resolve(dir).toLowerCase() : path.resolve(dir);
+    return normalize(saved.workDir) === normalize(targetDir);
   } catch {
     return false;
   }
@@ -560,6 +618,10 @@ export function getSessionId(): string {
   return _state.sessionId;
 }
 
+export function getMemoryNamespace(): string {
+  return crypto.createHash('sha256').update(JSON.stringify([path.resolve(_state.workDir), _state.conversationId || _state.sessionId])).digest('hex');
+}
+
 /** BÃ¶lÃ¼mlÃ¼ context deposu (ham) â€” ÅŸema `services/sectioned-context/store.ts` iÃ§inde. */
 export function getWorkspaceContextRaw(): unknown {
   return _state.workspace;
@@ -637,6 +699,7 @@ export async function hydrateSession(
   messages: Message[],
   options: { workDir?: string; preserveSummary?: boolean; activeTask?: ActiveTaskContext | null; previousTask?: ActiveTaskContext | null; snapshot?: SessionState } = {},
 ): Promise<void> {
+  if (options.snapshot?.conversationId) claimConversation(options.snapshot.conversationId);
   // A transcript alone cannot carry brain/task state. Start clean when opening
   // another conversation; use its own snapshot when one exists.
   _state = options.snapshot
@@ -661,7 +724,7 @@ export async function hydrateSession(
 export async function resetSession(workDir = process.cwd()): Promise<void> {
   const resolvedDir = path.resolve(workDir);
   _state = {
-    sessionId: Date.now().toString(36),
+    sessionId: crypto.randomUUID(),
     scope: sessionScope(),
     conversationLifecycle: 'EXPLICITLY CLEARED',
     activeTask: null,
@@ -680,7 +743,6 @@ export async function resetSession(workDir = process.cwd()): Promise<void> {
   if (redis) {
     const projectKey = getProjectRedisKey(resolvedDir);
     await redis.del(projectKey).catch(() => {});
-    await redis.del('deha:session:latest').catch(() => {});
   }
 }
 
@@ -698,17 +760,10 @@ export function clearPinnedMessages(): void {
 }
 
 export function setWorkDir(dir: string): void {
-  _state.workDir = dir;
+  const resolved = path.resolve(dir);
+  if (_claimedLock) claimSessionSlot(resolved);
+  _state.workDir = resolved;
   _writeWarmBuffer();
-  // Özet dosyası önceki sohbetin aktif görevini taşır; yeni/boş sohbete aktarma.
-  if (!_state.summary && _state.messages.length > 0 && dir && fs.existsSync(dir)) {
-    try {
-      const summaryPath = path.join(dir, summaryFileName());
-      if (fs.existsSync(summaryPath)) {
-        _state.summary = fs.readFileSync(summaryPath, 'utf-8').replace(/^# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: .*\n\n/, '');
-      }
-    } catch { }
-  }
 }
 
 export function getWorkDir(): string {
@@ -813,7 +868,8 @@ export async function summarizeOld(
       : truncateText(`${stickyContext}${newSummary}`, MAX_SUMMARY_CHARS);
 
     if (_state.workDir && fs.existsSync(_state.workDir)) {
-      fs.writeFileSync(path.join(_state.workDir, summaryFileName()), `# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
+      fs.mkdirSync(getSessionStorageDir(), { recursive: true });
+      fs.writeFileSync(summaryFileName(), `# DEHA â€” Proje Ã–zeti\n\n> Son GÃ¼ncelleme: ${new Date().toLocaleString()}\n\n${_state.summary}`);
     }
 
     _state.messages = msgs.slice(-minHot);
@@ -834,7 +890,6 @@ export async function flushOnExit(): Promise<void> {
     const data = JSON.stringify(_state);
     await redis.set(projectKey, data).catch(() => {});
     await redis.set(`deha:session:id:${_state.sessionId}`, data).catch(() => {});
-    await redis.set('deha:session:latest', data).catch(() => {});
     await redis.quit().catch(() => {});
   }
   _writeWarmBuffer();
@@ -842,6 +897,7 @@ export async function flushOnExit(): Promise<void> {
 }
 
 function _writeWarmBuffer(): void {
+  if (_state.conversationId) claimConversation(_state.conversationId);
   // Yüklenen bir sohbetin (başka slotta kaydedilmiş) etiketi bu sürece geçmesin.
   _state.scope = sessionScope();
   // Independent of the project directory: survives a missing/corrupt local buffer
@@ -861,6 +917,10 @@ function _writeWarmBuffer(): void {
       } catch { /* Do not replace a valid backup with a corrupt file. */ }
     }
     fs.renameSync(tempFile, bufferFile);
+    // Compatibility pointer for --continue; the conversation directory is authoritative.
+    const latest = legacyBufferFile(_state.workDir);
+    fs.writeFileSync(`${latest}.${process.pid}.tmp`, JSON.stringify(_state), 'utf8');
+    fs.renameSync(`${latest}.${process.pid}.tmp`, latest);
   } catch { }
 }
 
@@ -871,7 +931,6 @@ async function _writeRedis(): Promise<void> {
     const data = JSON.stringify(_state);
     await redis.set(projectKey, data).catch(() => {});
     await redis.set(`deha:session:id:${_state.sessionId}`, data).catch(() => {});
-    await redis.set('deha:session:latest', data).catch(() => {});
   }
 }
 

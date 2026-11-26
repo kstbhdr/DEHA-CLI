@@ -14,7 +14,7 @@ import { estimateTextTokens, oneLine, tokensToChars } from './budget';
 export const BRAIN_TOOL: ToolDefinition = {
   name: 'brain',
   description: [
-    'Your persistent second brain for the current work (survives context trimming and restarts).',
+    'Your private persistent second brain for this conversation (survives context trimming and restarts). Stored as brain.md in this project\'s .deha/sessions/<conversation-id>/ directory. Never use a shared home-directory brain.',
     'Use it to keep a plan, record findings/decisions, and — most importantly — record dead ends so you never retry a failed approach.',
     'Actions: set_plan(steps[]), add_step(text), update_step(index, status, text?), set_criteria(text),',
     'add_finding(text), add_decision(text), add_dead_end(text), rewrite(section, items[]) to condense a section, view.',
@@ -125,8 +125,13 @@ export function executeBrainTool(input: Record<string, unknown>): string {
 
   b.updatedAt = new Date().toISOString();
   saveWorkspace(ws);
-  writeBrainFile(`# DEHA Brain\n\n> Güncelleme: ${b.updatedAt}\n\n${renderBrain(b, 1_000_000)}\n`);
+  syncBrainFile();
   return msg;
+}
+
+export function syncBrainFile(): void {
+  const b = getWorkspace().brain;
+  writeBrainFile(`# DEHA Brain\n\n> Güncelleme: ${b.updatedAt || ''}\n\n${renderBrain(b, 1_000_000)}\n`);
 }
 
 function renderSteps(steps: BrainState['steps'], collapseDone: boolean): string[] {

@@ -12,9 +12,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { getWorkspaceContextRaw, setWorkspaceContextRaw, getWorkDir, sessionScope } from '../session-memory';
+import { getWorkspaceContextRaw, setWorkspaceContextRaw, getWorkDir, sessionScope, getSessionStorageDir } from '../session-memory';
 
-function brainFileName(): string {
+function legacyBrainFileName(): string {
   const scope = sessionScope();
   return scope ? `brain.${scope}.md` : 'brain.md';
 }
@@ -120,9 +120,14 @@ export function resetWorkspace(): void {
 }
 
 /** Migrate surviving brain.md from older sessions that lost the JSON workspace. */
-export function recoverBrainFile(): boolean {
+export function getBrainFile(): string {
+  return path.join(getSessionStorageDir(), 'brain.md');
+}
+
+export function recoverBrainFile(allowLegacy = false): boolean {
   try {
-    const raw = fs.readFileSync(path.join(getWorkDir(), '.deha', brainFileName()), 'utf-8');
+    const file = getBrainFile();
+    const raw = fs.readFileSync(fs.existsSync(file) || !allowLegacy ? file : path.join(getWorkDir(), '.deha', legacyBrainFileName()), 'utf-8');
     if (!raw.startsWith('# DEHA Brain')) return false;
     const brain = emptyWorkspace().brain;
     let section = '';
@@ -142,11 +147,11 @@ export function recoverBrainFile(): boolean {
   } catch { return false; }
 }
 
-/** İnsan tarafından okunabilir brain dosyası: <workDir>/.deha/brain.md */
+/** One brain.md per conversation, inside its project directory. */
 export function writeBrainFile(markdown: string): void {
   try {
-    const dir = path.join(getWorkDir() || process.cwd(), '.deha');
+    const dir = getSessionStorageDir();
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, brainFileName()), markdown, 'utf-8');
+    fs.writeFileSync(path.join(dir, 'brain.md'), markdown, 'utf-8');
   } catch { /* best-effort */ }
 }

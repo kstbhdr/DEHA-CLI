@@ -10,6 +10,8 @@ import { formatResponse } from './chat';
 import { runAgent, summarizeOldToolResults, resolveTaskForUserMessage } from './agent';
 import { isSectionedContextEnabled } from '../services/sectioned-context';
 import { initializeInteractiveSession } from '../services/interactive-session';
+import { syncBrainFile } from '../services/sectioned-context/brain';
+import { getBrainFile } from '../services/sectioned-context/store';
 import { InputQueue } from '../services/input-queue';
 import { handleJobsCommand } from './jobs';
 import { mcpManager } from '../mcp/manager';
@@ -227,7 +229,7 @@ export async function interactive(
     { resume: options.resume || initialHistory.length > 0 });
   const history: Message[] = [...restored.messages];
   let conversationId: string | null = restored.conversationId;
-  if (sessionScope()) logger.write(chalk.dim(`  🔒 İzole oturum: ${sessionScope()} (bu dizinde başka bir deha da çalışıyor; brain/görev ayrı)\n`));
+  logger.write(chalk.dim(`  🔒 Sohbete özel brain: ${getBrainFile()}\n`));
   if (history.length) logger.write(chalk.dim(`  ↩ ${history.length} mesaj ve kayıtlı görev bağlamı yüklendi\n`));
   else if (restored.previousMessages) logger.write(chalk.dim(`  ✦ Yeni sohbet. Önceki sohbet (${restored.previousMessages} mesaj) kayıtlı — devam için: deha --continue  veya  /oldconversations\n`));
 
@@ -315,10 +317,11 @@ export async function interactive(
         if (history.length >= 2) saveConversation(history, config.provider, getActiveModel(config), { conversationId: conversationId ?? undefined });
         history.length = 0;
         conversationId = createConversationId();
-        await resetSession(process.cwd()).catch(() => {});
+        await resetSession(getWorkDir()).catch(() => {});
         setConversationId(conversationId);
         clearActiveTask();
-        setWorkDir(process.cwd());
+        syncBrainFile();
+        for (const role of Object.keys(specializedHistories) as (keyof typeof specializedHistories)[]) specializedHistories[role].length = 0;
         logger.write(chalk.green('✓ Yeni sohbet başlatıldı. ID: ') + chalk.cyan(conversationId) + '\n');
         return;
       }
@@ -326,9 +329,11 @@ export async function interactive(
       if (trimmed === '/clear') {
         history.length = 0;
         conversationId = createConversationId();
-        await resetSession(process.cwd()).catch(() => {});
+        await resetSession(getWorkDir()).catch(() => {});
         setConversationId(conversationId);
         clearActiveTask();
+        syncBrainFile();
+        for (const role of Object.keys(specializedHistories) as (keyof typeof specializedHistories)[]) specializedHistories[role].length = 0;
         console.clear();
         logger.write(BANNER);
         logger.write(chalk.green('✓ Sohbet geçmişi temizlendi.\n'));
@@ -448,14 +453,15 @@ export async function interactive(
 
       if (trimmed.startsWith('/oldconversations') || trimmed.startsWith('/history')) {
         const selection = await handleHistoryCommand(trimmed.replace(/^\/oldconversations\s*|^\/history\s*/, ''));
-        const owner = selection ? conversationOwnedElsewhere(selection.id, process.cwd()) : null;
+        const owner = selection ? conversationOwnedElsewhere(selection.id, getWorkDir()) : null;
         if (selection && owner) {
           logger.write(chalk.yellow(`  ⚠ Bu sohbet şu an başka bir terminalde (${owner}) açık. Aynı sohbete iki ajan yazarsa mesajlar/brain karışır.\n`) +
             chalk.dim('    O terminalde devam et ya da orayı kapatıp tekrar dene.\n'));
         } else if (selection) {
-          const restored = await initializeInteractiveSession(process.cwd(), selection.messages, selection.id);
+          const restored = await initializeInteractiveSession(getWorkDir(), selection.messages, selection.id);
           history.length = 0; history.push(...restored.messages);
           conversationId = restored.conversationId;
+          for (const role of Object.keys(specializedHistories) as (keyof typeof specializedHistories)[]) specializedHistories[role].length = 0;
         }
         return;
       }
@@ -472,7 +478,7 @@ export async function interactive(
 
       const userMessage = resolveAtFiles(modelTrimmed);
       const detectedDir = detectWorkDir(userMessage);
-      if (detectedDir) { setWorkDir(detectedDir); logger.write(chalk.dim(`  📁 Dir: ${detectedDir}\n`)); }
+      if (detectedDir) { setWorkDir(detectedDir); syncBrainFile(); logger.write(chalk.dim(`  📁 Dir: ${detectedDir}\n`)); }
 
       // ── Specialized Roles (Planner/Judge) ──
       if (activeRole !== 'chat') {
@@ -675,16 +681,12 @@ async function exitCleanup(history: Message[], config: DehaConfig, conversationI
   } else {
     try {
       const { listConversations } = await import('../conversations/manager');
-      const latest = listConversations(1);
+      const latest = listConversations(1, getWorkDir());
       if (latest && latest.length > 0) sessionId = latest[0].id;
     } catch { }
   }
   await mcpManager.disconnectAll().catch(() => {});
-  // Temiz çıkışta (crash değil, kullanıcı kendi isteğiyle çıktı) bir sonraki
-  // `deha` açılışı otomatik olarak bu sohbeti sürdürmemeli — sohbet zaten
-  // yukarıda kaydedildi, "deha resume <id>" ile açıkça geri dönülebilir.
-  // Aksi halde kullanıcı seçmediği hâlde eski sohbet otomatik devam ediyordu.
-  await resetSession(process.cwd()).catch(() => {});
+  // Plain deha starts fresh; retain the saved checkpoint for explicit resume.
   printSessionSummary(getUsageSince(sessionUsageSnapshot));
   logger.write(chalk.dim('Görüşürüz! 👋\n'));
   if (sessionId) logger.write(chalk.dim('Önceki sohbete dönmek için: ') + chalk.cyan(`deha resume ${sessionId}\n`));

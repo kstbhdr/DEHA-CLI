@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { logger } from './logger';
+import { getMemoryNamespace } from './session-memory';
 
 // ─── Tipler ──────────────────────────────────────────────────────────────────
 
@@ -163,35 +164,26 @@ export function simpleEmbedding(text: string): number[] {
 
 // ─── Store Factory ───────────────────────────────────────────────────────────
 
-let _store: VectorStore | null = null;
+const _stores = new Map<string, Promise<VectorStore>>();
 
-export async function getVectorStore(): Promise<VectorStore> {
-  if (_store) return _store;
-
-  // Önce ChromaDB'yi dene
-  const chroma = await tryChromaDB();
-  if (chroma) {
-    _store = chroma;
-    logger.debug('Vector store: ChromaDB');
-    return _store;
+export async function getVectorStore(namespace = getMemoryNamespace()): Promise<VectorStore> {
+  const safeNamespace = crypto.createHash('sha256').update(namespace).digest('hex');
+  let pending = _stores.get(safeNamespace);
+  if (!pending) {
+    pending = (async () => await tryChromaDB(safeNamespace) || new JsonVectorStore(safeNamespace))();
+    _stores.set(safeNamespace, pending);
   }
-
-  // Yoksa JSON fallback
-  _store = new JsonVectorStore();
-  logger.debug('Vector store: JSON file-based');
-  return _store;
+  return pending;
 }
 
 export function resetVectorStore(): void {
-  if (_store) {
-    _store.close().catch(() => {});
-    _store = null;
-  }
+  for (const pending of _stores.values()) pending.then(store => store.close()).catch(() => {});
+  _stores.clear();
 }
 
 // ─── ChromaDB Entegrasyonu ───────────────────────────────────────────────────
 
-async function tryChromaDB(): Promise<VectorStore | null> {
+async function tryChromaDB(namespace: string): Promise<VectorStore | null> {
   try {
     const url = process.env.CHROMA_URL || 'http://127.0.0.1:8000';
 
@@ -202,7 +194,7 @@ async function tryChromaDB(): Promise<VectorStore | null> {
     const { ChromaClient } = await import('chromadb');
     const client = new ChromaClient({ path: url });
 
-    const collectionName = process.env.CHROMA_COLLECTION || 'deha_memory';
+    const collectionName = `${process.env.CHROMA_COLLECTION || 'deha_memory'}_${namespace}`;
     let collection;
     try {
       collection = await client.getOrCreateCollection({ name: collectionName });

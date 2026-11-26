@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { Message } from '../services/ai-service';
 import { getSessionSnapshot, SessionState } from '../services/session-memory';
 import { fullTranscript, readCheckpoint, writeCheckpoint } from './checkpoint';
@@ -33,7 +34,7 @@ export function createConversationId(title = 'Sohbet'): string {
   const dateStr = formatDate(now);
   const timeStr = formatTime(now);
   const slug = slugify(title).slice(0, 40) || 'sohbet';
-  return `${dateStr}_${timeStr}_${slug}`;
+  return `${dateStr}_${timeStr}_${slug}_${randomUUID()}`;
 }
 
 // ─── Kaydet ─────────────────────────────────────────────────────────────────
@@ -52,7 +53,7 @@ export function saveConversation(
   const id      = options.conversationId || createConversationId(title);
   const filePath = path.join(getConvDir(), `${id}.md`);
 
-  const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model, workDir: process.cwd() });
+  const md = buildMarkdown(messages, { date: now.toISOString(), title, provider, model, workDir: getSessionSnapshot().workDir });
   fs.writeFileSync(filePath, md, 'utf-8');
   // Markdown contains display previews, not a lossless agent checkpoint.
   const snapshot = { ...getSessionSnapshot(), conversationId: id, messages, provider, model };
@@ -64,13 +65,8 @@ export function saveConversation(
 // ─── Listele ────────────────────────────────────────────────────────────────
 
 /**
- * `workDir` filtresi verildiğinde, **başka bir projeye ait olduğu bilinen**
- * (etiketli ve mevcut dizinden farklı) sohbetleri listeden çıkarır — farklı,
- * ilgisiz projelerin geçmişinin karışıp yanlışlıkla `deha resume` ile
- * açılmasını önlemek için. `workDir` alanı olmayan eski kayıtlar (bu alan
- * eklenmeden önce kaydedilmiş) hangi projeye ait olduğu bilinmediğinden
- * dışlanmaz — aksi halde (bu alan yeni eklendiği için) neredeyse tüm geçmiş
- * "bilinmiyor" sayılıp gizlenmiş olurdu.
+ * With a project filter, include only conversations known to belong to it.
+ * Unknown legacy records remain accessible through the explicit all listing.
  */
 export function listConversations(limit = 200, workDir?: string): ConversationMeta[] {
   const dir = getConvDir();
@@ -88,7 +84,7 @@ export function listConversations(limit = 200, workDir?: string): ConversationMe
   }).filter((c): c is ConversationMeta => c !== null && c.messageCount > 0);
 
   const filtered = resolvedFilter
-    ? all.filter((c) => !c.workDir || path.resolve(c.workDir) === resolvedFilter)
+    ? all.filter((c) => !!c.workDir && path.resolve(c.workDir) === resolvedFilter)
     : all;
 
   return filtered.slice(0, limit);
@@ -200,9 +196,9 @@ function mergeConsecutiveSameRole(messages: Message[]): Message[] {
   return merged;
 }
 
-export function searchConversations(query: string): ConversationMeta[] {
+export function searchConversations(query: string, workDir?: string): ConversationMeta[] {
   const q = query.toLowerCase();
-  return listConversations(Number.MAX_SAFE_INTEGER)
+  return listConversations(Number.MAX_SAFE_INTEGER, workDir)
     .filter(c => readConversation(c.id)?.toLowerCase().includes(q))
     .sort((a, b) => b.date.localeCompare(a.date));
 }

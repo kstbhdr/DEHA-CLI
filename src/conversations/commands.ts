@@ -9,6 +9,7 @@ import {
   ConversationMeta,
 } from './manager';
 import type { Message } from '../services/ai-service';
+import { getWorkDir } from '../services/session-memory';
 
 export interface HistorySelection {
   id: string;
@@ -60,12 +61,12 @@ export async function handleHistoryCommand(args: string): Promise<HistorySelecti
  * (`/oldconversations all`) hiçbir filtre uygulamadan hepsini gösterir.
  */
 function showList(all: boolean): void {
-  const convs = all ? listConversations(100) : listConversations(100, process.cwd());
+  const convs = all ? listConversations(100) : listConversations(100, getWorkDir());
 
   logger.write('\n' + chalk.bold.cyan('═══ Sohbet Geçmişi ═══'));
   logger.write(chalk.dim(`  Konum: ${getConvDir()}\n`));
   if (!all) {
-    logger.write(chalk.dim(`  Proje: ${process.cwd()}  (başka projeye ait olduğu bilinenler gizli — hepsi için: /oldconversations all)\n`));
+    logger.write(chalk.dim(`  Proje: ${getWorkDir()}  (diğer projeler için: /oldconversations all)\n`));
   }
 
   if (convs.length === 0) {
@@ -104,7 +105,7 @@ function showSearch(query: string): void {
     return;
   }
 
-  const results = searchConversations(query);
+  const results = searchConversations(query, getWorkDir());
   logger.write(`\n${chalk.bold.cyan('Arama:')} "${query}"  — ${results.length} sonuç\n`);
 
   if (results.length === 0) {
@@ -126,7 +127,7 @@ function showSearch(query: string): void {
 // ─── Sohbet görüntüle (index ile) ────────────────────────────────────────────
 
 function showByIndex(index: number, all: boolean): HistorySelection | null {
-  const convs = all ? listConversations(100) : listConversations(100, process.cwd());
+  const convs = all ? listConversations(100) : listConversations(100, getWorkDir());
   if (!convs.length) {
     showList(all);
     return null;

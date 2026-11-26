@@ -132,7 +132,7 @@ describe('Gerçek açılış ve sohbet geri yükleme yolu', () => {
   it('başka proje açılması önceki projenin brain bilgisini taşımaz', async () => {
     seed(); const { start, session } = await app(); await start(project);
     const other = fs.mkdtempSync(path.join(fixtures.home, 'other-')); await start(other);
-    expect(session.getSessionSnapshot().workspace).toBeNull();
+    expect((session.getSessionSnapshot().workspace as any).brain.steps).toEqual([]);
     expect(session.getActiveTask()).toBeNull();
   });
   it('eski JSON workspace içermiyorsa kalan brain.md planını ve çıkmazları kurtarır', async () => {
@@ -160,6 +160,72 @@ describe('Gerçek açılış ve sohbet geri yükleme yolu', () => {
     await session.resetSession(project);
     await session.appendMessage({ role: 'user', content: 'Yeni bağımsız görev' });
     vi.resetModules(); const restarted = await app(); await restarted.start(project);
-    expect(restarted.session.getSessionSnapshot().workspace).toBeNull();
+    expect((restarted.session.getSessionSnapshot().workspace as any).brain.steps).toEqual([]);
+  });
+
+  it('aynı saniyede oluşturulan sohbetlerin kimlikleri farklıdır', async () => {
+    const { conversations } = await app();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-26T12:00:00Z'));
+      const ids = Array.from({ length: 100 }, () => conversations.createConversationId());
+      expect(new Set(ids).size).toBe(100);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('aynı projedeki yeni sohbet kendi brain dosyasını kullanır ve önceki dosyayı korur', async () => {
+    const { start, session } = await app();
+    const { executeBrainTool } = await import('../services/sectioned-context/brain');
+    const { getBrainFile } = await import('../services/sectioned-context/store');
+    const first = await start(project, [], undefined, { resume: false });
+    executeBrainTool({ action: 'add_finding', text: 'PRIVATE_FIRST_CHAT' });
+    session.setPendingInputs(['PRIVATE_QUEUE']);
+    session.addPinnedMessage('PRIVATE_PIN');
+    const file = getBrainFile();
+    const buffer = session.getSessionBufferFile();
+    const namespace = session.getMemoryNamespace();
+    const second = await start(project, [], undefined, { resume: false });
+    expect(second.conversationId).not.toBe(first.conversationId);
+    expect(second.messages).toEqual([]);
+    expect(session.getPendingInputs()).toEqual([]);
+    expect(session.getSessionSnapshot().pinnedContext).toEqual([]);
+    expect(session.getMemoryNamespace()).not.toBe(namespace);
+    expect(getBrainFile()).not.toBe(file);
+    expect(fs.readFileSync(getBrainFile(), 'utf8')).not.toContain('PRIVATE_FIRST_CHAT');
+    executeBrainTool({ action: 'add_finding', text: 'PRIVATE_SECOND_CHAT' });
+    expect(fs.readFileSync(file, 'utf8')).toContain('PRIVATE_FIRST_CHAT');
+    expect(fs.readFileSync(file, 'utf8')).not.toContain('PRIVATE_SECOND_CHAT');
+    expect(JSON.parse(fs.readFileSync(buffer, 'utf8')).pendingInputs).toEqual(['PRIVATE_QUEUE']);
+  });
+
+  it('başka dizinden resume sohbetin kendi proje ve brain yoluna döner', async () => {
+    seed(); const { start, session } = await app(); await start(project);
+    const other = fs.mkdtempSync(path.join(fixtures.home, 'other-'));
+    await start(other, savedState().messages as any, 'research');
+    expect(session.getWorkDir()).toBe(project);
+    expect(session.getSessionBufferFile()).toBe(path.join(project, '.deha', 'sessions', 'research', 'session-buffer.json'));
+    expect(session.getActiveTask()?.originalUserRequest).toBe(original);
+  });
+
+  it('proje değişiminde ortak eski özet yüklenmez ve sohbetin brain dosyası ayrılır', async () => {
+    const { start, session } = await app(); await start(project, [], undefined, { resume: false });
+    const other = fs.mkdtempSync(path.join(fixtures.home, 'other-'));
+    fs.writeFileSync(path.join(other, '.deha_summary.md'), 'OTHER_CONVERSATION_SECRET');
+    await session.appendMessage({ role: 'user', content: 'My project' });
+    session.setWorkDir(other);
+    expect(session.getSessionSnapshot().summary).toBe('');
+    const { executeBrainTool } = await import('../services/sectioned-context/brain');
+    const { getBrainFile } = await import('../services/sectioned-context/store');
+    executeBrainTool({ action: 'add_finding', text: 'MY_BRAIN' });
+    expect(getBrainFile().startsWith(other + path.sep)).toBe(true);
+    expect(fs.readFileSync(getBrainFile(), 'utf8')).toContain('MY_BRAIN');
+  });
+
+  it('proje geçmişinde etiketsiz ve farklı proje sohbetleri görünmez', async () => {
+    const { start, conversations } = await app(); await start(project, [], undefined, { resume: false });
+    fs.writeFileSync(path.join(conversations.getConvDir(), 'unknown.md'), '---\ntitle: "secret"\nmessages: 1\n---\n## 🧑 Kullanıcı\nLEGACY_SECRET\n');
+    expect(conversations.listConversations(100, project)).toEqual([]);
+    expect(conversations.searchConversations('LEGACY_SECRET', project)).toEqual([]);
+    expect(conversations.searchConversations('LEGACY_SECRET').map(c => c.id)).toContain('unknown');
   });
 });

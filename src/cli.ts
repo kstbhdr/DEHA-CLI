@@ -319,9 +319,7 @@ export class DehaCLI {
         const meta = getConversationMeta(id);
         if (meta?.workDir && path.resolve(meta.workDir) !== path.resolve(process.cwd())) {
           logger.write(
-            chalk.yellow(`\n  ⚠ Bu sohbet farklı bir projede başlatılmış: ${meta.workDir}\n`) +
-            chalk.yellow(`    Şu anki dizin: ${process.cwd()}\n`) +
-            chalk.dim('    Yine de yükleniyor — context başka bir projeye ait olabilir.\n'),
+            chalk.dim(`\n  Sohbet kendi proje dizininde sürdürülüyor: ${meta.workDir}\n`),
           );
         }
         await interactive(config, messages, id);
